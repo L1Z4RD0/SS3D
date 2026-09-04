@@ -1,11 +1,14 @@
 <script setup>
-import { ref, onMounted, reactive } from "vue";
+import { ref, onMounted, reactive, computed } from "vue";
 import * as inventoryApi from "../api/inventory";
+import * as catalogApi from "../api/catalog";
 import { formatCurrency, formatNumber, formatPercent, formatDate } from "../utils/format";
 import { confirmAction } from "../composables/useConfirm";
 import { todayISO } from "../utils/format";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
+
+const CUSTOM = "__custom__";
 
 const tab = ref("filaments");
 
@@ -13,9 +16,35 @@ const filaments = ref([]);
 const supplies = ref([]);
 const loadingFilaments = ref(true);
 const loadingSupplies = ref(true);
+const catalog = ref({ brands: [], materials: [], colors: [] });
 
 const statusLabels = { disponible: "Disponible", alerta: "Alerta", critico: "Crítico", vacio: "Vacío" };
 const statusBadge = { disponible: "badge-success", alerta: "badge-warning", critico: "badge-danger", vacio: "badge-danger" };
+
+const colorHexMap = computed(() => {
+  const map = {};
+  for (const c of catalog.value.colors) map[c.name] = c.hex_color;
+  return map;
+});
+function swatchColor(name) {
+  return colorHexMap.value[name] || "#c9cbd6";
+}
+
+/* -------- Sort toggle (por gramos disponibles) -------- */
+const sortDirection = ref(null); // null | 'desc' | 'asc'
+function toggleSort() {
+  sortDirection.value = sortDirection.value === null ? "desc" : sortDirection.value === "desc" ? "asc" : null;
+}
+const displayedFilaments = computed(() => {
+  if (!sortDirection.value) return filaments.value;
+  const sorted = [...filaments.value].sort((a, b) => Number(a.available_g) - Number(b.available_g));
+  return sortDirection.value === "desc" ? sorted.reverse() : sorted;
+});
+const sortLabel = computed(() => {
+  if (sortDirection.value === "desc") return "Stock: mayor a menor";
+  if (sortDirection.value === "asc") return "Stock: menor a mayor";
+  return "Ordenar por stock";
+});
 
 async function loadFilaments() {
   loadingFilaments.value = true;
@@ -35,9 +64,14 @@ async function loadSupplies() {
   }
 }
 
+async function loadCatalog() {
+  catalog.value = await catalogApi.getFilamentCatalog();
+}
+
 onMounted(() => {
   loadFilaments();
   loadSupplies();
+  loadCatalog();
 });
 
 /* -------- Filaments -------- */
@@ -56,26 +90,39 @@ const emptyFilamentForm = () => ({
   spool_price: null,
 });
 const filamentForm = reactive(emptyFilamentForm());
+const customBrandText = ref("");
+const customMaterialText = ref("");
+const customColorText = ref("");
 
 function openCreateFilament() {
   editingFilamentId.value = null;
   Object.assign(filamentForm, emptyFilamentForm());
+  filamentForm.type = catalog.value.materials.some((m) => m.name === "PLA") ? "PLA" : "";
+  customBrandText.value = "";
+  customMaterialText.value = "";
+  customColorText.value = "";
   filamentError.value = "";
   showFilamentModal.value = true;
 }
 
 function openEditFilament(f) {
   editingFilamentId.value = f.id;
+  const brandMatch = catalog.value.brands.some((b) => b.name === f.brand);
+  const materialMatch = catalog.value.materials.some((m) => m.name === f.type);
+  const colorMatch = catalog.value.colors.some((c) => c.name === f.color);
   Object.assign(filamentForm, {
-    brand: f.brand,
-    type: f.type,
-    color: f.color,
+    brand: brandMatch ? f.brand : CUSTOM,
+    type: materialMatch ? f.type : CUSTOM,
+    color: colorMatch ? f.color : CUSTOM,
     entry_date: f.entry_date,
     spool_weight_g: Number(f.spool_weight_g),
     initial_stock_g: Number(f.initial_stock_g),
     min_alert_g: Number(f.min_alert_g),
     spool_price: Number(f.spool_price),
   });
+  customBrandText.value = brandMatch ? "" : f.brand;
+  customMaterialText.value = materialMatch ? "" : f.type;
+  customColorText.value = colorMatch ? "" : f.color;
   filamentError.value = "";
   showFilamentModal.value = true;
 }
@@ -83,11 +130,17 @@ function openEditFilament(f) {
 async function submitFilament() {
   filamentSaving.value = true;
   filamentError.value = "";
+  const payload = {
+    ...filamentForm,
+    brand: filamentForm.brand === CUSTOM ? customBrandText.value : filamentForm.brand,
+    type: filamentForm.type === CUSTOM ? customMaterialText.value : filamentForm.type,
+    color: filamentForm.color === CUSTOM ? customColorText.value : filamentForm.color,
+  };
   try {
     if (editingFilamentId.value) {
-      await inventoryApi.updateFilament(editingFilamentId.value, filamentForm);
+      await inventoryApi.updateFilament(editingFilamentId.value, payload);
     } else {
-      await inventoryApi.createFilament(filamentForm);
+      await inventoryApi.createFilament(payload);
     }
     showFilamentModal.value = false;
     await loadFilaments();
@@ -183,9 +236,15 @@ async function deleteSupply(s) {
     <div v-if="tab === 'filaments'" class="card">
       <div class="card-header">
         <h3>Filamentos</h3>
-        <button class="btn btn-primary btn-sm" @click="openCreateFilament">
-          <Icon name="plus" :size="15" /> Nuevo filamento
-        </button>
+        <div class="flex gap-2">
+          <button class="btn btn-secondary btn-sm" @click="toggleSort">
+            <Icon name="filter" :size="14" />
+            {{ sortLabel }}
+          </button>
+          <button class="btn btn-primary btn-sm" @click="openCreateFilament">
+            <Icon name="plus" :size="15" /> Nuevo filamento
+          </button>
+        </div>
       </div>
 
       <div v-if="loadingFilaments" class="empty-state">Cargando...</div>
@@ -207,10 +266,15 @@ async function deleteSupply(s) {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="f in filaments" :key="f.id">
+            <tr v-for="f in displayedFilaments" :key="f.id">
               <td>
-                <strong>{{ f.brand }} · {{ f.color }}</strong>
-                <div class="text-muted text-sm">{{ f.type }}</div>
+                <div class="flex items-center gap-2">
+                  <span class="color-dot" :style="{ background: swatchColor(f.color) }" :title="f.color"></span>
+                  <div>
+                    <strong>{{ f.brand }} · {{ f.color }}</strong>
+                    <div class="text-muted text-sm">{{ f.type }}</div>
+                  </div>
+                </div>
               </td>
               <td>{{ formatDate(f.entry_date) }}</td>
               <td class="text-right mono">{{ formatNumber(f.available_g, 0) }} g</td>
@@ -281,15 +345,45 @@ async function deleteSupply(s) {
         <div class="form-grid">
           <div class="field">
             <label>Marca</label>
-            <input v-model="filamentForm.brand" required />
+            <select v-model="filamentForm.brand" required>
+              <option value="" disabled>Selecciona una marca</option>
+              <option v-for="b in catalog.brands" :key="b.id" :value="b.name">{{ b.name }}</option>
+              <option :value="CUSTOM">Otra marca...</option>
+            </select>
+            <input v-if="filamentForm.brand === CUSTOM" v-model="customBrandText" placeholder="Nombre de la marca" class="mt-2" required />
           </div>
           <div class="field">
-            <label>Tipo</label>
-            <input v-model="filamentForm.type" placeholder="PLA, PETG, ABS..." required />
+            <label>Material</label>
+            <select v-model="filamentForm.type" required>
+              <option value="" disabled>Selecciona un material</option>
+              <option v-for="m in catalog.materials" :key="m.id" :value="m.name">{{ m.name }}</option>
+              <option :value="CUSTOM">Otro material...</option>
+            </select>
+            <input v-if="filamentForm.type === CUSTOM" v-model="customMaterialText" placeholder="Nombre del material" class="mt-2" required />
           </div>
-          <div class="field">
+          <div class="field" style="grid-column: span 2">
             <label>Color</label>
-            <input v-model="filamentForm.color" required />
+            <div class="color-swatch-grid">
+              <button
+                v-for="c in catalog.colors"
+                :key="c.id"
+                type="button"
+                class="color-swatch"
+                :class="{ selected: filamentForm.color === c.name }"
+                :style="{ background: c.hex_color }"
+                :title="c.name"
+                @click="filamentForm.color = c.name"
+              ></button>
+              <button
+                type="button"
+                class="color-swatch color-swatch-custom"
+                :class="{ selected: filamentForm.color === CUSTOM }"
+                title="Otro color"
+                @click="filamentForm.color = CUSTOM"
+              >+</button>
+            </div>
+            <span v-if="filamentForm.color && filamentForm.color !== CUSTOM" class="field-hint">Seleccionado: {{ filamentForm.color }}</span>
+            <input v-if="filamentForm.color === CUSTOM" v-model="customColorText" placeholder="Nombre del color" class="mt-2" required />
           </div>
           <div class="field">
             <label>Fecha de ingreso</label>
@@ -361,3 +455,46 @@ async function deleteSupply(s) {
     </Modal>
   </div>
 </template>
+
+<style scoped>
+.color-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.color-swatch-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.color-swatch {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.color-swatch:hover {
+  transform: scale(1.08);
+}
+
+.color-swatch.selected {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--primary);
+}
+
+.color-swatch-custom {
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+</style>

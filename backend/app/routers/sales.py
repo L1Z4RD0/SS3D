@@ -4,23 +4,25 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session, joinedload
 
+from app.constants import ELECTRICITY_RATE, IVA_PERCENT, LABOR_RATE_PER_HOUR
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.sale import Sale
+from app.models.sale_filament import SaleFilament
 from app.models.sale_supply import SaleSupply
 from app.models.user import User
 from app.schemas.sale import SaleCreateRequest, SalePage, SaleResponse, SaleUpdateRequest
 from app.services.audit import log_event
 from app.services.calculator import calculate_margin_percent, money
-from app.services.inventory import consume_filament, consume_supply, restore_filament, restore_supply
+from app.services.inventory import consume_supply, restore_filament, restore_supply
 from app.services.sale_builder import (
+    apply_filaments_to_sale,
     build_cost_breakdown,
-    resolve_filament,
+    resolve_filaments,
     resolve_printer,
     resolve_supplies,
     to_sale_response,
 )
-from app.services.settings import get_or_create_settings
 
 router = APIRouter(prefix="/api/sales", tags=["sales"])
 
@@ -32,6 +34,7 @@ def _sale_query(db: Session, user: User):
             joinedload(Sale.printer),
             joinedload(Sale.filament),
             joinedload(Sale.supplies_used).joinedload(SaleSupply.supply),
+            joinedload(Sale.filaments_used).joinedload(SaleFilament.filament),
         )
         .filter(Sale.user_id == user.id)
     )
@@ -92,32 +95,27 @@ def create_sale(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    settings = get_or_create_settings(db, current_user.id)
     printer = resolve_printer(db, current_user, payload.printer_id)
-    filament = resolve_filament(db, current_user, payload.filament_id)
+    resolved_filaments = resolve_filaments(db, current_user, payload.filaments)
     resolved_supplies = resolve_supplies(db, current_user, payload.supplies)
 
     breakdown = build_cost_breakdown(
         printer=printer,
-        filament=filament,
+        resolved_filaments=resolved_filaments,
         resolved_supplies=resolved_supplies,
-        grams_used=payload.grams_used,
         print_hours=payload.print_hours,
         postprocess_hours=payload.postprocess_hours,
         shipping_cost=payload.shipping_cost,
-        electricity_rate=settings.electricity_rate,
-        labor_rate_per_hour=settings.labor_rate_per_hour,
+        electricity_rate=ELECTRICITY_RATE,
+        labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
 
-    iva_percent = payload.iva_percent if payload.iva_percent is not None else settings.iva_percent
     base_price = money(payload.base_price)
-    iva_amount = money(base_price * iva_percent / 100)
+    iva_amount = money(base_price * IVA_PERCENT / 100)
     total_price = money(base_price + iva_amount)
     profit = money(base_price - breakdown.total_cost)
     margin_percent = calculate_margin_percent(base_price, breakdown.total_cost)
 
-    if filament is not None:
-        consume_filament(filament, payload.grams_used)
     printer.hours_used += payload.print_hours
 
     sale = Sale(
@@ -126,12 +124,10 @@ def create_sale(
         client_name=payload.client_name,
         buyer_name=payload.buyer_name,
         printer_id=printer.id,
-        filament_id=filament.id if filament else None,
-        grams_used=payload.grams_used,
         print_hours=payload.print_hours,
         postprocess_hours=payload.postprocess_hours,
         base_price=base_price,
-        iva_percent=iva_percent,
+        iva_percent=IVA_PERCENT,
         iva_amount=iva_amount,
         total_price=total_price,
         material_cost=breakdown.material_cost,
@@ -148,6 +144,8 @@ def create_sale(
     )
     db.add(sale)
     db.flush()
+
+    apply_filaments_to_sale(db, sale, resolved_filaments)
 
     for supply, qty in resolved_supplies:
         consume_supply(supply, qty)
@@ -175,16 +173,16 @@ def update_sale(
     current_user: User = Depends(get_current_user),
 ):
     sale = _get_owned_sale(db, sale_id, current_user)
-    settings = get_or_create_settings(db, current_user.id)
 
     old_printer = sale.printer
-    old_filament = sale.filament
+    old_filament_rows = list(sale.filaments_used)
     old_supply_rows = list(sale.supplies_used)
 
     # Reverse previous inventory impact
     old_printer.hours_used -= sale.print_hours
-    if old_filament is not None:
-        restore_filament(old_filament, sale.grams_used)
+    for sf in old_filament_rows:
+        restore_filament(sf.filament, sf.grams_used)
+        db.delete(sf)
     for ss in old_supply_rows:
         restore_supply(ss.supply, ss.quantity_used)
         db.delete(ss)
@@ -193,58 +191,57 @@ def update_sale(
     changes = payload.model_dump(exclude_unset=True)
 
     new_printer_id = changes.get("printer_id", sale.printer_id)
-    new_filament_id = changes.get("filament_id", sale.filament_id)
-    new_grams_used = changes.get("grams_used", sale.grams_used)
     new_print_hours = changes.get("print_hours", sale.print_hours)
     new_postprocess_hours = changes.get("postprocess_hours", sale.postprocess_hours)
     new_shipping_cost = changes.get("shipping_cost", sale.shipping_cost)
     new_base_price = changes.get("base_price", sale.base_price)
-    new_iva_percent = changes.get("iva_percent", sale.iva_percent)
-    new_supplies = changes.get("supplies", None)
+    # payload.filaments/supplies are typed Pydantic objects; model_dump() would
+    # have flattened them into plain dicts, so read them straight off the payload.
+    new_filaments = payload.filaments if "filaments" in payload.model_fields_set else None
+    new_supplies = payload.supplies if "supplies" in payload.model_fields_set else None
 
     printer = resolve_printer(db, current_user, new_printer_id)
-    filament = resolve_filament(db, current_user, new_filament_id)
     resolved_supplies = (
         resolve_supplies(db, current_user, new_supplies)
         if new_supplies is not None
         else [(ss.supply, ss.quantity_used) for ss in old_supply_rows]
     )
+    resolved_filaments = (
+        resolve_filaments(db, current_user, new_filaments)
+        if new_filaments is not None
+        else [(sf.filament, sf.grams_used) for sf in old_filament_rows]
+    )
 
     breakdown = build_cost_breakdown(
         printer=printer,
-        filament=filament,
+        resolved_filaments=resolved_filaments,
         resolved_supplies=resolved_supplies,
-        grams_used=new_grams_used,
         print_hours=new_print_hours,
         postprocess_hours=new_postprocess_hours,
         shipping_cost=new_shipping_cost,
-        electricity_rate=settings.electricity_rate,
-        labor_rate_per_hour=settings.labor_rate_per_hour,
+        electricity_rate=ELECTRICITY_RATE,
+        labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
 
     base_price = money(new_base_price)
-    iva_amount = money(base_price * new_iva_percent / 100)
+    iva_amount = money(base_price * IVA_PERCENT / 100)
     total_price = money(base_price + iva_amount)
     profit = money(base_price - breakdown.total_cost)
     margin_percent = calculate_margin_percent(base_price, breakdown.total_cost)
 
-    if filament is not None:
-        consume_filament(filament, new_grams_used)
     printer.hours_used += new_print_hours
 
     for field, value in changes.items():
-        if field == "supplies":
+        if field in ("supplies", "filaments"):
             continue
         setattr(sale, field, value)
 
     sale.printer_id = printer.id
-    sale.filament_id = filament.id if filament else None
-    sale.grams_used = new_grams_used
     sale.print_hours = new_print_hours
     sale.postprocess_hours = new_postprocess_hours
     sale.shipping_cost = new_shipping_cost
     sale.base_price = base_price
-    sale.iva_percent = new_iva_percent
+    sale.iva_percent = IVA_PERCENT
     sale.iva_amount = iva_amount
     sale.total_price = total_price
     sale.material_cost = breakdown.material_cost
@@ -255,6 +252,8 @@ def update_sale(
     sale.total_cost = breakdown.total_cost
     sale.profit = profit
     sale.margin_percent = margin_percent
+
+    apply_filaments_to_sale(db, sale, resolved_filaments)
 
     for supply, qty in resolved_supplies:
         consume_supply(supply, qty)
@@ -283,8 +282,8 @@ def delete_sale(
     sale = _get_owned_sale(db, sale_id, current_user)
 
     sale.printer.hours_used -= sale.print_hours
-    if sale.filament is not None:
-        restore_filament(sale.filament, sale.grams_used)
+    for sf in sale.filaments_used:
+        restore_filament(sf.filament, sf.grams_used)
     for ss in sale.supplies_used:
         restore_supply(ss.supply, ss.quantity_used)
 

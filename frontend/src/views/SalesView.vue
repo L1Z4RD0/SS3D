@@ -3,9 +3,8 @@ import { ref, reactive, onMounted, computed } from "vue";
 import * as salesApi from "../api/sales";
 import * as printersApi from "../api/printers";
 import * as inventoryApi from "../api/inventory";
-import * as calculatorApi from "../api/calculator";
 import { PAYMENT_METHODS } from "../api/sales";
-import { formatCurrency, formatNumber, formatPercent, formatDate, todayISO } from "../utils/format";
+import { formatCurrency, formatPercent, formatDate, todayISO } from "../utils/format";
 import { confirmAction } from "../composables/useConfirm";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
@@ -19,23 +18,20 @@ const offset = ref(0);
 const printers = ref([]);
 const filaments = ref([]);
 const supplies = ref([]);
-const ivaDefault = ref(19);
 
 const filters = reactive({ date_from: "", date_to: "", client: "", printer_id: "", payment_method: "", search: "" });
 
 const paymentLabel = (v) => PAYMENT_METHODS.find((p) => p.value === v)?.label || v;
 
 async function loadCatalog() {
-  const [p, f, s, cfg] = await Promise.all([
+  const [p, f, s] = await Promise.all([
     printersApi.listPrinters(),
     inventoryApi.listFilaments(),
     inventoryApi.listSupplies(),
-    calculatorApi.getSettings(),
   ]);
   printers.value = p;
   filaments.value = f;
   supplies.value = s;
-  ivaDefault.value = Number(cfg.iva_percent);
 }
 
 async function loadSales() {
@@ -86,22 +82,41 @@ const supplyRows = ref([]);
 const newSupplyId = ref("");
 const newSupplyQty = ref(1);
 
+const filamentRows = ref([]); // { id, filament_id, grams_used }
+const newFilamentId = ref("");
+const newFilamentGrams = ref(null);
+
 const emptyForm = () => ({
   sale_date: todayISO(),
   client_name: "",
   buyer_name: "",
   printer_id: "",
-  filament_id: "",
-  grams_used: 0,
   print_hours: 0,
   postprocess_hours: 0,
   base_price: null,
-  iva_percent: ivaDefault.value,
   shipping_cost: 0,
   payment_method: "efectivo",
   notes: "",
 });
 const form = reactive(emptyForm());
+
+function addFilamentRow() {
+  if (!newFilamentId.value || !newFilamentGrams.value) return;
+  filamentRows.value.push({
+    id: crypto.randomUUID(),
+    filament_id: newFilamentId.value,
+    grams_used: Number(newFilamentGrams.value),
+  });
+  newFilamentId.value = "";
+  newFilamentGrams.value = null;
+}
+function removeFilamentRow(id) {
+  filamentRows.value = filamentRows.value.filter((r) => r.id !== id);
+}
+function filamentName(id) {
+  const f = filaments.value.find((x) => x.id === id);
+  return f ? `${f.brand} · ${f.color}` : "";
+}
 
 function addSupplyRow() {
   if (!newSupplyId.value) return;
@@ -125,6 +140,7 @@ function openCreate() {
   editingId.value = null;
   Object.assign(form, emptyForm());
   supplyRows.value = [];
+  filamentRows.value = [];
   formError.value = "";
   showModal.value = true;
 }
@@ -136,17 +152,19 @@ function openEdit(sale) {
     client_name: sale.client_name,
     buyer_name: sale.buyer_name || "",
     printer_id: sale.printer_id,
-    filament_id: sale.filament_id || "",
-    grams_used: Number(sale.grams_used),
     print_hours: Number(sale.print_hours),
     postprocess_hours: Number(sale.postprocess_hours),
     base_price: Number(sale.base_price),
-    iva_percent: Number(sale.iva_percent),
     shipping_cost: Number(sale.shipping_cost),
     payment_method: sale.payment_method,
     notes: sale.notes || "",
   });
   supplyRows.value = sale.supplies_used.map((s) => ({ supply_id: s.supply_id, quantity: Number(s.quantity_used) }));
+  filamentRows.value = sale.filaments_used.map((f) => ({
+    id: crypto.randomUUID(),
+    filament_id: f.filament_id,
+    grams_used: Number(f.grams_used),
+  }));
   formError.value = "";
   showModal.value = true;
 }
@@ -157,12 +175,10 @@ function buildPayload() {
     client_name: form.client_name,
     buyer_name: form.buyer_name || null,
     printer_id: form.printer_id,
-    filament_id: form.filament_id || null,
-    grams_used: Number(form.grams_used) || 0,
+    filaments: filamentRows.value.map((r) => ({ filament_id: r.filament_id, grams_used: r.grams_used })),
     print_hours: Number(form.print_hours) || 0,
     postprocess_hours: Number(form.postprocess_hours) || 0,
     base_price: Number(form.base_price) || 0,
-    iva_percent: Number(form.iva_percent),
     shipping_cost: Number(form.shipping_cost) || 0,
     supplies: supplyRows.value.map((r) => ({ supply_id: r.supply_id, quantity: r.quantity })),
     payment_method: form.payment_method,
@@ -339,17 +355,6 @@ onMounted(async () => {
             </select>
           </div>
           <div class="field">
-            <label>Filamento (opcional)</label>
-            <select v-model="form.filament_id">
-              <option value="">Sin filamento</option>
-              <option v-for="f in filaments" :key="f.id" :value="f.id">{{ f.brand }} · {{ f.color }}</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>Gramos usados</label>
-            <input v-model.number="form.grams_used" type="number" min="0" step="1" />
-          </div>
-          <div class="field">
             <label>Horas de impresión</label>
             <input v-model.number="form.print_hours" type="number" min="0" step="0.1" />
           </div>
@@ -364,10 +369,27 @@ onMounted(async () => {
           <div class="field">
             <label>Precio de venta sin IVA (CLP)</label>
             <input v-model.number="form.base_price" type="number" min="0" step="1" required />
+            <span class="field-hint">El IVA (19%) se calcula automáticamente.</span>
           </div>
-          <div class="field">
-            <label>IVA (%)</label>
-            <input v-model.number="form.iva_percent" type="number" min="0" max="100" step="0.01" />
+        </div>
+
+        <div class="field mt-2">
+          <label>Filamentos usados (opcional, puede ser más de uno)</label>
+          <div class="flex gap-2">
+            <select v-model="newFilamentId" style="flex: 1">
+              <option value="" disabled>Selecciona un filamento</option>
+              <option v-for="f in filaments" :key="f.id" :value="f.id">{{ f.brand }} · {{ f.color }}</option>
+            </select>
+            <input v-model.number="newFilamentGrams" type="number" min="1" step="1" placeholder="Gramos" style="width: 90px" />
+            <button type="button" class="btn btn-secondary btn-sm" @click="addFilamentRow">Agregar</button>
+          </div>
+          <div v-if="filamentRows.length" class="flex flex-col gap-2 mt-2">
+            <div v-for="row in filamentRows" :key="row.id" class="flex items-center justify-between text-sm" style="background: var(--surface-alt); padding: 6px 10px; border-radius: 8px">
+              <span>{{ filamentName(row.filament_id) }} — {{ row.grams_used }}g</span>
+              <button type="button" class="btn btn-icon btn-ghost btn-sm" @click="removeFilamentRow(row.id)">
+                <Icon name="close" :size="13" />
+              </button>
+            </div>
           </div>
         </div>
 

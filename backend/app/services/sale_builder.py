@@ -7,11 +7,13 @@ from sqlalchemy.orm import Session
 from app.models.filament import Filament
 from app.models.printer import Printer
 from app.models.sale import Sale
+from app.models.sale_filament import SaleFilament
 from app.models.supply import Supply
 from app.models.user import User
-from app.schemas.calculator import SupplyUsageInput
-from app.schemas.sale import SaleResponse, SaleSupplyResponse
-from app.services.calculator import CostBreakdown, SupplyUsage, calculate_costs
+from app.schemas.calculator import FilamentUsageInput, SupplyUsageInput
+from app.schemas.sale import SaleFilamentResponse, SaleResponse, SaleSupplyResponse
+from app.services.calculator import CostBreakdown, FilamentUsage, SupplyUsage, calculate_costs, money
+from app.services.inventory import consume_filament
 
 
 def resolve_printer(db: Session, user: User, printer_id: uuid.UUID) -> Printer:
@@ -30,6 +32,20 @@ def resolve_filament(db: Session, user: User, filament_id: uuid.UUID | None) -> 
     return filament
 
 
+def resolve_filaments(
+    db: Session, user: User, usages: list[FilamentUsageInput]
+) -> list[tuple[Filament, Decimal]]:
+    resolved: list[tuple[Filament, Decimal]] = []
+    for usage in usages:
+        filament = (
+            db.query(Filament).filter(Filament.id == usage.filament_id, Filament.user_id == user.id).first()
+        )
+        if filament is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"Filamento {usage.filament_id} no encontrado")
+        resolved.append((filament, usage.grams_used))
+    return resolved
+
+
 def resolve_supplies(
     db: Session, user: User, usages: list[SupplyUsageInput]
 ) -> list[tuple[Supply, Decimal]]:
@@ -42,12 +58,20 @@ def resolve_supplies(
     return resolved
 
 
+def filament_line_cost(filament: Filament, grams: Decimal) -> Decimal:
+    return FilamentUsage(
+        filament_id=filament.id,
+        grams_used=grams,
+        spool_weight_g=filament.spool_weight_g,
+        spool_price=filament.spool_price,
+    ).material_cost
+
+
 def build_cost_breakdown(
     *,
     printer: Printer,
-    filament: Filament | None,
+    resolved_filaments: list[tuple[Filament, Decimal]],
     resolved_supplies: list[tuple[Supply, Decimal]],
-    grams_used: Decimal,
     print_hours: Decimal,
     postprocess_hours: Decimal,
     shipping_cost: Decimal,
@@ -58,10 +82,17 @@ def build_cost_breakdown(
         SupplyUsage(supply_id=supply.id, quantity=qty, unit_cost=supply.unit_cost or Decimal(0))
         for supply, qty in resolved_supplies
     ]
+    filament_usages = [
+        FilamentUsage(
+            filament_id=filament.id,
+            grams_used=grams,
+            spool_weight_g=filament.spool_weight_g,
+            spool_price=filament.spool_price,
+        )
+        for filament, grams in resolved_filaments
+    ]
     return calculate_costs(
-        grams_used=grams_used,
-        spool_weight_g=filament.spool_weight_g if filament else None,
-        spool_price=filament.spool_price if filament else None,
+        filament_usages=filament_usages,
         print_hours=print_hours,
         depreciation_cost_per_hour=printer.depreciation_cost_per_hour,
         power_kw=printer.power_kw,
@@ -73,6 +104,36 @@ def build_cost_breakdown(
     )
 
 
+def _build_filament_label(sale: Sale) -> str | None:
+    if sale.filament is not None:
+        return f"{sale.filament.brand} {sale.filament.color}"
+    labels = [f"{sf.filament.brand} {sf.filament.color}" for sf in sale.filaments_used]
+    if not labels:
+        return None
+    if len(labels) <= 3:
+        return " + ".join(labels)
+    return f"Multicolor ({len(labels)} filamentos)"
+
+
+def apply_filaments_to_sale(db: Session, sale: Sale, resolved_filaments: list[tuple[Filament, Decimal]]) -> None:
+    """Consume stock for each filament line and create the sale_filaments rows.
+    Also sets sale.filament_id (only when exactly one filament) and sale.grams_used (aggregate)."""
+    total_grams = money(sum((grams for _, grams in resolved_filaments), Decimal(0)))
+    sale.grams_used = total_grams
+    sale.filament_id = resolved_filaments[0][0].id if len(resolved_filaments) == 1 else None
+
+    for filament, grams in resolved_filaments:
+        consume_filament(filament, grams)
+        db.add(
+            SaleFilament(
+                sale_id=sale.id,
+                filament_id=filament.id,
+                grams_used=grams,
+                material_cost_snapshot=filament_line_cost(filament, grams),
+            )
+        )
+
+
 def to_sale_response(sale: Sale) -> SaleResponse:
     return SaleResponse(
         id=sale.id,
@@ -82,7 +143,7 @@ def to_sale_response(sale: Sale) -> SaleResponse:
         printer_id=sale.printer_id,
         printer_name=sale.printer.name,
         filament_id=sale.filament_id,
-        filament_label=f"{sale.filament.brand} {sale.filament.color}" if sale.filament else None,
+        filament_label=_build_filament_label(sale),
         grams_used=sale.grams_used,
         print_hours=sale.print_hours,
         postprocess_hours=sale.postprocess_hours,
@@ -109,5 +170,14 @@ def to_sale_response(sale: Sale) -> SaleResponse:
                 unit_cost_snapshot=ss.unit_cost_snapshot,
             )
             for ss in sale.supplies_used
+        ],
+        filaments_used=[
+            SaleFilamentResponse(
+                filament_id=sf.filament_id,
+                filament_label=f"{sf.filament.brand} {sf.filament.color}",
+                grams_used=sf.grams_used,
+                material_cost_snapshot=sf.material_cost_snapshot,
+            )
+            for sf in sale.filaments_used
         ],
     )

@@ -3,7 +3,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.routers import admin, auth, calculator, dashboard, filaments, printers, sales, supplies
+from app.routers import (
+    admin,
+    auth,
+    business_profile,
+    calculator,
+    dashboard,
+    filament_catalog,
+    filaments,
+    printers,
+    quotes,
+    sales,
+    supplies,
+)
 from app.services.inventory import InsufficientStockError
 
 app = FastAPI(title="Zola - Impresión 3D", version="1.0.0")
@@ -30,6 +42,9 @@ app.include_router(supplies.router)
 app.include_router(calculator.router)
 app.include_router(sales.router)
 app.include_router(dashboard.router)
+app.include_router(quotes.router)
+app.include_router(business_profile.router)
+app.include_router(filament_catalog.router)
 
 
 @app.get("/api/health")

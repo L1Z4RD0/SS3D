@@ -3,27 +3,74 @@ import { ref, reactive, onMounted, computed } from "vue";
 import * as calculatorApi from "../api/calculator";
 import * as printersApi from "../api/printers";
 import * as inventoryApi from "../api/inventory";
+import * as quotesApi from "../api/quotes";
+import * as businessProfileApi from "../api/businessProfile";
 import { PAYMENT_METHODS } from "../api/sales";
-import { formatCurrency, formatPercent, todayISO } from "../utils/format";
+import { formatCurrency, todayISO } from "../utils/format";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
 import DoughnutChart from "../components/DoughnutChart.vue";
+import QuoteDocument from "../components/QuoteDocument.vue";
 
 const printers = ref([]);
 const filaments = ref([]);
 const supplies = ref([]);
-const settings = ref(null);
 const loadingCatalog = ref(true);
 
 const form = reactive({
   printer_id: "",
-  filament_id: "",
-  grams_used: null,
   print_hours: null,
   postprocess_hours: 0,
   shipping_cost: 0,
 });
 
+/* -------- Filament selection (single vs multicolor) -------- */
+const isMulticolor = ref(false);
+const singleFilamentId = ref("");
+const singleGramsUsed = ref(null);
+
+const filamentRows = ref([]); // { id, filament_id, grams_used }
+const newFilamentRowId = ref("");
+const newFilamentRowGrams = ref(null);
+
+function addFilamentRow() {
+  if (!newFilamentRowId.value || !newFilamentRowGrams.value) return;
+  filamentRows.value.push({
+    id: crypto.randomUUID(),
+    filament_id: newFilamentRowId.value,
+    grams_used: Number(newFilamentRowGrams.value),
+  });
+  newFilamentRowId.value = "";
+  newFilamentRowGrams.value = null;
+}
+
+function removeFilamentRow(id) {
+  filamentRows.value = filamentRows.value.filter((r) => r.id !== id);
+}
+
+function filamentName(id) {
+  const f = filaments.value.find((x) => x.id === id);
+  return f ? `${f.brand} · ${f.color}` : "";
+}
+
+function buildFilamentsPayload() {
+  if (isMulticolor.value) {
+    return filamentRows.value.map((r) => ({ filament_id: r.filament_id, grams_used: r.grams_used }));
+  }
+  if (singleFilamentId.value && singleGramsUsed.value) {
+    return [{ filament_id: singleFilamentId.value, grams_used: Number(singleGramsUsed.value) }];
+  }
+  return [];
+}
+
+function currentFilamentSummary() {
+  if (isMulticolor.value) {
+    return filamentRows.value.length ? "Multicolor" : "";
+  }
+  return singleFilamentId.value ? filamentName(singleFilamentId.value) : "";
+}
+
+/* -------- Supplies -------- */
 const supplyRows = ref([]); // { supply_id, quantity }
 const newSupplyId = ref("");
 const newSupplyQty = ref(1);
@@ -48,6 +95,7 @@ function supplyName(id) {
   return supplies.value.find((s) => s.id === id)?.name || "";
 }
 
+/* -------- Compute quote -------- */
 const quote = ref(null);
 const calculating = ref(false);
 const calcError = ref("");
@@ -62,8 +110,7 @@ const breakdownValues = computed(() => {
 function buildQuotePayload() {
   return {
     printer_id: form.printer_id,
-    filament_id: form.filament_id || null,
-    grams_used: Number(form.grams_used) || 0,
+    filaments: buildFilamentsPayload(),
     print_hours: Number(form.print_hours) || 0,
     postprocess_hours: Number(form.postprocess_hours) || 0,
     shipping_cost: Number(form.shipping_cost) || 0,
@@ -87,7 +134,7 @@ async function handleCalculate() {
   }
 }
 
-/* -------- Save as sale -------- */
+/* -------- Save as sale (only for single/no filament jobs) -------- */
 const showSaveModal = ref(false);
 const selectedScenario = ref(null);
 const saveForm = reactive({ sale_date: todayISO(), client_name: "", buyer_name: "", payment_method: "efectivo", notes: "" });
@@ -125,60 +172,110 @@ async function confirmSaveAsSale() {
   }
 }
 
-/* -------- Settings -------- */
-const showSettingsModal = ref(false);
-const settingsForm = reactive({ electricity_rate: 0, labor_rate_per_hour: 0, iva_percent: 19, margin_scenarios: "", default_packaging_cost: null });
-const settingsSaving = ref(false);
-const settingsError = ref("");
+/* -------- Quote cart (Cotización) -------- */
+const cartItems = ref([]); // { id, description, quantity, unit_price }
 
-function openSettings() {
-  Object.assign(settingsForm, {
-    electricity_rate: Number(settings.value.electricity_rate),
-    labor_rate_per_hour: Number(settings.value.labor_rate_per_hour),
-    iva_percent: Number(settings.value.iva_percent),
-    margin_scenarios: settings.value.margin_scenarios.join(", "),
-    default_packaging_cost: settings.value.default_packaging_cost !== null ? Number(settings.value.default_packaging_cost) : null,
+function addToCart(scenario) {
+  const printerName = printers.value.find((p) => p.id === form.printer_id)?.name || "Trabajo";
+  const filamentSummary = currentFilamentSummary();
+  const description = filamentSummary ? `${printerName} — ${filamentSummary} (${scenario.label})` : `${printerName} (${scenario.label})`;
+  cartItems.value.push({
+    id: crypto.randomUUID(),
+    description,
+    quantity: 1,
+    unit_price: Number(scenario.base_price),
   });
-  settingsError.value = "";
-  showSettingsModal.value = true;
 }
 
-async function submitSettings() {
-  settingsSaving.value = true;
-  settingsError.value = "";
-  try {
-    const scenarios = settingsForm.margin_scenarios
-      .split(",")
-      .map((s) => parseInt(s.trim(), 10))
-      .filter((n) => !Number.isNaN(n));
-    settings.value = await calculatorApi.updateSettings({
-      electricity_rate: settingsForm.electricity_rate,
-      labor_rate_per_hour: settingsForm.labor_rate_per_hour,
-      iva_percent: settingsForm.iva_percent,
-      margin_scenarios: scenarios,
-      default_packaging_cost: settingsForm.default_packaging_cost,
-    });
-    showSettingsModal.value = false;
-  } catch (err) {
-    settingsError.value = err.response?.data?.detail || "No se pudo guardar la configuración";
-  } finally {
-    settingsSaving.value = false;
+function removeFromCart(id) {
+  cartItems.value = cartItems.value.filter((i) => i.id !== id);
+}
+
+const cartSubtotal = computed(() =>
+  cartItems.value.reduce((sum, i) => sum + (Number(i.quantity) || 0) * (Number(i.unit_price) || 0), 0)
+);
+const cartIvaAmount = computed(() => cartSubtotal.value * 0.19);
+const cartTotal = computed(() => cartSubtotal.value + cartIvaAmount.value);
+
+/* -------- Generate quote (Cotización) -------- */
+const showQuoteFormModal = ref(false);
+const quoteForm = reactive({ client_name: "", quote_date: todayISO() });
+const businessForm = reactive({ business_name: "", logo_data_url: "" });
+const generatingQuote = ref(false);
+const quoteFormError = ref("");
+const generatedQuote = ref(null);
+const showQuoteDocument = ref(false);
+const LOGO_MAX_BYTES = 500_000;
+
+function openQuoteForm() {
+  quoteFormError.value = "";
+  showQuoteFormModal.value = true;
+}
+
+function handleLogoUpload(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  if (file.size > LOGO_MAX_BYTES) {
+    quoteFormError.value = "El logo es muy pesado (máximo ~500KB). Prueba con una imagen más liviana.";
+    return;
   }
+  const reader = new FileReader();
+  reader.onload = () => {
+    businessForm.logo_data_url = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function removeLogo() {
+  businessForm.logo_data_url = "";
+}
+
+async function confirmGenerateQuote() {
+  generatingQuote.value = true;
+  quoteFormError.value = "";
+  try {
+    await businessProfileApi.updateBusinessProfile({
+      business_name: businessForm.business_name || null,
+      logo_data_url: businessForm.logo_data_url || null,
+    });
+    const created = await quotesApi.createQuote({
+      client_name: quoteForm.client_name,
+      quote_date: quoteForm.quote_date,
+      items: cartItems.value.map((i) => ({
+        description: i.description,
+        quantity: i.quantity,
+        unit_price: i.unit_price,
+      })),
+    });
+    generatedQuote.value = created;
+    showQuoteFormModal.value = false;
+    showQuoteDocument.value = true;
+    cartItems.value = [];
+  } catch (err) {
+    quoteFormError.value = err.response?.data?.detail || "No se pudo generar la cotización";
+  } finally {
+    generatingQuote.value = false;
+  }
+}
+
+function printQuote() {
+  window.print();
 }
 
 async function loadCatalog() {
   loadingCatalog.value = true;
   try {
-    const [p, f, s, cfg] = await Promise.all([
+    const [p, f, s, profile] = await Promise.all([
       printersApi.listPrinters(),
       inventoryApi.listFilaments(),
       inventoryApi.listSupplies(),
-      calculatorApi.getSettings(),
+      businessProfileApi.getBusinessProfile(),
     ]);
     printers.value = p;
     filaments.value = f;
     supplies.value = s;
-    settings.value = cfg;
+    businessForm.business_name = profile.business_name || "";
+    businessForm.logo_data_url = profile.logo_data_url || "";
   } finally {
     loadingCatalog.value = false;
   }
@@ -190,8 +287,7 @@ onMounted(loadCatalog);
 <template>
   <div>
     <div class="page-header">
-      <p class="page-subtitle">Calcula el costo real de un trabajo y guárdalo directamente como venta</p>
-      <button class="btn btn-secondary" @click="openSettings" :disabled="!settings">Configuración</button>
+      <p class="page-subtitle">Calcula el costo real de un trabajo, guárdalo como venta o agrégalo a una cotización</p>
     </div>
 
     <div v-if="loadingCatalog" class="empty-state">Cargando...</div>
@@ -207,18 +303,48 @@ onMounted(loadCatalog);
               <option v-for="p in printers" :key="p.id" :value="p.id">{{ p.name }}</option>
             </select>
           </div>
-          <div class="field">
-            <label>Filamento (opcional)</label>
-            <select v-model="form.filament_id">
-              <option value="">Sin filamento / no descontar stock</option>
-              <option v-for="f in filaments" :key="f.id" :value="f.id">{{ f.brand }} · {{ f.color }} ({{ f.available_g }}g disp.)</option>
-            </select>
-          </div>
-          <div class="form-grid">
-            <div class="field">
-              <label>Gramos usados</label>
-              <input v-model.number="form.grams_used" type="number" min="0" step="1" />
+
+          <label class="flex items-center gap-2 text-sm" style="cursor: pointer; font-weight: 600">
+            <input v-model="isMulticolor" type="checkbox" style="width: auto" />
+            ¿Trabajo multicolor?
+          </label>
+
+          <div v-if="!isMulticolor" class="form-grid">
+            <div class="field" style="grid-column: span 2">
+              <label>Filamento (opcional)</label>
+              <select v-model="singleFilamentId">
+                <option value="">Sin filamento / no descontar stock</option>
+                <option v-for="f in filaments" :key="f.id" :value="f.id">{{ f.brand }} · {{ f.color }} ({{ f.available_g }}g disp.)</option>
+              </select>
             </div>
+            <div class="field" style="grid-column: span 2">
+              <label>Gramos usados</label>
+              <input v-model.number="singleGramsUsed" type="number" min="0" step="1" />
+            </div>
+          </div>
+
+          <div v-else class="field">
+            <label>Filamentos usados</label>
+            <div class="flex gap-2">
+              <select v-model="newFilamentRowId" style="flex: 1">
+                <option value="" disabled>Selecciona un filamento</option>
+                <option v-for="f in filaments" :key="f.id" :value="f.id">{{ f.brand }} · {{ f.color }}</option>
+              </select>
+              <input v-model.number="newFilamentRowGrams" type="number" min="1" step="1" placeholder="Gramos" style="width: 90px" />
+              <button type="button" class="btn btn-secondary btn-sm" @click="addFilamentRow">Agregar</button>
+            </div>
+            <div v-if="filamentRows.length" class="flex flex-col gap-2 mt-2">
+              <div v-for="row in filamentRows" :key="row.id" class="flex items-center justify-between text-sm" style="background: var(--surface-alt); padding: 6px 10px; border-radius: 8px">
+                <span>{{ filamentName(row.filament_id) }} — {{ row.grams_used }}g</span>
+                <button type="button" class="btn btn-icon btn-ghost btn-sm" @click="removeFilamentRow(row.id)">
+                  <Icon name="close" :size="13" />
+                </button>
+              </div>
+            </div>
+            <span v-else class="field-hint">Agrega al menos un filamento para el trabajo multicolor.</span>
+          </div>
+
+          <div class="form-grid">
             <div class="field">
               <label>Horas de impresión</label>
               <input v-model.number="form.print_hours" type="number" min="0" step="0.1" />
@@ -227,7 +353,7 @@ onMounted(loadCatalog);
               <label>Horas de postprocesado</label>
               <input v-model.number="form.postprocess_hours" type="number" min="0" step="0.1" />
             </div>
-            <div class="field">
+            <div class="field" style="grid-column: span 2">
               <label>Envío / embalaje (CLP)</label>
               <input v-model.number="form.shipping_cost" type="number" min="0" step="1" />
             </div>
@@ -298,6 +424,7 @@ onMounted(loadCatalog);
               <table>
                 <thead>
                   <tr>
+                    <th>Escenario</th>
                     <th>Margen</th>
                     <th class="text-right">Precio sin IVA</th>
                     <th class="text-right">IVA</th>
@@ -308,18 +435,64 @@ onMounted(loadCatalog);
                 </thead>
                 <tbody>
                   <tr v-for="s in quote.scenarios" :key="s.margin_percent">
+                    <td><strong>{{ s.label }}</strong></td>
                     <td><span class="badge badge-neutral">+{{ s.margin_percent }}%</span></td>
                     <td class="text-right mono">{{ formatCurrency(s.base_price) }}</td>
                     <td class="text-right mono">{{ formatCurrency(s.iva_amount) }}</td>
                     <td class="text-right mono"><strong>{{ formatCurrency(s.total_price) }}</strong></td>
                     <td class="text-right mono" style="color: var(--success)">{{ formatCurrency(s.profit) }}</td>
                     <td class="text-right">
-                      <button class="btn btn-primary btn-sm" @click="openSaveModal(s)">Guardar como venta</button>
+                      <div class="flex gap-2" style="justify-content: flex-end">
+                        <button class="btn btn-primary btn-sm" @click="openSaveModal(s)">Guardar como venta</button>
+                        <button class="btn btn-secondary btn-sm" @click="addToCart(s)">Agregar a cotización</button>
+                      </div>
                     </td>
                   </tr>
                 </tbody>
               </table>
             </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h3>Cotización en construcción</h3>
+              <span class="badge badge-neutral">{{ cartItems.length }} ítem(s)</span>
+            </div>
+            <div v-if="!cartItems.length" class="empty-state">
+              <p>Agrega escenarios calculados arriba para ir armando una cotización con varios trabajos.</p>
+            </div>
+            <template v-else>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Producto</th>
+                      <th class="text-right">Cantidad</th>
+                      <th class="text-right">Precio unitario</th>
+                      <th class="text-right">Subtotal</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="item in cartItems" :key="item.id">
+                      <td><input v-model="item.description" style="min-width: 220px" /></td>
+                      <td class="text-right"><input v-model.number="item.quantity" type="number" min="0.01" step="1" style="width: 70px; text-align: right" /></td>
+                      <td class="text-right"><input v-model.number="item.unit_price" type="number" min="0" step="1" style="width: 110px; text-align: right" /></td>
+                      <td class="text-right mono">{{ formatCurrency(item.quantity * item.unit_price) }}</td>
+                      <td class="text-right">
+                        <button class="btn btn-icon btn-ghost" @click="removeFromCart(item.id)"><Icon name="trash" :size="15" /></button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="flex flex-col gap-1 mt-4" style="align-items: flex-end">
+                <span class="text-sm text-muted">Subtotal: {{ formatCurrency(cartSubtotal) }}</span>
+                <span class="text-sm text-muted">IVA (19%): {{ formatCurrency(cartIvaAmount) }}</span>
+                <span style="font-weight: 700">Total: {{ formatCurrency(cartTotal) }}</span>
+                <button class="btn btn-primary mt-2" @click="openQuoteForm">Generar cotización</button>
+              </div>
+            </template>
           </div>
         </template>
       </div>
@@ -328,7 +501,7 @@ onMounted(loadCatalog);
     <Modal v-if="showSaveModal" title="Guardar cotización como venta" @close="showSaveModal = false">
       <form @submit.prevent="confirmSaveAsSale">
         <div class="alert alert-info mt-2" style="margin-bottom: 14px">
-          Margen elegido: +{{ selectedScenario.margin_percent }}% · Total con IVA:
+          {{ selectedScenario.label }} (+{{ selectedScenario.margin_percent }}%) · Total con IVA:
           <strong>{{ formatCurrency(selectedScenario.total_price) }}</strong>
         </div>
         <div class="form-grid">
@@ -367,41 +540,68 @@ onMounted(loadCatalog);
       </form>
     </Modal>
 
-    <Modal v-if="showSettingsModal" title="Configuración de la calculadora" @close="showSettingsModal = false">
-      <form @submit.prevent="submitSettings">
+    <Modal v-if="showQuoteFormModal" title="Generar cotización" width="620px" @close="showQuoteFormModal = false">
+      <form @submit.prevent="confirmGenerateQuote">
         <div class="form-grid">
           <div class="field">
-            <label>Tarifa eléctrica ($/kWh)</label>
-            <input v-model.number="settingsForm.electricity_rate" type="number" min="0" step="0.01" required />
+            <label>Cliente</label>
+            <input v-model="quoteForm.client_name" required />
           </div>
           <div class="field">
-            <label>Valor hora mano de obra (CLP)</label>
-            <input v-model.number="settingsForm.labor_rate_per_hour" type="number" min="0" step="1" required />
+            <label>Fecha</label>
+            <input v-model="quoteForm.quote_date" type="date" required />
           </div>
-          <div class="field">
-            <label>IVA (%)</label>
-            <input v-model.number="settingsForm.iva_percent" type="number" min="0" max="100" step="0.01" required />
-          </div>
-          <div class="field">
-            <label>Embalaje por defecto (CLP)</label>
-            <input v-model.number="settingsForm.default_packaging_cost" type="number" min="0" step="1" />
-          </div>
-        </div>
-        <div class="field mt-2">
-          <label>Escenarios de margen (%), separados por coma</label>
-          <input v-model="settingsForm.margin_scenarios" placeholder="60, 80, 100, 120, 140, 160, 180, 200" />
         </div>
 
-        <div v-if="settingsError" class="alert alert-danger mt-4">{{ settingsError }}</div>
+        <h3 class="mt-4" style="font-size: 0.95rem; margin-bottom: 10px">Datos del negocio (para el documento)</h3>
+        <div class="form-grid">
+          <div class="field">
+            <label>Nombre del negocio</label>
+            <input v-model="businessForm.business_name" placeholder="Ej: Zola 3D Prints" />
+          </div>
+          <div class="field">
+            <label>Logo</label>
+            <input type="file" accept="image/*" @change="handleLogoUpload" />
+          </div>
+        </div>
+        <div v-if="businessForm.logo_data_url" class="flex items-center gap-3 mt-2">
+          <img :src="businessForm.logo_data_url" alt="Logo" style="width: 48px; height: 48px; object-fit: contain; border-radius: 8px; border: 1px solid var(--border)" />
+          <button type="button" class="btn btn-ghost btn-sm" @click="removeLogo">Quitar logo</button>
+        </div>
+
+        <div class="alert alert-info mt-4">
+          {{ cartItems.length }} ítem(s) · Total con IVA: <strong>{{ formatCurrency(cartTotal) }}</strong>
+        </div>
+
+        <div v-if="quoteFormError" class="alert alert-danger mt-4">{{ quoteFormError }}</div>
 
         <div class="form-actions">
-          <button type="button" class="btn btn-secondary" @click="showSettingsModal = false">Cancelar</button>
-          <button type="submit" class="btn btn-primary" :disabled="settingsSaving">
-            {{ settingsSaving ? "Guardando..." : "Guardar" }}
+          <button type="button" class="btn btn-secondary" @click="showQuoteFormModal = false">Cancelar</button>
+          <button type="submit" class="btn btn-primary" :disabled="generatingQuote">
+            {{ generatingQuote ? "Generando..." : "Generar cotización" }}
           </button>
         </div>
       </form>
     </Modal>
+
+    <div v-if="showQuoteDocument" class="modal-backdrop" @click.self="showQuoteDocument = false">
+      <div class="modal" style="max-width: 780px; padding: 0">
+        <div class="modal-header no-print" style="padding: 18px 24px 0">
+          <h3>Cotización generada</h3>
+          <button class="btn btn-icon btn-ghost" @click="showQuoteDocument = false">✕</button>
+        </div>
+        <QuoteDocument
+          v-if="generatedQuote"
+          :quote="generatedQuote"
+          :business-name="businessForm.business_name"
+          :logo-data-url="businessForm.logo_data_url"
+        />
+        <div class="form-actions no-print" style="padding: 0 24px 24px">
+          <button class="btn btn-secondary" @click="showQuoteDocument = false">Cerrar</button>
+          <button class="btn btn-primary" @click="printQuote">Imprimir / Descargar PDF</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 

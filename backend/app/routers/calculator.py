@@ -4,14 +4,13 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.constants import ELECTRICITY_RATE, IVA_PERCENT, LABOR_RATE_PER_HOUR, MARGIN_SCENARIO_PERCENTS
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.sale import Sale
 from app.models.sale_supply import SaleSupply
 from app.models.user import User
 from app.schemas.calculator import (
-    CalculatorSettingsResponse,
-    CalculatorSettingsUpdateRequest,
     CostBreakdown as CostBreakdownSchema,
     QuoteRequest,
     QuoteResponse,
@@ -20,49 +19,18 @@ from app.schemas.calculator import (
 )
 from app.schemas.sale import SaleResponse
 from app.services.audit import log_event
-from app.services.calculator import calculate_margin_percent, calculate_scenarios
-from app.services.inventory import consume_filament, consume_supply
+from app.services.calculator import calculate_margin_percent, calculate_scenarios, get_scenario_by_margin
+from app.services.inventory import consume_supply
 from app.services.sale_builder import (
+    apply_filaments_to_sale,
     build_cost_breakdown,
-    resolve_filament,
+    resolve_filaments,
     resolve_printer,
     resolve_supplies,
     to_sale_response,
 )
-from app.services.settings import get_or_create_settings
 
 router = APIRouter(prefix="/api/calculator", tags=["calculator"])
-
-
-@router.get("/settings", response_model=CalculatorSettingsResponse)
-def get_settings(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    settings = get_or_create_settings(db, current_user.id)
-    db.commit()
-    return settings
-
-
-@router.put("/settings", response_model=CalculatorSettingsResponse)
-def update_settings(
-    payload: CalculatorSettingsUpdateRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    settings = get_or_create_settings(db, current_user.id)
-    for field, value in payload.model_dump().items():
-        setattr(settings, field, value)
-
-    log_event(
-        db,
-        user_id=current_user.id,
-        event_type="CALCULATOR_SETTINGS_UPDATED",
-        entity_type="calculator_settings",
-        entity_id=settings.id,
-        ip_address=request.client.host if request.client else None,
-    )
-    db.commit()
-    db.refresh(settings)
-    return settings
 
 
 @router.post("/quote", response_model=QuoteResponse)
@@ -71,24 +39,21 @@ def compute_quote(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    settings = get_or_create_settings(db, current_user.id)
     printer = resolve_printer(db, current_user, payload.printer_id)
-    filament = resolve_filament(db, current_user, payload.filament_id)
+    resolved_filaments = resolve_filaments(db, current_user, payload.filaments)
     resolved_supplies = resolve_supplies(db, current_user, payload.supplies)
 
     breakdown = build_cost_breakdown(
         printer=printer,
-        filament=filament,
+        resolved_filaments=resolved_filaments,
         resolved_supplies=resolved_supplies,
-        grams_used=payload.grams_used,
         print_hours=payload.print_hours,
         postprocess_hours=payload.postprocess_hours,
         shipping_cost=payload.shipping_cost,
-        electricity_rate=settings.electricity_rate,
-        labor_rate_per_hour=settings.labor_rate_per_hour,
+        electricity_rate=ELECTRICITY_RATE,
+        labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
-    scenarios = calculate_scenarios(breakdown.total_cost, settings.margin_scenarios, settings.iva_percent)
-    db.commit()
+    scenarios = calculate_scenarios(breakdown.total_cost)
 
     return QuoteResponse(
         breakdown=CostBreakdownSchema(
@@ -103,6 +68,7 @@ def compute_quote(
         scenarios=[
             ScenarioItem(
                 margin_percent=s.margin_percent,
+                label=s.label,
                 base_price=s.base_price,
                 iva_amount=s.iva_amount,
                 total_price=s.total_price,
@@ -125,33 +91,26 @@ def save_quote_as_sale(
     except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Fecha inválida, use formato YYYY-MM-DD")
 
-    settings = get_or_create_settings(db, current_user.id)
+    if payload.chosen_margin_percent not in MARGIN_SCENARIO_PERCENTS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Escenario de margen inválido")
+
     printer = resolve_printer(db, current_user, payload.printer_id)
-    filament = resolve_filament(db, current_user, payload.filament_id)
+    resolved_filaments = resolve_filaments(db, current_user, payload.filaments)
     resolved_supplies = resolve_supplies(db, current_user, payload.supplies)
 
     breakdown = build_cost_breakdown(
         printer=printer,
-        filament=filament,
+        resolved_filaments=resolved_filaments,
         resolved_supplies=resolved_supplies,
-        grams_used=payload.grams_used,
         print_hours=payload.print_hours,
         postprocess_hours=payload.postprocess_hours,
         shipping_cost=payload.shipping_cost,
-        electricity_rate=settings.electricity_rate,
-        labor_rate_per_hour=settings.labor_rate_per_hour,
+        electricity_rate=ELECTRICITY_RATE,
+        labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
 
-    scenarios = {
-        s.margin_percent: s
-        for s in calculate_scenarios(breakdown.total_cost, [payload.chosen_margin_percent], settings.iva_percent)
-    }
-    scenario = scenarios.get(payload.chosen_margin_percent)
-    if scenario is None:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Escenario de margen inválido")
+    scenario = get_scenario_by_margin(breakdown.total_cost, payload.chosen_margin_percent)
 
-    if filament is not None:
-        consume_filament(filament, payload.grams_used)
     printer.hours_used += payload.print_hours
 
     sale = Sale(
@@ -160,12 +119,10 @@ def save_quote_as_sale(
         client_name=payload.client_name,
         buyer_name=payload.buyer_name,
         printer_id=printer.id,
-        filament_id=filament.id if filament else None,
-        grams_used=payload.grams_used,
         print_hours=payload.print_hours,
         postprocess_hours=payload.postprocess_hours,
         base_price=scenario.base_price,
-        iva_percent=settings.iva_percent,
+        iva_percent=IVA_PERCENT,
         iva_amount=scenario.iva_amount,
         total_price=scenario.total_price,
         material_cost=breakdown.material_cost,
@@ -182,6 +139,8 @@ def save_quote_as_sale(
     )
     db.add(sale)
     db.flush()
+
+    apply_filaments_to_sale(db, sale, resolved_filaments)
 
     for supply, qty in resolved_supplies:
         consume_supply(supply, qty)

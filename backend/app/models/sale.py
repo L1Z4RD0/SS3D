@@ -53,5 +53,8 @@ class Sale(UUIDMixin, TimestampMixin, Base):
     supplies_used: Mapped[list["SaleSupply"]] = relationship(
         back_populates="sale", cascade="all, delete-orphan"
     )
+    filaments_used: Mapped[list["SaleFilament"]] = relationship(
+        back_populates="sale", cascade="all, delete-orphan"
+    )
     printer: Mapped["Printer"] = relationship()
     filament: Mapped["Filament | None"] = relationship()

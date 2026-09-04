@@ -532,3 +532,25 @@ tbody tr:hover {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* ---------- Print (quote document) ---------- */
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #quote-print-area,
+  #quote-print-area * {
+    visibility: visible;
+  }
+  #quote-print-area {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    background: #fff;
+    color: #111;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
