@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
@@ -10,8 +11,15 @@ from app.models.supply import Supply
 from app.models.user import User
 from app.schemas.supply import SupplyCreateRequest, SupplyResponse, SupplyUpdateRequest
 from app.services.audit import log_event
+from app.services.calculator import money
 
 router = APIRouter(prefix="/api/inventory/supplies", tags=["inventory"])
+
+
+def _compute_unit_cost(purchase_quantity: Decimal | None, purchase_total_cost: Decimal | None) -> Decimal | None:
+    if purchase_quantity is None or purchase_total_cost is None:
+        return None
+    return money(purchase_total_cost / purchase_quantity)
 
 
 def _to_response(supply: Supply) -> SupplyResponse:
@@ -22,6 +30,8 @@ def _to_response(supply: Supply) -> SupplyResponse:
         category=supply.category,
         quantity_available=supply.quantity_available,
         min_alert_qty=supply.min_alert_qty,
+        purchase_quantity=supply.purchase_quantity,
+        purchase_total_cost=supply.purchase_total_cost,
         unit_cost=supply.unit_cost,
         is_active=supply.is_active,
         low_stock=low_stock,
@@ -55,7 +65,16 @@ def create_supply(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    supply = Supply(user_id=current_user.id, **payload.model_dump())
+    supply = Supply(
+        user_id=current_user.id,
+        name=payload.name,
+        category=payload.category,
+        quantity_available=payload.quantity_available,
+        min_alert_qty=payload.min_alert_qty,
+        purchase_quantity=payload.purchase_quantity,
+        purchase_total_cost=payload.purchase_total_cost,
+        unit_cost=_compute_unit_cost(payload.purchase_quantity, payload.purchase_total_cost),
+    )
     db.add(supply)
     db.flush()
     log_event(
@@ -82,6 +101,12 @@ def update_supply(
 ):
     supply = _get_owned_supply(db, supply_id, current_user)
     changes = payload.model_dump(exclude_unset=True)
+
+    if "purchase_quantity" in changes:
+        supply.purchase_quantity = changes.pop("purchase_quantity")
+        supply.purchase_total_cost = changes.pop("purchase_total_cost")
+        supply.unit_cost = _compute_unit_cost(supply.purchase_quantity, supply.purchase_total_cost)
+
     for field, value in changes.items():
         setattr(supply, field, value)
 

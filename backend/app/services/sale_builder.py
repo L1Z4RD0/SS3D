@@ -104,10 +104,16 @@ def build_cost_breakdown(
     )
 
 
+def _filament_label(filament: Filament) -> str:
+    if filament.sku:
+        return f"{filament.brand} {filament.color} ({filament.sku})"
+    return f"{filament.brand} {filament.color}"
+
+
 def _build_filament_label(sale: Sale) -> str | None:
     if sale.filament is not None:
-        return f"{sale.filament.brand} {sale.filament.color}"
-    labels = [f"{sf.filament.brand} {sf.filament.color}" for sf in sale.filaments_used]
+        return _filament_label(sale.filament)
+    labels = [_filament_label(sf.filament) for sf in sale.filaments_used]
     if not labels:
         return None
     if len(labels) <= 3:
@@ -174,7 +180,7 @@ def to_sale_response(sale: Sale) -> SaleResponse:
         filaments_used=[
             SaleFilamentResponse(
                 filament_id=sf.filament_id,
-                filament_label=f"{sf.filament.brand} {sf.filament.color}",
+                filament_label=_filament_label(sf.filament),
                 grams_used=sf.grams_used,
                 material_cost_snapshot=sf.material_cost_snapshot,
             )

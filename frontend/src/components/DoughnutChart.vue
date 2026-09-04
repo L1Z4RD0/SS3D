@@ -1,44 +1,32 @@
 <script setup>
 import { computed } from "vue";
-import { Doughnut } from "vue-chartjs";
-import { Chart as ChartJS, ArcElement, Tooltip, Legend } from "chart.js";
-
-ChartJS.register(ArcElement, Tooltip, Legend);
+import VueApexCharts from "vue3-apexcharts";
+import { useTheme } from "../composables/useTheme";
+import { baseChartOptions } from "../utils/chartTheme";
+import { formatCurrency } from "../utils/format";
 
 const props = defineProps({
   labels: { type: Array, required: true },
   values: { type: Array, required: true },
 });
 
-const palette = ["#5b4bf5", "#17b3a3", "#f0ad4e", "#d7473f", "#3567d6", "#9384ff"];
+const { theme } = useTheme();
 
-const chartData = computed(() => ({
+const series = computed(() => props.values.map(Number));
+
+const chartOptions = computed(() => ({
+  ...baseChartOptions(theme.value),
   labels: props.labels,
-  datasets: [
-    {
-      data: props.values,
-      backgroundColor: palette,
-      borderWidth: 0,
-      hoverOffset: 6,
-    },
-  ],
+  legend: { position: "bottom", fontSize: "12px" },
+  dataLabels: { enabled: false },
+  stroke: { width: 0 },
+  plotOptions: { pie: { donut: { size: "62%" } } },
+  tooltip: { y: { formatter: (val) => formatCurrency(val) } },
 }));
-
-const chartOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  cutout: "62%",
-  plugins: {
-    legend: {
-      position: "bottom",
-      labels: { boxWidth: 10, boxHeight: 10, padding: 14, font: { size: 11 } },
-    },
-  },
-};
 </script>
 
 <template>
   <div style="height: 240px">
-    <Doughnut :data="chartData" :options="chartOptions" />
+    <VueApexCharts :key="theme" type="donut" height="240" :options="chartOptions" :series="series" />
   </div>
 </template>

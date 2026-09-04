@@ -35,6 +35,20 @@ export function formatDateTime(value) {
   return d.toLocaleString("es-CL", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
+export function toLocalISODate(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 export function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  return toLocalISODate(new Date());
+}
+
+export function currentMonthRange() {
+  const now = new Date();
+  const first = new Date(now.getFullYear(), now.getMonth(), 1);
+  const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  return { date_from: toLocalISODate(first), date_to: toLocalISODate(last) };
 }

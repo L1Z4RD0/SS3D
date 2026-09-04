@@ -50,7 +50,11 @@ function removeFilamentRow(id) {
 
 function filamentName(id) {
   const f = filaments.value.find((x) => x.id === id);
-  return f ? `${f.brand} · ${f.color}` : "";
+  return f ? filamentLabel(f) : "";
+}
+
+function filamentLabel(f) {
+  return f.sku ? `${f.brand} · ${f.color} — ${f.sku}` : `${f.brand} · ${f.color}`;
 }
 
 function buildFilamentsPayload() {
@@ -61,13 +65,6 @@ function buildFilamentsPayload() {
     return [{ filament_id: singleFilamentId.value, grams_used: Number(singleGramsUsed.value) }];
   }
   return [];
-}
-
-function currentFilamentSummary() {
-  if (isMulticolor.value) {
-    return filamentRows.value.length ? "Multicolor" : "";
-  }
-  return singleFilamentId.value ? filamentName(singleFilamentId.value) : "";
 }
 
 /* -------- Supplies -------- */
@@ -176,12 +173,9 @@ async function confirmSaveAsSale() {
 const cartItems = ref([]); // { id, description, quantity, unit_price }
 
 function addToCart(scenario) {
-  const printerName = printers.value.find((p) => p.id === form.printer_id)?.name || "Trabajo";
-  const filamentSummary = currentFilamentSummary();
-  const description = filamentSummary ? `${printerName} — ${filamentSummary} (${scenario.label})` : `${printerName} (${scenario.label})`;
   cartItems.value.push({
     id: crypto.randomUUID(),
-    description,
+    description: "",
     quantity: 1,
     unit_price: Number(scenario.base_price),
   });
@@ -231,6 +225,10 @@ function removeLogo() {
 }
 
 async function confirmGenerateQuote() {
+  if (cartItems.value.some((i) => !i.description.trim())) {
+    quoteFormError.value = "Todos los productos de la cotización necesitan un nombre — revisa la lista de arriba.";
+    return;
+  }
   generatingQuote.value = true;
   quoteFormError.value = "";
   try {
@@ -314,12 +312,12 @@ onMounted(loadCatalog);
               <label>Filamento (opcional)</label>
               <select v-model="singleFilamentId">
                 <option value="">Sin filamento / no descontar stock</option>
-                <option v-for="f in filaments" :key="f.id" :value="f.id">{{ f.brand }} · {{ f.color }} ({{ f.available_g }}g disp.)</option>
+                <option v-for="f in filaments" :key="f.id" :value="f.id">{{ filamentLabel(f) }} ({{ f.available_g }}g disp.)</option>
               </select>
             </div>
             <div class="field" style="grid-column: span 2">
               <label>Gramos usados</label>
-              <input v-model.number="singleGramsUsed" type="number" min="0" step="1" />
+              <input v-model.number="singleGramsUsed" type="number" min="0" step="0.01" />
             </div>
           </div>
 
@@ -328,9 +326,9 @@ onMounted(loadCatalog);
             <div class="flex gap-2">
               <select v-model="newFilamentRowId" style="flex: 1">
                 <option value="" disabled>Selecciona un filamento</option>
-                <option v-for="f in filaments" :key="f.id" :value="f.id">{{ f.brand }} · {{ f.color }}</option>
+                <option v-for="f in filaments" :key="f.id" :value="f.id">{{ filamentLabel(f) }}</option>
               </select>
-              <input v-model.number="newFilamentRowGrams" type="number" min="1" step="1" placeholder="Gramos" style="width: 90px" />
+              <input v-model.number="newFilamentRowGrams" type="number" min="0.01" step="0.01" placeholder="Gramos" style="width: 90px" />
               <button type="button" class="btn btn-secondary btn-sm" @click="addFilamentRow">Agregar</button>
             </div>
             <div v-if="filamentRows.length" class="flex flex-col gap-2 mt-2">
@@ -475,7 +473,7 @@ onMounted(loadCatalog);
                   </thead>
                   <tbody>
                     <tr v-for="item in cartItems" :key="item.id">
-                      <td><input v-model="item.description" style="min-width: 220px" /></td>
+                      <td><input v-model="item.description" placeholder="Nombre del producto" style="min-width: 220px" /></td>
                       <td class="text-right"><input v-model.number="item.quantity" type="number" min="0.01" step="1" style="width: 70px; text-align: right" /></td>
                       <td class="text-right"><input v-model.number="item.unit_price" type="number" min="0" step="1" style="width: 110px; text-align: right" /></td>
                       <td class="text-right mono">{{ formatCurrency(item.quantity * item.unit_price) }}</td>
@@ -516,7 +514,7 @@ onMounted(loadCatalog);
             </select>
           </div>
           <div class="field">
-            <label>Cliente / trabajo</label>
+            <label>Trabajo</label>
             <input v-model="saveForm.client_name" required />
           </div>
           <div class="field">

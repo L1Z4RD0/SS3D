@@ -9,6 +9,7 @@ class FilamentCreateRequest(BaseModel):
     brand: str = Field(min_length=1, max_length=120)
     type: str = Field(min_length=1, max_length=60)
     color: str = Field(min_length=1, max_length=60)
+    sku: str | None = Field(default=None, max_length=60)
     entry_date: date
     spool_weight_g: Decimal = Field(default=Decimal(1000), gt=0)
     initial_stock_g: Decimal = Field(gt=0)
@@ -20,6 +21,7 @@ class FilamentUpdateRequest(BaseModel):
     brand: str | None = Field(default=None, min_length=1, max_length=120)
     type: str | None = Field(default=None, min_length=1, max_length=60)
     color: str | None = Field(default=None, min_length=1, max_length=60)
+    sku: str | None = Field(default=None, max_length=60)
     entry_date: date | None = None
     spool_weight_g: Decimal | None = Field(default=None, gt=0)
     initial_stock_g: Decimal | None = Field(default=None, gt=0)
@@ -32,6 +34,7 @@ class FilamentResponse(BaseModel):
     brand: str
     type: str
     color: str
+    sku: str | None
     entry_date: date
     spool_weight_g: Decimal
     initial_stock_g: Decimal

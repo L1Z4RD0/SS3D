@@ -21,6 +21,7 @@ class Filament(UUIDMixin, TimestampMixin, Base):
     brand: Mapped[str] = mapped_column(Text, nullable=False)
     type: Mapped[str] = mapped_column(Text, nullable=False)
     color: Mapped[str] = mapped_column(Text, nullable=False)
+    sku: Mapped[str | None] = mapped_column(Text, nullable=True)
     entry_date: Mapped[date] = mapped_column(Date, nullable=False)
     spool_weight_g: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=1000)
     initial_stock_g: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)

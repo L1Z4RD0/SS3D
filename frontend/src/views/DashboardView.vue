@@ -1,8 +1,9 @@
 <script setup>
-import { ref, reactive, onMounted } from "vue";
+import { ref, reactive, computed, onMounted } from "vue";
 import * as dashboardApi from "../api/dashboard";
+import * as businessProfileApi from "../api/businessProfile";
 import { PAYMENT_METHODS } from "../api/sales";
-import { formatCurrency, formatNumber, formatPercent } from "../utils/format";
+import { formatCurrency, formatNumber, formatPercent, currentMonthRange } from "../utils/format";
 import StatCard from "../components/StatCard.vue";
 import DoughnutChart from "../components/DoughnutChart.vue";
 import Icon from "../components/Icon.vue";
@@ -12,12 +13,26 @@ const byPrinter = ref([]);
 const byPayment = ref([]);
 const stockAlerts = ref([]);
 const loading = ref(true);
+const businessProfile = ref({ business_name: "", logo_data_url: "" });
 
-const filters = reactive({ date_from: "", date_to: "" });
+const filters = reactive(currentMonthRange());
 
 const statusLabels = { disponible: "Disponible", alerta: "Alerta", critico: "Crítico", vacio: "Vacío" };
 const statusBadge = { disponible: "badge-success", alerta: "badge-warning", critico: "badge-danger", vacio: "badge-danger" };
 const paymentLabel = (v) => PAYMENT_METHODS.find((p) => p.value === v)?.label || v;
+
+/* -------- Contador de transferencias -------- */
+const TRANSFER_MAX = 50;
+const transferCount = computed(() => {
+  const entry = byPayment.value.find((p) => p.payment_method === "transferencia");
+  return entry ? entry.jobs : 0;
+});
+const transferLevel = computed(() => {
+  if (transferCount.value > 40) return "danger";
+  if (transferCount.value >= 26) return "warning";
+  return "success";
+});
+const transferGaugePercent = computed(() => Math.min(100, (transferCount.value / TRANSFER_MAX) * 100));
 
 async function loadAll() {
   loading.value = true;
@@ -45,18 +60,29 @@ function applyFilters() {
   loadAll();
 }
 function resetFilters() {
-  filters.date_from = "";
-  filters.date_to = "";
+  Object.assign(filters, currentMonthRange());
   loadAll();
 }
 
-onMounted(loadAll);
+onMounted(async () => {
+  loadAll();
+  businessProfile.value = await businessProfileApi.getBusinessProfile();
+});
 </script>
 
 <template>
   <div>
     <div class="page-header">
-      <p class="page-subtitle">Resumen ejecutivo de tu negocio de impresión 3D</p>
+      <div class="flex items-center gap-3">
+        <img v-if="businessProfile.logo_data_url" :src="businessProfile.logo_data_url" alt="Logo del negocio" class="dashboard-logo" />
+        <div v-else class="dashboard-logo dashboard-logo-placeholder">
+          <Icon name="image" :size="20" />
+        </div>
+        <div>
+          <h1 v-if="businessProfile.business_name">{{ businessProfile.business_name }}</h1>
+          <p class="page-subtitle">Resumen ejecutivo de tu negocio de impresión 3D</p>
+        </div>
+      </div>
     </div>
 
     <div class="card" style="margin-bottom: 20px">
@@ -86,6 +112,20 @@ onMounted(loadAll);
         <StatCard label="IVA cobrado" :value="formatCurrency(summary.total_iva)" />
         <StatCard label="Horas impresas" :value="formatNumber(summary.total_print_hours, 1)" />
         <StatCard label="Filamento usado" :value="`${formatNumber(summary.total_filament_used_g, 0)} g`" />
+      </div>
+
+      <div class="card" style="margin-bottom: 20px">
+        <div class="card-header">
+          <h3>Contador de transferencias</h3>
+          <span class="badge" :class="`badge-${transferLevel}`">{{ transferCount }} / {{ TRANSFER_MAX }}</span>
+        </div>
+        <div class="transfer-gauge-track">
+          <div class="transfer-gauge-fill" :class="transferLevel" :style="{ width: transferGaugePercent + '%' }"></div>
+        </div>
+        <div v-if="transferLevel === 'danger'" class="alert alert-danger mt-4">
+          <Icon name="alert" :size="16" />
+          <span>Atención: superaste 40 transferencias en el período mostrado.</span>
+        </div>
       </div>
 
       <div class="grid grid-cols-2" style="margin-bottom: 20px; align-items: start">
@@ -154,7 +194,10 @@ onMounted(loadAll);
             </thead>
             <tbody>
               <tr v-for="f in stockAlerts" :key="f.filament_id">
-                <td>{{ f.brand }} · {{ f.color }} <span class="text-muted text-sm">({{ f.type }})</span></td>
+                <td>
+                  {{ f.brand }} · {{ f.color }} <span class="text-muted text-sm">({{ f.type }})</span>
+                  <span v-if="f.sku" class="badge badge-neutral" style="margin-left: 6px">{{ f.sku }}</span>
+                </td>
                 <td class="text-right mono">{{ formatNumber(f.available_g, 0) }} g</td>
                 <td class="text-right mono">{{ formatPercent(f.stock_percent) }}</td>
                 <td>
@@ -171,3 +214,48 @@ onMounted(loadAll);
     </template>
   </div>
 </template>
+
+<style scoped>
+.dashboard-logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.dashboard-logo-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-alt);
+  color: var(--text-faint);
+}
+
+.transfer-gauge-track {
+  height: 14px;
+  border-radius: 999px;
+  background: var(--surface-alt);
+  overflow: hidden;
+}
+
+.transfer-gauge-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.transfer-gauge-fill.success {
+  background: var(--success);
+}
+
+.transfer-gauge-fill.warning {
+  background: var(--warning);
+}
+
+.transfer-gauge-fill.danger {
+  background: var(--danger);
+}
+</style>

@@ -11,6 +11,7 @@ from app.routers import (
     dashboard,
     filament_catalog,
     filaments,
+    history,
     printers,
     quotes,
     sales,
@@ -45,6 +46,7 @@ app.include_router(dashboard.router)
 app.include_router(quotes.router)
 app.include_router(business_profile.router)
 app.include_router(filament_catalog.router)
+app.include_router(history.router)
 
 
 @app.get("/api/health")

@@ -83,6 +83,7 @@ const emptyFilamentForm = () => ({
   brand: "",
   type: "PLA",
   color: "",
+  sku: "",
   entry_date: todayISO(),
   spool_weight_g: 1000,
   initial_stock_g: null,
@@ -114,6 +115,7 @@ function openEditFilament(f) {
     brand: brandMatch ? f.brand : CUSTOM,
     type: materialMatch ? f.type : CUSTOM,
     color: colorMatch ? f.color : CUSTOM,
+    sku: f.sku || "",
     entry_date: f.entry_date,
     spool_weight_g: Number(f.spool_weight_g),
     initial_stock_g: Number(f.initial_stock_g),
@@ -135,6 +137,7 @@ async function submitFilament() {
     brand: filamentForm.brand === CUSTOM ? customBrandText.value : filamentForm.brand,
     type: filamentForm.type === CUSTOM ? customMaterialText.value : filamentForm.type,
     color: filamentForm.color === CUSTOM ? customColorText.value : filamentForm.color,
+    sku: filamentForm.sku?.trim() || null,
   };
   try {
     if (editingFilamentId.value) {
@@ -168,8 +171,22 @@ const showSupplyModal = ref(false);
 const editingSupplyId = ref(null);
 const supplySaving = ref(false);
 const supplyError = ref("");
-const emptySupplyForm = () => ({ name: "", category: "", quantity_available: null, min_alert_qty: null, unit_cost: null });
+const emptySupplyForm = () => ({
+  name: "",
+  category: "",
+  quantity_available: null,
+  min_alert_qty: null,
+  purchase_quantity: null,
+  purchase_total_cost: null,
+});
 const supplyForm = reactive(emptySupplyForm());
+
+const computedUnitCost = computed(() => {
+  const qty = Number(supplyForm.purchase_quantity);
+  const total = Number(supplyForm.purchase_total_cost);
+  if (!qty || total === null || total === undefined || Number.isNaN(total)) return null;
+  return total / qty;
+});
 
 function openCreateSupply() {
   editingSupplyId.value = null;
@@ -185,7 +202,8 @@ function openEditSupply(s) {
     category: s.category,
     quantity_available: Number(s.quantity_available),
     min_alert_qty: s.min_alert_qty !== null ? Number(s.min_alert_qty) : null,
-    unit_cost: s.unit_cost !== null ? Number(s.unit_cost) : null,
+    purchase_quantity: s.purchase_quantity !== null ? Number(s.purchase_quantity) : null,
+    purchase_total_cost: s.purchase_total_cost !== null ? Number(s.purchase_total_cost) : null,
   });
   supplyError.value = "";
   showSupplyModal.value = true;
@@ -272,6 +290,7 @@ async function deleteSupply(s) {
                   <span class="color-dot" :style="{ background: swatchColor(f.color) }" :title="f.color"></span>
                   <div>
                     <strong>{{ f.brand }} · {{ f.color }}</strong>
+                    <span v-if="f.sku" class="badge badge-neutral" style="margin-left: 6px">{{ f.sku }}</span>
                     <div class="text-muted text-sm">{{ f.type }}</div>
                   </div>
                 </div>
@@ -323,7 +342,12 @@ async function deleteSupply(s) {
               <td><strong>{{ s.name }}</strong></td>
               <td>{{ s.category }}</td>
               <td class="text-right mono">{{ formatNumber(s.quantity_available, 0) }}</td>
-              <td class="text-right mono">{{ s.unit_cost !== null ? formatCurrency(s.unit_cost) : "-" }}</td>
+              <td class="text-right mono">
+                <div>{{ s.unit_cost !== null ? formatCurrency(s.unit_cost) : "-" }}</div>
+                <div v-if="s.purchase_quantity" class="text-muted text-sm">
+                  {{ formatNumber(s.purchase_quantity, 0) }} uds. por {{ formatCurrency(s.purchase_total_cost) }}
+                </div>
+              </td>
               <td>
                 <span v-if="s.low_stock" class="badge badge-warning">Stock bajo</span>
                 <span v-else class="badge badge-success">OK</span>
@@ -385,6 +409,10 @@ async function deleteSupply(s) {
             <span v-if="filamentForm.color && filamentForm.color !== CUSTOM" class="field-hint">Seleccionado: {{ filamentForm.color }}</span>
             <input v-if="filamentForm.color === CUSTOM" v-model="customColorText" placeholder="Nombre del color" class="mt-2" required />
           </div>
+          <div class="field" style="grid-column: span 2">
+            <label>SKU / Identificador (opcional)</label>
+            <input v-model="filamentForm.sku" placeholder="Ej: ROJO-01, para diferenciar carretes iguales" maxlength="60" />
+          </div>
           <div class="field">
             <label>Fecha de ingreso</label>
             <input v-model="filamentForm.entry_date" type="date" required />
@@ -437,11 +465,23 @@ async function deleteSupply(s) {
             <label>Alerta mínima</label>
             <input v-model.number="supplyForm.min_alert_qty" type="number" min="0" step="1" />
           </div>
+        </div>
+
+        <h3 class="mt-4" style="font-size: 0.95rem; margin-bottom: 10px">Última compra (para calcular el costo unitario)</h3>
+        <div class="form-grid">
           <div class="field">
-            <label>Costo unitario (CLP)</label>
-            <input v-model.number="supplyForm.unit_cost" type="number" min="0" step="1" />
+            <label>Cantidad comprada</label>
+            <input v-model.number="supplyForm.purchase_quantity" type="number" min="1" step="1" placeholder="Ej: 100" />
+          </div>
+          <div class="field">
+            <label>Costo total de la compra (CLP)</label>
+            <input v-model.number="supplyForm.purchase_total_cost" type="number" min="0" step="1" placeholder="Ej: 10000" />
           </div>
         </div>
+        <p class="field-hint mt-2">
+          Costo unitario calculado:
+          <strong>{{ computedUnitCost !== null ? formatCurrency(computedUnitCost) : "— completa ambos campos" }}</strong>
+        </p>
 
         <div v-if="supplyError" class="alert alert-danger mt-4">{{ supplyError }}</div>
 

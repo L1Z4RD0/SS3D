@@ -162,6 +162,7 @@ def get_stock_alerts(db: Session = Depends(get_db), current_user: User = Depends
                 brand=f.brand,
                 type=f.type,
                 color=f.color,
+                sku=f.sku,
                 available_g=f.available_g,
                 min_alert_g=f.min_alert_g,
                 stock_percent=stock_percent,

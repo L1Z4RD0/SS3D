@@ -21,5 +21,7 @@ class Supply(UUIDMixin, TimestampMixin, Base):
     category: Mapped[str] = mapped_column(Text, nullable=False)
     quantity_available: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=0)
     min_alert_qty: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    purchase_quantity: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    purchase_total_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     unit_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

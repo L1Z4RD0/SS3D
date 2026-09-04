@@ -40,6 +40,7 @@ class StockAlertItem(BaseModel):
     brand: str
     type: str
     color: str
+    sku: str | None
     available_g: Decimal
     min_alert_g: Decimal
     stock_percent: Decimal

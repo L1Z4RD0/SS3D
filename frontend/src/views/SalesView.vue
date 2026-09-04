@@ -115,7 +115,10 @@ function removeFilamentRow(id) {
 }
 function filamentName(id) {
   const f = filaments.value.find((x) => x.id === id);
-  return f ? `${f.brand} · ${f.color}` : "";
+  return f ? filamentLabel(f) : "";
+}
+function filamentLabel(f) {
+  return f.sku ? `${f.brand} · ${f.color} — ${f.sku}` : `${f.brand} · ${f.color}`;
 }
 
 function addSupplyRow() {
@@ -340,7 +343,7 @@ onMounted(async () => {
             </select>
           </div>
           <div class="field">
-            <label>Cliente / trabajo</label>
+            <label>Trabajo</label>
             <input v-model="form.client_name" required />
           </div>
           <div class="field">
@@ -378,9 +381,9 @@ onMounted(async () => {
           <div class="flex gap-2">
             <select v-model="newFilamentId" style="flex: 1">
               <option value="" disabled>Selecciona un filamento</option>
-              <option v-for="f in filaments" :key="f.id" :value="f.id">{{ f.brand }} · {{ f.color }}</option>
+              <option v-for="f in filaments" :key="f.id" :value="f.id">{{ filamentLabel(f) }}</option>
             </select>
-            <input v-model.number="newFilamentGrams" type="number" min="1" step="1" placeholder="Gramos" style="width: 90px" />
+            <input v-model.number="newFilamentGrams" type="number" min="0.01" step="0.01" placeholder="Gramos" style="width: 90px" />
             <button type="button" class="btn btn-secondary btn-sm" @click="addFilamentRow">Agregar</button>
           </div>
           <div v-if="filamentRows.length" class="flex flex-col gap-2 mt-2">
