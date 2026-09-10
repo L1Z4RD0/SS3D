@@ -57,6 +57,13 @@ class SaleFilamentResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ExhaustedFilamentInfo(BaseModel):
+    filament_id: uuid.UUID
+    filament_label: str
+
+    model_config = {"from_attributes": True}
+
+
 class SaleResponse(BaseModel):
     id: uuid.UUID
     sale_date: date
@@ -86,6 +93,7 @@ class SaleResponse(BaseModel):
     notes: str | None
     supplies_used: list[SaleSupplyResponse]
     filaments_used: list[SaleFilamentResponse]
+    exhausted_filaments: list[ExhaustedFilamentInfo] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 

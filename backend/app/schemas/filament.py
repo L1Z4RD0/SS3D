@@ -4,6 +4,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
+from app.constants import GRAMS_MAX
+
 
 class FilamentCreateRequest(BaseModel):
     brand: str = Field(min_length=1, max_length=120)
@@ -11,9 +13,9 @@ class FilamentCreateRequest(BaseModel):
     color: str = Field(min_length=1, max_length=60)
     sku: str | None = Field(default=None, max_length=60)
     entry_date: date
-    spool_weight_g: Decimal = Field(default=Decimal(1000), gt=0)
-    initial_stock_g: Decimal = Field(gt=0)
-    min_alert_g: Decimal = Field(ge=0)
+    spool_weight_g: Decimal = Field(default=Decimal(1000), gt=0, le=GRAMS_MAX)
+    initial_stock_g: Decimal = Field(gt=0, le=GRAMS_MAX)
+    min_alert_g: Decimal = Field(ge=0, le=GRAMS_MAX)
     spool_price: Decimal = Field(gt=0)
 
 
@@ -23,9 +25,9 @@ class FilamentUpdateRequest(BaseModel):
     color: str | None = Field(default=None, min_length=1, max_length=60)
     sku: str | None = Field(default=None, max_length=60)
     entry_date: date | None = None
-    spool_weight_g: Decimal | None = Field(default=None, gt=0)
-    initial_stock_g: Decimal | None = Field(default=None, gt=0)
-    min_alert_g: Decimal | None = Field(default=None, ge=0)
+    spool_weight_g: Decimal | None = Field(default=None, gt=0, le=GRAMS_MAX)
+    initial_stock_g: Decimal | None = Field(default=None, gt=0, le=GRAMS_MAX)
+    min_alert_g: Decimal | None = Field(default=None, ge=0, le=GRAMS_MAX)
     spool_price: Decimal | None = Field(default=None, gt=0)
 
 

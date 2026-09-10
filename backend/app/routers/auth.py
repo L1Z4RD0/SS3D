@@ -35,8 +35,8 @@ def _set_refresh_cookie(response: Response, raw_token: str) -> None:
         key=REFRESH_COOKIE_NAME,
         value=raw_token,
         httponly=True,
-        samesite="lax",
-        secure=False,
+        samesite=settings.refresh_cookie_samesite,
+        secure=settings.cookie_secure,
         max_age=settings.refresh_token_expire_days * 86400,
         path=REFRESH_COOKIE_PATH,
     )
@@ -171,7 +171,12 @@ def logout(
 
     log_event(db, user_id=current_user.id, event_type="LOGOUT", ip_address=_client_ip(request))
     db.commit()
-    response.delete_cookie(REFRESH_COOKIE_NAME, path=REFRESH_COOKIE_PATH)
+    response.delete_cookie(
+        REFRESH_COOKIE_NAME,
+        path=REFRESH_COOKIE_PATH,
+        secure=settings.cookie_secure,
+        samesite=settings.refresh_cookie_samesite,
+    )
 
 
 @router.get("/me", response_model=CurrentUserResponse)

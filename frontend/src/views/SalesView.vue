@@ -5,9 +5,12 @@ import * as printersApi from "../api/printers";
 import * as inventoryApi from "../api/inventory";
 import { PAYMENT_METHODS } from "../api/sales";
 import { formatCurrency, formatPercent, formatDate, todayISO } from "../utils/format";
+import { GRAMS_MAX, isValidGrams, isValidNumber, gramsErrorMessage, extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
+import { promptExhaustedFilaments } from "../utils/exhaustedFilaments";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
+import FilamentPickerModal from "../components/FilamentPickerModal.vue";
 
 const sales = ref([]);
 const total = ref(0);
@@ -80,11 +83,13 @@ const formError = ref("");
 
 const supplyRows = ref([]);
 const newSupplyId = ref("");
-const newSupplyQty = ref(1);
+const newSupplyQty = ref(null);
+const supplyRowError = ref("");
 
 const filamentRows = ref([]); // { id, filament_id, grams_used }
 const newFilamentId = ref("");
 const newFilamentGrams = ref(null);
+const filamentRowError = ref("");
 
 const emptyForm = () => ({
   sale_date: todayISO(),
@@ -101,18 +106,44 @@ const emptyForm = () => ({
 const form = reactive(emptyForm());
 
 function addFilamentRow() {
-  if (!newFilamentId.value || !newFilamentGrams.value) return;
-  filamentRows.value.push({
-    id: crypto.randomUUID(),
-    filament_id: newFilamentId.value,
-    grams_used: Number(newFilamentGrams.value),
-  });
+  filamentRowError.value = "";
+  if (!newFilamentId.value) {
+    filamentRowError.value = "Selecciona un filamento.";
+    return;
+  }
+  if (!isValidGrams(newFilamentGrams.value)) {
+    filamentRowError.value = gramsErrorMessage(newFilamentGrams.value);
+    return;
+  }
+  const grams = Number(newFilamentGrams.value);
+  const existing = filamentRows.value.find((r) => r.filament_id === newFilamentId.value);
+  if (existing) {
+    const total = existing.grams_used + grams;
+    if (!isValidGrams(total)) {
+      filamentRowError.value = `Ese filamento ya está en la lista. Sumado (${total}g), ${gramsErrorMessage(total)}`;
+      return;
+    }
+    existing.grams_used = total;
+  } else {
+    filamentRows.value.push({
+      id: crypto.randomUUID(),
+      filament_id: newFilamentId.value,
+      grams_used: grams,
+    });
+  }
   newFilamentId.value = "";
   newFilamentGrams.value = null;
 }
 function removeFilamentRow(id) {
   filamentRows.value = filamentRows.value.filter((r) => r.id !== id);
 }
+// Filaments at 0g can't be picked for a new sale — they're kept visible in Inventario
+// (marked "Agotado") but excluded here so a sale can't be logged against empty stock.
+const selectableFilaments = computed(() => filaments.value.filter((f) => Number(f.available_g) > 0));
+
+const availableFilamentOptions = computed(() =>
+  selectableFilaments.value.filter((f) => !filamentRows.value.some((r) => r.filament_id === f.id))
+);
 function filamentName(id) {
   const f = filaments.value.find((x) => x.id === id);
   return f ? filamentLabel(f) : "";
@@ -120,17 +151,40 @@ function filamentName(id) {
 function filamentLabel(f) {
   return f.sku ? `${f.brand} · ${f.color} — ${f.sku}` : `${f.brand} · ${f.color}`;
 }
+// Compacto a propósito: el picker ya mostró marca, material, color, SKU y gramos
+// disponibles antes de elegir, así que acá alcanza con lo mínimo para no desbordar
+// el botón (que comparte fila con el input de gramos y "Agregar").
+function filamentSummary(id) {
+  const f = filaments.value.find((x) => x.id === id);
+  return f ? `${f.brand} · ${f.color}` : "";
+}
+
+/* -------- Filament picker modal -------- */
+const showFilamentPicker = ref(false);
+function onFilamentPicked(f) {
+  newFilamentId.value = f.id;
+  showFilamentPicker.value = false;
+}
 
 function addSupplyRow() {
-  if (!newSupplyId.value) return;
+  supplyRowError.value = "";
+  if (!newSupplyId.value) {
+    supplyRowError.value = "Selecciona un insumo.";
+    return;
+  }
+  if (!isValidNumber(newSupplyQty.value, { min: 0, allowZero: false })) {
+    supplyRowError.value = "Ingresa una cantidad válida, mayor a 0.";
+    return;
+  }
+  const qty = Number(newSupplyQty.value);
   const exists = supplyRows.value.find((r) => r.supply_id === newSupplyId.value);
   if (exists) {
-    exists.quantity += Number(newSupplyQty.value) || 1;
+    exists.quantity += qty;
   } else {
-    supplyRows.value.push({ supply_id: newSupplyId.value, quantity: Number(newSupplyQty.value) || 1 });
+    supplyRows.value.push({ supply_id: newSupplyId.value, quantity: qty });
   }
   newSupplyId.value = "";
-  newSupplyQty.value = 1;
+  newSupplyQty.value = null;
 }
 function removeSupplyRow(id) {
   supplyRows.value = supplyRows.value.filter((r) => r.supply_id !== id);
@@ -189,19 +243,39 @@ function buildPayload() {
   };
 }
 
+function isValidOrEmpty(value, opts) {
+  if (value === null || value === undefined || value === "") return true;
+  return isValidNumber(value, opts);
+}
+
+function validateSaleForm() {
+  if (!form.printer_id) return "Selecciona una impresora.";
+  if (!isValidOrEmpty(form.print_hours, { min: 0 })) return "Las horas de impresión no pueden ser negativas.";
+  if (!isValidOrEmpty(form.postprocess_hours, { min: 0 })) return "Las horas de postprocesado no pueden ser negativas.";
+  if (!isValidOrEmpty(form.shipping_cost, { min: 0 })) return "El envío/embalaje no puede ser negativo.";
+  if (!isValidNumber(form.base_price, { min: 0 })) return "El precio de venta no puede ser negativo.";
+  return "";
+}
+
 async function handleSubmit() {
+  const validationError = validateSaleForm();
+  if (validationError) {
+    formError.value = validationError;
+    return;
+  }
   saving.value = true;
   formError.value = "";
   try {
-    if (editingId.value) {
-      await salesApi.updateSale(editingId.value, buildPayload());
-    } else {
-      await salesApi.createSale(buildPayload());
-    }
+    const sale = editingId.value
+      ? await salesApi.updateSale(editingId.value, buildPayload())
+      : await salesApi.createSale(buildPayload());
     showModal.value = false;
     await loadSales();
+    await loadCatalog();
+    await promptExhaustedFilaments(sale.exhausted_filaments);
+    await loadCatalog();
   } catch (err) {
-    formError.value = err.response?.data?.detail || "No se pudo guardar la venta";
+    formError.value = extractApiError(err, "No se pudo guardar la venta.");
   } finally {
     saving.value = false;
   }
@@ -379,13 +453,25 @@ onMounted(async () => {
         <div class="field mt-2">
           <label>Filamentos usados (opcional, puede ser más de uno)</label>
           <div class="flex gap-2">
-            <select v-model="newFilamentId" style="flex: 1">
-              <option value="" disabled>Selecciona un filamento</option>
-              <option v-for="f in filaments" :key="f.id" :value="f.id">{{ filamentLabel(f) }}</option>
-            </select>
-            <input v-model.number="newFilamentGrams" type="number" min="0.01" step="0.01" placeholder="Gramos" style="width: 90px" />
+            <button
+              type="button"
+              class="btn btn-secondary"
+              style="flex: 1; justify-content: flex-start; overflow: hidden"
+              @click="showFilamentPicker = true"
+            >
+              <span v-if="newFilamentId" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ filamentSummary(newFilamentId) }}</span>
+              <span v-else class="text-muted" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Selecciona un filamento</span>
+            </button>
+            <input v-model.number="newFilamentGrams" type="number" min="0.01" :max="GRAMS_MAX" step="0.01" placeholder="Gramos" style="width: 90px" />
             <button type="button" class="btn btn-secondary btn-sm" @click="addFilamentRow">Agregar</button>
           </div>
+          <div v-if="!selectableFilaments.length" class="text-sm mt-1" style="color: var(--text-muted)">
+            No hay filamentos con stock disponible. Los agotados (0g) no se pueden usar en una nueva venta.
+          </div>
+          <div v-else-if="!availableFilamentOptions.length" class="text-sm mt-1" style="color: var(--text-muted)">
+            Ya agregaste todos tus filamentos disponibles. Para cambiar la cantidad de uno, quítalo de la lista de abajo y vuelve a agregarlo.
+          </div>
+          <div v-if="filamentRowError" class="alert alert-danger mt-2">{{ filamentRowError }}</div>
           <div v-if="filamentRows.length" class="flex flex-col gap-2 mt-2">
             <div v-for="row in filamentRows" :key="row.id" class="flex items-center justify-between text-sm" style="background: var(--surface-alt); padding: 6px 10px; border-radius: 8px">
               <span>{{ filamentName(row.filament_id) }} — {{ row.grams_used }}g</span>
@@ -403,9 +489,10 @@ onMounted(async () => {
               <option value="" disabled>Selecciona un insumo</option>
               <option v-for="s in supplies" :key="s.id" :value="s.id">{{ s.name }}</option>
             </select>
-            <input v-model.number="newSupplyQty" type="number" min="1" step="1" style="width: 70px" />
+            <input v-model.number="newSupplyQty" type="number" min="0" step="1" placeholder="Cant." style="width: 70px" />
             <button type="button" class="btn btn-secondary btn-sm" @click="addSupplyRow">Agregar</button>
           </div>
+          <div v-if="supplyRowError" class="alert alert-danger mt-2">{{ supplyRowError }}</div>
           <div v-if="supplyRows.length" class="flex flex-col gap-2 mt-2">
             <div v-for="row in supplyRows" :key="row.supply_id" class="flex items-center justify-between text-sm" style="background: var(--surface-alt); padding: 6px 10px; border-radius: 8px">
               <span>{{ supplyName(row.supply_id) }} × {{ row.quantity }}</span>
@@ -431,5 +518,14 @@ onMounted(async () => {
         </div>
       </form>
     </Modal>
+
+    <FilamentPickerModal
+      v-if="showFilamentPicker"
+      :filaments="filaments"
+      :exclude-ids="filamentRows.map((r) => r.filament_id)"
+      title="Seleccionar filamento"
+      @select="onFilamentPicked"
+      @close="showFilamentPicker = false"
+    />
   </div>
 </template>

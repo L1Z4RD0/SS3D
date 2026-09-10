@@ -11,7 +11,7 @@ from app.models.sale_filament import SaleFilament
 from app.models.supply import Supply
 from app.models.user import User
 from app.schemas.calculator import FilamentUsageInput, SupplyUsageInput
-from app.schemas.sale import SaleFilamentResponse, SaleResponse, SaleSupplyResponse
+from app.schemas.sale import ExhaustedFilamentInfo, SaleFilamentResponse, SaleResponse, SaleSupplyResponse
 from app.services.calculator import CostBreakdown, FilamentUsage, SupplyUsage, calculate_costs, money
 from app.services.inventory import consume_filament
 
@@ -121,15 +121,22 @@ def _build_filament_label(sale: Sale) -> str | None:
     return f"Multicolor ({len(labels)} filamentos)"
 
 
-def apply_filaments_to_sale(db: Session, sale: Sale, resolved_filaments: list[tuple[Filament, Decimal]]) -> None:
+def apply_filaments_to_sale(
+    db: Session, sale: Sale, resolved_filaments: list[tuple[Filament, Decimal]]
+) -> list[Filament]:
     """Consume stock for each filament line and create the sale_filaments rows.
-    Also sets sale.filament_id (only when exactly one filament) and sale.grams_used (aggregate)."""
+    Also sets sale.filament_id (only when exactly one filament) and sale.grams_used (aggregate).
+    Returns the filaments that were left at 0g or below by this consumption (a filament can only
+    reach that state here, since consume_filament already blocks consuming past what's available)."""
     total_grams = money(sum((grams for _, grams in resolved_filaments), Decimal(0)))
     sale.grams_used = total_grams
     sale.filament_id = resolved_filaments[0][0].id if len(resolved_filaments) == 1 else None
 
+    exhausted: list[Filament] = []
     for filament, grams in resolved_filaments:
         consume_filament(filament, grams)
+        if filament.available_g <= 0:
+            exhausted.append(filament)
         db.add(
             SaleFilament(
                 sale_id=sale.id,
@@ -138,9 +145,10 @@ def apply_filaments_to_sale(db: Session, sale: Sale, resolved_filaments: list[tu
                 material_cost_snapshot=filament_line_cost(filament, grams),
             )
         )
+    return exhausted
 
 
-def to_sale_response(sale: Sale) -> SaleResponse:
+def to_sale_response(sale: Sale, exhausted_filaments: list[Filament] | None = None) -> SaleResponse:
     return SaleResponse(
         id=sale.id,
         sale_date=sale.sale_date,
@@ -185,5 +193,9 @@ def to_sale_response(sale: Sale) -> SaleResponse:
                 material_cost_snapshot=sf.material_cost_snapshot,
             )
             for sf in sale.filaments_used
+        ],
+        exhausted_filaments=[
+            ExhaustedFilamentInfo(filament_id=f.id, filament_label=_filament_label(f))
+            for f in (exhausted_filaments or [])
         ],
     )

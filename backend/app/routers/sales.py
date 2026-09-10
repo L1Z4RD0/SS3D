@@ -145,7 +145,7 @@ def create_sale(
     db.add(sale)
     db.flush()
 
-    apply_filaments_to_sale(db, sale, resolved_filaments)
+    exhausted_filaments = apply_filaments_to_sale(db, sale, resolved_filaments)
 
     for supply, qty in resolved_supplies:
         consume_supply(supply, qty)
@@ -161,7 +161,7 @@ def create_sale(
         ip_address=request.client.host if request.client else None,
     )
     db.commit()
-    return to_sale_response(_get_owned_sale(db, sale.id, current_user))
+    return to_sale_response(_get_owned_sale(db, sale.id, current_user), exhausted_filaments)
 
 
 @router.put("/{sale_id}", response_model=SaleResponse)
@@ -253,7 +253,7 @@ def update_sale(
     sale.profit = profit
     sale.margin_percent = margin_percent
 
-    apply_filaments_to_sale(db, sale, resolved_filaments)
+    exhausted_filaments = apply_filaments_to_sale(db, sale, resolved_filaments)
 
     for supply, qty in resolved_supplies:
         consume_supply(supply, qty)
@@ -269,7 +269,7 @@ def update_sale(
         ip_address=request.client.host if request.client else None,
     )
     db.commit()
-    return to_sale_response(_get_owned_sale(db, sale.id, current_user))
+    return to_sale_response(_get_owned_sale(db, sale.id, current_user), exhausted_filaments)
 
 
 @router.delete("/{sale_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -2,6 +2,7 @@
 import { ref, onMounted, reactive } from "vue";
 import * as printersApi from "../api/printers";
 import { formatCurrency, formatNumber, formatPercent } from "../utils/format";
+import { isValidNumber, extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
@@ -44,7 +45,25 @@ function openEdit(printer) {
   showModal.value = true;
 }
 
+function validatePrinterForm() {
+  if (!isValidNumber(form.purchase_value, { min: 0, allowZero: false })) {
+    return "El valor de compra debe ser mayor a 0.";
+  }
+  if (!isValidNumber(form.lifetime_hours, { min: 0, allowZero: false })) {
+    return "Las horas de vida útil deben ser mayores a 0.";
+  }
+  if (!isValidNumber(form.power_kw, { min: 0, allowZero: false })) {
+    return "La potencia debe ser mayor a 0.";
+  }
+  return "";
+}
+
 async function handleSubmit() {
+  const validationError = validatePrinterForm();
+  if (validationError) {
+    errorMessage.value = validationError;
+    return;
+  }
   saving.value = true;
   errorMessage.value = "";
   try {
@@ -56,7 +75,7 @@ async function handleSubmit() {
     showModal.value = false;
     await load();
   } catch (err) {
-    errorMessage.value = err.response?.data?.detail || "No se pudo guardar la impresora";
+    errorMessage.value = extractApiError(err, "No se pudo guardar la impresora.");
   } finally {
     saving.value = false;
   }
@@ -154,11 +173,11 @@ onMounted(load);
             </div>
             <div class="field">
               <label>Horas de vida útil</label>
-              <input v-model.number="form.lifetime_hours" type="number" min="1" step="1" required />
+              <input v-model.number="form.lifetime_hours" type="number" min="0" step="1" required />
             </div>
             <div class="field">
               <label>Potencia (kW)</label>
-              <input v-model.number="form.power_kw" type="number" min="0" step="0.001" required />
+              <input v-model.number="form.power_kw" type="number" min="0.001" step="0.001" required />
               <span class="field-hint">Ej: 0.2 kW = 200 W</span>
             </div>
           </div>

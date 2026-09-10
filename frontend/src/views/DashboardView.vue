@@ -1,9 +1,9 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from "vue";
 import * as dashboardApi from "../api/dashboard";
-import * as businessProfileApi from "../api/businessProfile";
 import { PAYMENT_METHODS } from "../api/sales";
 import { formatCurrency, formatNumber, formatPercent, currentMonthRange } from "../utils/format";
+import { BUSINESS_NAME, BUSINESS_LOGO_URL } from "../utils/business";
 import StatCard from "../components/StatCard.vue";
 import DoughnutChart from "../components/DoughnutChart.vue";
 import Icon from "../components/Icon.vue";
@@ -13,7 +13,6 @@ const byPrinter = ref([]);
 const byPayment = ref([]);
 const stockAlerts = ref([]);
 const loading = ref(true);
-const businessProfile = ref({ business_name: "", logo_data_url: "" });
 
 const filters = reactive(currentMonthRange());
 
@@ -32,7 +31,6 @@ const transferLevel = computed(() => {
   if (transferCount.value >= 26) return "warning";
   return "success";
 });
-const transferGaugePercent = computed(() => Math.min(100, (transferCount.value / TRANSFER_MAX) * 100));
 
 async function loadAll() {
   loading.value = true;
@@ -64,24 +62,26 @@ function resetFilters() {
   loadAll();
 }
 
-onMounted(async () => {
-  loadAll();
-  businessProfile.value = await businessProfileApi.getBusinessProfile();
-});
+onMounted(loadAll);
 </script>
 
 <template>
   <div>
     <div class="page-header">
       <div class="flex items-center gap-3">
-        <img v-if="businessProfile.logo_data_url" :src="businessProfile.logo_data_url" alt="Logo del negocio" class="dashboard-logo" />
-        <div v-else class="dashboard-logo dashboard-logo-placeholder">
-          <Icon name="image" :size="20" />
-        </div>
+        <img :src="BUSINESS_LOGO_URL" alt="Logo del negocio" class="dashboard-logo" />
         <div>
-          <h1 v-if="businessProfile.business_name">{{ businessProfile.business_name }}</h1>
+          <h1>{{ BUSINESS_NAME }}</h1>
           <p class="page-subtitle">Resumen ejecutivo de tu negocio de impresión 3D</p>
         </div>
+      </div>
+      <div
+        v-if="summary"
+        class="transfer-chip"
+        :class="transferLevel"
+        :title="`Transferencias en el período: ${transferCount} de ${TRANSFER_MAX}${transferLevel === 'danger' ? ' — superaste el límite recomendado.' : ''}`"
+      >
+        Transferencias <strong>{{ transferCount }}/{{ TRANSFER_MAX }}</strong>
       </div>
     </div>
 
@@ -112,20 +112,6 @@ onMounted(async () => {
         <StatCard label="IVA cobrado" :value="formatCurrency(summary.total_iva)" />
         <StatCard label="Horas impresas" :value="formatNumber(summary.total_print_hours, 1)" />
         <StatCard label="Filamento usado" :value="`${formatNumber(summary.total_filament_used_g, 0)} g`" />
-      </div>
-
-      <div class="card" style="margin-bottom: 20px">
-        <div class="card-header">
-          <h3>Contador de transferencias</h3>
-          <span class="badge" :class="`badge-${transferLevel}`">{{ transferCount }} / {{ TRANSFER_MAX }}</span>
-        </div>
-        <div class="transfer-gauge-track">
-          <div class="transfer-gauge-fill" :class="transferLevel" :style="{ width: transferGaugePercent + '%' }"></div>
-        </div>
-        <div v-if="transferLevel === 'danger'" class="alert alert-danger mt-4">
-          <Icon name="alert" :size="16" />
-          <span>Atención: superaste 40 transferencias en el período mostrado.</span>
-        </div>
       </div>
 
       <div class="grid grid-cols-2" style="margin-bottom: 20px; align-items: start">
@@ -226,36 +212,35 @@ onMounted(async () => {
   flex-shrink: 0;
 }
 
-.dashboard-logo-placeholder {
-  display: flex;
+.transfer-chip {
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  background: var(--surface-alt);
-  color: var(--text-faint);
-}
-
-.transfer-gauge-track {
-  height: 14px;
+  gap: 5px;
+  padding: 6px 12px;
   border-radius: 999px;
-  background: var(--surface-alt);
-  overflow: hidden;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: default;
 }
 
-.transfer-gauge-fill {
-  height: 100%;
-  border-radius: 999px;
-  transition: width 0.3s ease;
+.transfer-chip strong {
+  font-weight: 800;
 }
 
-.transfer-gauge-fill.success {
-  background: var(--success);
+.transfer-chip.success {
+  background: var(--success-soft);
+  color: var(--success);
 }
 
-.transfer-gauge-fill.warning {
-  background: var(--warning);
+.transfer-chip.warning {
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 
-.transfer-gauge-fill.danger {
-  background: var(--danger);
+.transfer-chip.danger {
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 </style>

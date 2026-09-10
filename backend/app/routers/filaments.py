@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -13,6 +14,20 @@ from app.services.audit import log_event
 from app.services.inventory import filament_stock_status
 
 router = APIRouter(prefix="/api/inventory/filaments", tags=["inventory"])
+
+
+def _check_sku_unique(
+    db: Session, user_id: uuid.UUID, sku: str | None, exclude_id: uuid.UUID | None = None
+) -> None:
+    if not sku:
+        return
+    query = db.query(Filament.id).filter(Filament.user_id == user_id, Filament.sku == sku)
+    if exclude_id is not None:
+        query = query.filter(Filament.id != exclude_id)
+    if query.first() is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f"Ya tienes un filamento con el SKU '{sku}' — usa otro identificador."
+        )
 
 
 def _to_response(filament: Filament) -> FilamentResponse:
@@ -63,6 +78,8 @@ def create_filament(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _check_sku_unique(db, current_user.id, payload.sku)
+
     filament = Filament(
         user_id=current_user.id,
         brand=payload.brand,
@@ -88,7 +105,13 @@ def create_filament(
         details={"brand": filament.brand, "color": filament.color},
         ip_address=request.client.host if request.client else None,
     )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f"Ya tienes un filamento con el SKU '{payload.sku}' — usa otro identificador."
+        )
     db.refresh(filament)
     return _to_response(filament)
 
@@ -103,6 +126,10 @@ def update_filament(
 ):
     filament = _get_owned_filament(db, filament_id, current_user)
     changes = payload.model_dump(exclude_unset=True)
+
+    if "sku" in changes:
+        _check_sku_unique(db, current_user.id, changes["sku"], exclude_id=filament.id)
+
     for field, value in changes.items():
         setattr(filament, field, value)
 
@@ -118,7 +145,14 @@ def update_filament(
         details={"changes": {k: str(v) for k, v in changes.items()}},
         ip_address=request.client.host if request.client else None,
     )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Ya tienes un filamento con el SKU '{changes.get('sku')}' — usa otro identificador.",
+        )
     db.refresh(filament)
     return _to_response(filament)
 

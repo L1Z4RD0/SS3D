@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import * as authApi from "../api/auth";
 import { setAccessToken, setUnauthorizedHandler } from "../api/client";
+import { extractApiError } from "../utils/validation";
 
 export const useAuthStore = defineStore("auth", {
   state: () => ({
@@ -23,7 +24,7 @@ export const useAuthStore = defineStore("auth", {
         this.user = await authApi.fetchMe();
         return true;
       } catch (err) {
-        this.error = err.response?.data?.detail || "No se pudo iniciar sesión";
+        this.error = extractApiError(err, "No se pudo iniciar sesión.");
         throw err;
       } finally {
         this.loading = false;

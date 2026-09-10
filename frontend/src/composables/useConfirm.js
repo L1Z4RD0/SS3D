@@ -5,14 +5,22 @@ const state = reactive({
   title: "",
   message: "",
   confirmLabel: "Confirmar",
+  cancelLabel: "Cancelar",
   danger: false,
   resolver: null,
 });
 
-export function confirmAction({ title = "¿Confirmar?", message = "", confirmLabel = "Confirmar", danger = false } = {}) {
+export function confirmAction({
+  title = "¿Confirmar?",
+  message = "",
+  confirmLabel = "Confirmar",
+  cancelLabel = "Cancelar",
+  danger = false,
+} = {}) {
   state.title = title;
   state.message = message;
   state.confirmLabel = confirmLabel;
+  state.cancelLabel = cancelLabel;
   state.danger = danger;
   state.visible = true;
   return new Promise((resolve) => {

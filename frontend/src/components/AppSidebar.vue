@@ -66,11 +66,13 @@ watch(
 .sidebar {
   width: 240px;
   flex-shrink: 0;
+  height: 100vh;
   background: var(--sidebar-bg);
   color: var(--sidebar-text);
   display: flex;
   flex-direction: column;
   padding: 20px 14px;
+  overflow: hidden;
 }
 
 .sidebar-brand {
@@ -118,6 +120,8 @@ watch(
   flex-direction: column;
   gap: 3px;
   flex: 1;
+  min-height: 0; /* lets this shrink and actually scroll instead of pushing the footer out */
+  overflow-y: auto;
 }
 
 .nav-divider {

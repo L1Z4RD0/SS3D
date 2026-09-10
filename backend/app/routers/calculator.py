@@ -140,7 +140,7 @@ def save_quote_as_sale(
     db.add(sale)
     db.flush()
 
-    apply_filaments_to_sale(db, sale, resolved_filaments)
+    exhausted_filaments = apply_filaments_to_sale(db, sale, resolved_filaments)
 
     for supply, qty in resolved_supplies:
         consume_supply(supply, qty)
@@ -165,4 +165,4 @@ def save_quote_as_sale(
     db.commit()
     db.refresh(sale)
 
-    return to_sale_response(sale)
+    return to_sale_response(sale, exhausted_filaments)

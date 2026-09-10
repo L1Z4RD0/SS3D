@@ -2,6 +2,7 @@
 import { ref, reactive, onMounted, computed } from "vue";
 import * as adminApi from "../api/admin";
 import { formatDateTime } from "../utils/format";
+import { extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
@@ -39,7 +40,7 @@ async function submitUser() {
     showUserModal.value = false;
     await loadUsers();
   } catch (err) {
-    userError.value = err.response?.data?.detail || "No se pudo crear el usuario";
+    userError.value = extractApiError(err, "No se pudo crear el usuario.");
   } finally {
     userSaving.value = false;
   }

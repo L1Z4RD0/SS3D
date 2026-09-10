@@ -3,10 +3,12 @@ import { ref, onMounted, reactive, computed } from "vue";
 import * as inventoryApi from "../api/inventory";
 import * as catalogApi from "../api/catalog";
 import { formatCurrency, formatNumber, formatPercent, formatDate } from "../utils/format";
+import { GRAMS_MAX, isValidNumber, extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
 import { todayISO } from "../utils/format";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
+import FilamentSpoolIcon from "../components/FilamentSpoolIcon.vue";
 
 const CUSTOM = "__custom__";
 
@@ -18,7 +20,7 @@ const loadingFilaments = ref(true);
 const loadingSupplies = ref(true);
 const catalog = ref({ brands: [], materials: [], colors: [] });
 
-const statusLabels = { disponible: "Disponible", alerta: "Alerta", critico: "Crítico", vacio: "Vacío" };
+const statusLabels = { disponible: "Disponible", alerta: "Alerta", critico: "Crítico", vacio: "Agotado" };
 const statusBadge = { disponible: "badge-success", alerta: "badge-warning", critico: "badge-danger", vacio: "badge-danger" };
 
 const colorHexMap = computed(() => {
@@ -129,7 +131,28 @@ function openEditFilament(f) {
   showFilamentModal.value = true;
 }
 
+function validateFilamentForm() {
+  if (!isValidNumber(filamentForm.spool_weight_g, { min: 0, max: GRAMS_MAX, allowZero: false })) {
+    return `El peso del carrete debe ser mayor a 0 y no superar ${GRAMS_MAX}g.`;
+  }
+  if (!isValidNumber(filamentForm.initial_stock_g, { min: 0, max: GRAMS_MAX, allowZero: false })) {
+    return `El stock inicial debe ser mayor a 0 y no superar ${GRAMS_MAX}g.`;
+  }
+  if (!isValidNumber(filamentForm.min_alert_g, { min: 0, max: GRAMS_MAX })) {
+    return `La alerta mínima no puede ser negativa ni superar ${GRAMS_MAX}g.`;
+  }
+  if (!isValidNumber(filamentForm.spool_price, { min: 0, allowZero: false })) {
+    return "El precio del carrete debe ser mayor a 0.";
+  }
+  return "";
+}
+
 async function submitFilament() {
+  const validationError = validateFilamentForm();
+  if (validationError) {
+    filamentError.value = validationError;
+    return;
+  }
   filamentSaving.value = true;
   filamentError.value = "";
   const payload = {
@@ -148,7 +171,7 @@ async function submitFilament() {
     showFilamentModal.value = false;
     await loadFilaments();
   } catch (err) {
-    filamentError.value = err.response?.data?.detail || "No se pudo guardar el filamento";
+    filamentError.value = extractApiError(err, "No se pudo guardar el filamento.");
   } finally {
     filamentSaving.value = false;
   }
@@ -209,7 +232,33 @@ function openEditSupply(s) {
   showSupplyModal.value = true;
 }
 
+function validateSupplyForm() {
+  if (!isValidNumber(supplyForm.quantity_available, { min: 0 })) {
+    return "La cantidad disponible no puede ser negativa.";
+  }
+  if (supplyForm.min_alert_qty !== null && !isValidNumber(supplyForm.min_alert_qty, { min: 0 })) {
+    return "La alerta mínima no puede ser negativa.";
+  }
+  const hasQty = supplyForm.purchase_quantity !== null && supplyForm.purchase_quantity !== "";
+  const hasCost = supplyForm.purchase_total_cost !== null && supplyForm.purchase_total_cost !== "";
+  if (hasQty !== hasCost) {
+    return "Indica tanto la cantidad comprada como el costo total, o deja ambos vacíos.";
+  }
+  if (hasQty && !isValidNumber(supplyForm.purchase_quantity, { min: 0, allowZero: false })) {
+    return "La cantidad comprada debe ser mayor a 0.";
+  }
+  if (hasCost && !isValidNumber(supplyForm.purchase_total_cost, { min: 0 })) {
+    return "El costo total de la compra no puede ser negativo.";
+  }
+  return "";
+}
+
 async function submitSupply() {
+  const validationError = validateSupplyForm();
+  if (validationError) {
+    supplyError.value = validationError;
+    return;
+  }
   supplySaving.value = true;
   supplyError.value = "";
   try {
@@ -221,7 +270,7 @@ async function submitSupply() {
     showSupplyModal.value = false;
     await loadSupplies();
   } catch (err) {
-    supplyError.value = err.response?.data?.detail || "No se pudo guardar el insumo";
+    supplyError.value = extractApiError(err, "No se pudo guardar el insumo.");
   } finally {
     supplySaving.value = false;
   }
@@ -287,7 +336,7 @@ async function deleteSupply(s) {
             <tr v-for="f in displayedFilaments" :key="f.id">
               <td>
                 <div class="flex items-center gap-2">
-                  <span class="color-dot" :style="{ background: swatchColor(f.color) }" :title="f.color"></span>
+                  <FilamentSpoolIcon :color="swatchColor(f.color)" :size="40" />
                   <div>
                     <strong>{{ f.brand }} · {{ f.color }}</strong>
                     <span v-if="f.sku" class="badge badge-neutral" style="margin-left: 6px">{{ f.sku }}</span>
@@ -419,7 +468,7 @@ async function deleteSupply(s) {
           </div>
           <div class="field">
             <label>Peso del carrete (g)</label>
-            <input v-model.number="filamentForm.spool_weight_g" type="number" min="1" step="1" required />
+            <input v-model.number="filamentForm.spool_weight_g" type="number" min="0.01" :max="GRAMS_MAX" step="0.01" required />
           </div>
           <div class="field">
             <label>Precio del carrete (CLP)</label>
@@ -427,11 +476,11 @@ async function deleteSupply(s) {
           </div>
           <div class="field">
             <label>Stock inicial (g)</label>
-            <input v-model.number="filamentForm.initial_stock_g" type="number" min="0" step="1" required />
+            <input v-model.number="filamentForm.initial_stock_g" type="number" min="0.01" :max="GRAMS_MAX" step="0.01" required />
           </div>
           <div class="field">
             <label>Alerta mínima (g)</label>
-            <input v-model.number="filamentForm.min_alert_g" type="number" min="0" step="1" required />
+            <input v-model.number="filamentForm.min_alert_g" type="number" min="0" :max="GRAMS_MAX" step="0.01" required />
           </div>
         </div>
 
@@ -497,14 +546,6 @@ async function deleteSupply(s) {
 </template>
 
 <style scoped>
-.color-dot {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
 .color-swatch-grid {
   display: flex;
   flex-wrap: wrap;

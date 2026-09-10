@@ -3,6 +3,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
+from app.constants import GRAMS_MAX
+
 
 class SupplyUsageInput(BaseModel):
     supply_id: uuid.UUID
@@ -11,7 +13,7 @@ class SupplyUsageInput(BaseModel):
 
 class FilamentUsageInput(BaseModel):
     filament_id: uuid.UUID
-    grams_used: Decimal = Field(gt=0)
+    grams_used: Decimal = Field(gt=0, le=GRAMS_MAX)
 
 
 class QuoteRequest(BaseModel):

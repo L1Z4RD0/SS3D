@@ -11,6 +11,11 @@ IVA_PERCENT = Decimal("19")
 ELECTRICITY_RATE = Decimal("287")  # CLP / kWh
 LABOR_RATE_PER_HOUR = Decimal("5000")  # CLP / hora de postprocesado
 
+# Ceiling for any single "grams" field (filamento usado, peso de carrete, stock,
+# alerta mínima). Muy por encima de un carrete estándar (750g-3kg) — solo existe
+# para atrapar errores de tipeo evidentes (ej. "500000" en vez de "500").
+GRAMS_MAX = Decimal("5000")
+
 
 class MarginScenario(TypedDict):
     margin_percent: int

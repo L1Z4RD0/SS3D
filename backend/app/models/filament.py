@@ -4,7 +4,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Date, ForeignKey, Numeric, Text
+from sqlalchemy import Boolean, Date, ForeignKey, Numeric, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -14,6 +14,9 @@ from app.models.base import TimestampMixin, UUIDMixin
 
 class Filament(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "filaments"
+    # NULLs don't conflict with each other in Postgres, so filaments without
+    # an sku are unaffected — only non-null skus are enforced unique per user.
+    __table_args__ = (UniqueConstraint("user_id", "sku", name="uq_filaments_user_sku"),)
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True

@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useAuthStore } from "../stores/auth";
+import { extractApiError } from "../utils/validation";
 
 const username = ref("");
 const password = ref("");
@@ -21,11 +22,11 @@ async function handleSubmit() {
   } catch (err) {
     const status = err.response?.status;
     if (status === 423) {
-      errorMessage.value = err.response?.data?.detail || "Cuenta bloqueada temporalmente.";
+      errorMessage.value = extractApiError(err, "Cuenta bloqueada temporalmente.");
     } else if (status === 403) {
       errorMessage.value = "Esta cuenta está desactivada.";
     } else {
-      errorMessage.value = err.response?.data?.detail || "Usuario o contraseña incorrectos.";
+      errorMessage.value = extractApiError(err, "Usuario o contraseña incorrectos.");
     }
   } finally {
     submitting.value = false;

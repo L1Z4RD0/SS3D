@@ -10,7 +10,7 @@ const { state, resolve } = useConfirmState();
       <h3>{{ state.title }}</h3>
       <p class="text-muted mt-2" style="line-height: 1.5">{{ state.message }}</p>
       <div class="form-actions">
-        <button class="btn btn-secondary" @click="resolve(false)">Cancelar</button>
+        <button class="btn btn-secondary" @click="resolve(false)">{{ state.cancelLabel }}</button>
         <button :class="['btn', state.danger ? 'btn-danger' : 'btn-primary']" @click="resolve(true)">
           {{ state.confirmLabel }}
         </button>
