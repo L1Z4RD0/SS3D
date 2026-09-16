@@ -23,15 +23,6 @@ def resolve_printer(db: Session, user: User, printer_id: uuid.UUID) -> Printer:
     return printer
 
 
-def resolve_filament(db: Session, user: User, filament_id: uuid.UUID | None) -> Filament | None:
-    if filament_id is None:
-        return None
-    filament = db.query(Filament).filter(Filament.id == filament_id, Filament.user_id == user.id).first()
-    if filament is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Filamento no encontrado")
-    return filament
-
-
 def resolve_filaments(
     db: Session, user: User, usages: list[FilamentUsageInput]
 ) -> list[tuple[Filament, Decimal]]:

@@ -160,16 +160,24 @@ def logout(
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
+    # Deliberately does NOT depend on get_current_user: the access token (15 min) can
+    # easily have expired by the time the user clicks "logout" on an idle tab, and
+    # logout must still work in that case. The refresh-token cookie alone is what
+    # actually represents the session, same as /refresh -- ending it can't depend on
+    # a still-valid access token, or a stale-tab logout silently fails client-side
+    # while the real session stays alive server-side.
     raw_token = request.cookies.get(REFRESH_COOKIE_NAME)
+    user_id = None
     if raw_token:
         token_hash = hash_refresh_token(raw_token)
         row = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
         if row and row.revoked_at is None:
             row.revoked_at = datetime.now(timezone.utc)
+            user_id = row.user_id
 
-    log_event(db, user_id=current_user.id, event_type="LOGOUT", ip_address=_client_ip(request))
+    if user_id is not None:
+        log_event(db, user_id=user_id, event_type="LOGOUT", ip_address=_client_ip(request))
     db.commit()
     response.delete_cookie(
         REFRESH_COOKIE_NAME,

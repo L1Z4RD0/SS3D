@@ -1,4 +1,3 @@
-import uuid
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 

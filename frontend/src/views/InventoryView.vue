@@ -1,10 +1,10 @@
 <script setup>
 import { ref, onMounted, reactive, computed } from "vue";
 import * as inventoryApi from "../api/inventory";
-import * as catalogApi from "../api/catalog";
 import { formatCurrency, formatNumber, formatPercent, formatDate } from "../utils/format";
 import { GRAMS_MAX, isValidNumber, extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
+import { useFilamentCatalog } from "../composables/useFilamentCatalog";
 import { todayISO } from "../utils/format";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
@@ -18,7 +18,7 @@ const filaments = ref([]);
 const supplies = ref([]);
 const loadingFilaments = ref(true);
 const loadingSupplies = ref(true);
-const catalog = ref({ brands: [], materials: [], colors: [] });
+const { catalog, ensureFilamentCatalog } = useFilamentCatalog();
 
 const statusLabels = { disponible: "Disponible", alerta: "Alerta", critico: "Crítico", vacio: "Agotado" };
 const statusBadge = { disponible: "badge-success", alerta: "badge-warning", critico: "badge-danger", vacio: "badge-danger" };
@@ -66,14 +66,10 @@ async function loadSupplies() {
   }
 }
 
-async function loadCatalog() {
-  catalog.value = await catalogApi.getFilamentCatalog();
-}
-
 onMounted(() => {
   loadFilaments();
   loadSupplies();
-  loadCatalog();
+  ensureFilamentCatalog();
 });
 
 /* -------- Filaments -------- */
@@ -96,6 +92,8 @@ const filamentForm = reactive(emptyFilamentForm());
 const customBrandText = ref("");
 const customMaterialText = ref("");
 const customColorText = ref("");
+const multiRoll = ref(false);
+const multiRollCount = ref(2);
 
 function openCreateFilament() {
   editingFilamentId.value = null;
@@ -104,6 +102,8 @@ function openCreateFilament() {
   customBrandText.value = "";
   customMaterialText.value = "";
   customColorText.value = "";
+  multiRoll.value = false;
+  multiRollCount.value = 2;
   filamentError.value = "";
   showFilamentModal.value = true;
 }
@@ -153,26 +153,55 @@ async function submitFilament() {
     filamentError.value = validationError;
     return;
   }
+  const isMultiRoll = !editingFilamentId.value && multiRoll.value;
+  if (isMultiRoll && !isValidNumber(multiRollCount.value, { min: 2, max: 50 })) {
+    filamentError.value = "La cantidad de rollos debe ser un número entre 2 y 50.";
+    return;
+  }
+
   filamentSaving.value = true;
   filamentError.value = "";
+  const baseSku = filamentForm.sku?.trim() || "";
   const payload = {
     ...filamentForm,
     brand: filamentForm.brand === CUSTOM ? customBrandText.value : filamentForm.brand,
     type: filamentForm.type === CUSTOM ? customMaterialText.value : filamentForm.type,
     color: filamentForm.color === CUSTOM ? customColorText.value : filamentForm.color,
-    sku: filamentForm.sku?.trim() || null,
+    sku: baseSku || null,
   };
+  let createdCount = 0;
   try {
     if (editingFilamentId.value) {
       await inventoryApi.updateFilament(editingFilamentId.value, payload);
+    } else if (isMultiRoll) {
+      const count = Math.round(multiRollCount.value);
+      for (let i = 1; i <= count; i++) {
+        await inventoryApi.createFilament({
+          ...payload,
+          // Cada rollo necesita su propio SKU (son únicos por usuario) -- si el
+          // usuario puso uno base, le agregamos un sufijo por rollo para seguir
+          // pudiendo distinguirlos; si lo dejó vacío, todos quedan sin SKU (los
+          // SKU nulos no chocan entre sí).
+          sku: baseSku ? `${baseSku}-${i}` : null,
+        });
+        createdCount++;
+      }
     } else {
       await inventoryApi.createFilament(payload);
+      createdCount = 1;
     }
     showFilamentModal.value = false;
-    await loadFilaments();
   } catch (err) {
-    filamentError.value = extractApiError(err, "No se pudo guardar el filamento.");
+    if (isMultiRoll) {
+      const count = Math.round(multiRollCount.value);
+      filamentError.value = `Se crearon ${createdCount} de ${count} rollos antes de un error: ${extractApiError(err, "error desconocido")}`;
+    } else {
+      filamentError.value = extractApiError(err, "No se pudo guardar el filamento.");
+    }
   } finally {
+    if (createdCount > 0 || editingFilamentId.value) {
+      await loadFilaments();
+    }
     filamentSaving.value = false;
   }
 }
@@ -462,6 +491,24 @@ async function deleteSupply(s) {
             <label>SKU / Identificador (opcional)</label>
             <input v-model="filamentForm.sku" placeholder="Ej: ROJO-01, para diferenciar carretes iguales" maxlength="60" />
           </div>
+          <div v-if="!editingFilamentId" class="field" style="grid-column: span 2">
+            <label class="flex items-center gap-2" style="cursor: pointer; font-weight: 600">
+              <input v-model="multiRoll" type="checkbox" style="width: auto" />
+              Agregar varios rollos iguales de una vez
+            </label>
+            <span class="field-hint">Crea varios filamentos idénticos (mismo color, peso, stock y precio) en una sola operación.</span>
+            <input
+              v-if="multiRoll"
+              v-model.number="multiRollCount"
+              type="number"
+              min="2"
+              max="50"
+              step="1"
+              placeholder="Cantidad de rollos"
+              class="mt-2"
+              style="max-width: 160px"
+            />
+          </div>
           <div class="field">
             <label>Fecha de ingreso</label>
             <input v-model="filamentForm.entry_date" type="date" required />
@@ -489,7 +536,7 @@ async function deleteSupply(s) {
         <div class="form-actions">
           <button type="button" class="btn btn-secondary" @click="showFilamentModal = false">Cancelar</button>
           <button type="submit" class="btn btn-primary" :disabled="filamentSaving">
-            {{ filamentSaving ? "Guardando..." : "Guardar" }}
+            {{ filamentSaving ? "Guardando..." : !editingFilamentId && multiRoll ? `Crear ${multiRollCount || 0} rollos` : "Guardar" }}
           </button>
         </div>
       </form>

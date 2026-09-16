@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from "vue";
-import * as catalogApi from "../api/catalog";
 import { formatNumber } from "../utils/format";
+import { useFilamentCatalog } from "../composables/useFilamentCatalog";
 import Modal from "./Modal.vue";
 import Icon from "./Icon.vue";
 import FilamentSpoolIcon from "./FilamentSpoolIcon.vue";
@@ -17,14 +17,11 @@ const emit = defineEmits(["select", "close"]);
 const search = ref("");
 const materialFilter = ref("");
 const selectedId = ref("");
-const catalog = ref({ colors: [] });
+const { catalog, ensureFilamentCatalog } = useFilamentCatalog();
 
-onMounted(async () => {
-  try {
-    catalog.value = await catalogApi.getFilamentCatalog();
-  } catch {
-    // Swatches just fall back to a neutral dot; not worth blocking the picker over this.
-  }
+onMounted(() => {
+  // Swatches just fall back to a neutral dot if this fails; not worth blocking the picker over it.
+  ensureFilamentCatalog().catch(() => {});
 });
 
 const colorHexMap = computed(() => {

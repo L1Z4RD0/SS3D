@@ -112,6 +112,7 @@ onMounted(loadAll);
         <StatCard label="IVA cobrado" :value="formatCurrency(summary.total_iva)" />
         <StatCard label="Horas impresas" :value="formatNumber(summary.total_print_hours, 1)" />
         <StatCard label="Filamento usado" :value="`${formatNumber(summary.total_filament_used_g, 0)} g`" />
+        <StatCard label="Luz gastada" :value="formatCurrency(summary.total_energy)" />
       </div>
 
       <div class="grid grid-cols-2" style="margin-bottom: 20px; align-items: start">
