@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, readable_user_ids, require_not_watcher
 from app.models.filament import Filament
 from app.models.sale import Sale
 from app.models.user import User
@@ -61,12 +61,19 @@ def _get_owned_filament(db: Session, filament_id: uuid.UUID, user: User) -> Fila
 @router.get("", response_model=list[FilamentResponse])
 def list_filaments(
     include_inactive: bool = False,
+    include_exhausted: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = db.query(Filament).filter(Filament.user_id == current_user.id)
+    # Un watcher ve el inventario de los usuarios que el admin le asignó; el resto,
+    # solo el propio.
+    query = db.query(Filament).filter(Filament.user_id.in_(readable_user_ids(db, current_user)))
     if not include_inactive:
         query = query.filter(Filament.is_active.is_(True))
+    if not include_exhausted:
+        # Un carrete en 0g no sirve para nada nuevo: se esconde del listado salvo
+        # que se pidan explícitamente (el registro se conserva por el historial).
+        query = query.filter(Filament.available_g > 0)
     filaments = query.order_by(Filament.brand, Filament.color).all()
     return [_to_response(f) for f in filaments]
 
@@ -76,7 +83,7 @@ def create_filament(
     payload: FilamentCreateRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_not_watcher),
 ):
     _check_sku_unique(db, current_user.id, payload.sku)
 
@@ -122,7 +129,7 @@ def update_filament(
     payload: FilamentUpdateRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_not_watcher),
 ):
     filament = _get_owned_filament(db, filament_id, current_user)
     changes = payload.model_dump(exclude_unset=True)
@@ -162,7 +169,7 @@ def delete_filament(
     filament_id: uuid.UUID,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_not_watcher),
 ):
     filament = _get_owned_filament(db, filament_id, current_user)
     has_sales = db.query(Sale.id).filter(Sale.filament_id == filament.id).first() is not None

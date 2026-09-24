@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import func
+from sqlalchemy import update
 from sqlalchemy.orm import Session, joinedload
 
 from app.constants import IVA_PERCENT
@@ -48,9 +48,15 @@ def create_quote(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    next_number = (
-        db.query(func.coalesce(func.max(Quote.quote_number), 0)).filter(Quote.user_id == current_user.id).scalar()
-    ) + 1
+    # Contador propio del usuario, incrementado de forma atómica (UPDATE ... RETURNING
+    # toma el lock de la fila). Antes era MAX(quote_number)+1, que reiniciaba la
+    # numeración al borrar cotizaciones y podía repetir códigos ya entregados.
+    next_number = db.execute(
+        update(User)
+        .where(User.id == current_user.id)
+        .values(last_quote_number=User.last_quote_number + 1)
+        .returning(User.last_quote_number)
+    ).scalar_one()
 
     items = [
         QuoteItem(
@@ -74,6 +80,7 @@ def create_quote(
         iva_percent=IVA_PERCENT,
         iva_amount=iva_amount,
         total=total,
+        document_snapshot=payload.document_snapshot,
         items=items,
     )
     db.add(quote)

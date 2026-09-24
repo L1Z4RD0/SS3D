@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.constants import ELECTRICITY_RATE, IVA_PERCENT, LABOR_RATE_PER_HOUR
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_not_watcher
 from app.models.sale import Sale
 from app.models.sale_filament import SaleFilament
 from app.models.sale_supply import SaleSupply
@@ -93,7 +93,7 @@ def create_sale(
     payload: SaleCreateRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_not_watcher),
 ):
     printer = resolve_printer(db, current_user, payload.printer_id)
     resolved_filaments = resolve_filaments(db, current_user, payload.filaments)
@@ -170,7 +170,7 @@ def update_sale(
     payload: SaleUpdateRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_not_watcher),
 ):
     sale = _get_owned_sale(db, sale_id, current_user)
 
@@ -277,7 +277,7 @@ def delete_sale(
     sale_id: uuid.UUID,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_not_watcher),
 ):
     sale = _get_owned_sale(db, sale_id, current_user)
 

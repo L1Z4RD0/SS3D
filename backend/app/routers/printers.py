@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, readable_user_ids, require_not_watcher
 from app.models.printer import Printer
 from app.models.sale import Sale
 from app.models.user import User
@@ -50,7 +50,7 @@ def list_printers(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = db.query(Printer).filter(Printer.user_id == current_user.id)
+    query = db.query(Printer).filter(Printer.user_id.in_(readable_user_ids(db, current_user)))
     if not include_inactive:
         query = query.filter(Printer.is_active.is_(True))
     printers = query.order_by(Printer.name).all()
@@ -62,7 +62,7 @@ def create_printer(
     payload: PrinterCreateRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_not_watcher),
 ):
     depreciation = calculate_depreciation_cost_per_hour(payload.purchase_value, payload.lifetime_hours)
     printer = Printer(
@@ -95,7 +95,7 @@ def update_printer(
     payload: PrinterUpdateRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_not_watcher),
 ):
     printer = _get_owned_printer(db, printer_id, current_user)
     changes = payload.model_dump(exclude_unset=True)
@@ -125,7 +125,7 @@ def delete_printer(
     printer_id: uuid.UUID,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_not_watcher),
 ):
     printer = _get_owned_printer(db, printer_id, current_user)
     has_sales = db.query(Sale.id).filter(Sale.printer_id == printer.id).first() is not None

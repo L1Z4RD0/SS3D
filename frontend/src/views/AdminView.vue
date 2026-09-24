@@ -71,6 +71,47 @@ const logsTotal = ref(0);
 const loadingLogs = ref(true);
 const logLimit = 30;
 const logOffset = ref(0);
+/* -------- Asignaciones de watcher (qué usuarios puede observar) -------- */
+const showWatcherModal = ref(false);
+const watcherTarget = ref(null);
+const watcherSelection = ref([]);
+const watcherSaving = ref(false);
+const watcherError = ref("");
+
+const assignableUsers = computed(() => users.value.filter((u) => u.role !== "watcher"));
+
+async function openWatcherModal(user) {
+  watcherTarget.value = user;
+  watcherError.value = "";
+  watcherSelection.value = [];
+  showWatcherModal.value = true;
+  try {
+    const data = await adminApi.getWatcherAssignments(user.id);
+    watcherSelection.value = data.observed_user_ids;
+  } catch (err) {
+    watcherError.value = extractApiError(err, "No se pudieron cargar las asignaciones.");
+  }
+}
+
+function toggleObserved(userId) {
+  const i = watcherSelection.value.indexOf(userId);
+  if (i === -1) watcherSelection.value.push(userId);
+  else watcherSelection.value.splice(i, 1);
+}
+
+async function saveWatcherAssignments() {
+  watcherSaving.value = true;
+  watcherError.value = "";
+  try {
+    await adminApi.setWatcherAssignments(watcherTarget.value.id, watcherSelection.value);
+    showWatcherModal.value = false;
+  } catch (err) {
+    watcherError.value = extractApiError(err, "No se pudieron guardar las asignaciones.");
+  } finally {
+    watcherSaving.value = false;
+  }
+}
+
 const logFilters = reactive({ user_id: "", event_type: "", date_from: "", date_to: "" });
 
 async function loadLogs() {
@@ -165,7 +206,19 @@ onMounted(() => {
           <tbody>
             <tr v-for="u in users" :key="u.id">
               <td><strong>{{ u.username }}</strong></td>
-              <td><span class="badge badge-neutral">{{ u.role === "admin" ? "Administrador" : "Usuario" }}</span></td>
+              <td>
+                <span class="badge badge-neutral">
+                  {{ u.role === "admin" ? "Administrador" : u.role === "watcher" ? "Observador" : "Usuario" }}
+                </span>
+                <button
+                  v-if="u.role === 'watcher'"
+                  class="btn btn-secondary btn-sm"
+                  style="margin-left: 8px"
+                  @click="openWatcherModal(u)"
+                >
+                  Asignar usuarios
+                </button>
+              </td>
               <td>
                 <span class="badge" :class="u.is_active ? 'badge-success' : 'badge-danger'">
                   {{ u.is_active ? "Activo" : "Desactivado" }}
@@ -276,6 +329,7 @@ onMounted(() => {
             <label>Rol</label>
             <select v-model="userForm.role">
               <option value="user">Usuario</option>
+              <option value="watcher">Observador (solo lectura)</option>
               <option value="admin">Administrador</option>
             </select>
           </div>
@@ -290,6 +344,44 @@ onMounted(() => {
           </button>
         </div>
       </form>
+    </Modal>
+
+    <Modal
+      v-if="showWatcherModal && watcherTarget"
+      :title="`Usuarios que observa ${watcherTarget.username}`"
+      subtitle="Solo podrá ver el inventario de los usuarios marcados. No puede modificar nada."
+      width="520px"
+      @close="showWatcherModal = false"
+    >
+      <div v-if="!assignableUsers.length" class="alert alert-info">
+        Todavía no hay usuarios para asignar.
+      </div>
+      <div v-else class="flex flex-col gap-2">
+        <label
+          v-for="u in assignableUsers"
+          :key="u.id"
+          class="flex items-center gap-2"
+          style="cursor: pointer; background: var(--surface-alt); padding: 10px 12px; border-radius: 8px"
+        >
+          <input
+            type="checkbox"
+            style="width: auto"
+            :checked="watcherSelection.includes(u.id)"
+            @change="toggleObserved(u.id)"
+          />
+          <strong>{{ u.username }}</strong>
+          <span class="text-muted text-sm">{{ u.role === "admin" ? "Administrador" : "Usuario" }}</span>
+        </label>
+      </div>
+
+      <div v-if="watcherError" class="alert alert-danger mt-4">{{ watcherError }}</div>
+
+      <div class="form-actions">
+        <button class="btn btn-secondary" @click="showWatcherModal = false">Cancelar</button>
+        <button class="btn btn-primary" :disabled="watcherSaving" @click="saveWatcherAssignments">
+          {{ watcherSaving ? "Guardando..." : "Guardar asignaciones" }}
+        </button>
+      </div>
     </Modal>
   </div>
 </template>

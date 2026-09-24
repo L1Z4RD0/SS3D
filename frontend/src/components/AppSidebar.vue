@@ -1,5 +1,5 @@
 <script setup>
-import { watch } from "vue";
+import { computed, watch } from "vue";
 import { useRoute } from "vue-router";
 import { useAuthStore } from "../stores/auth";
 import { useMobileNav } from "../composables/useMobileNav";
@@ -9,14 +9,25 @@ const auth = useAuthStore();
 const route = useRoute();
 const mobileNav = useMobileNav();
 
-const links = [
+const allLinks = [
   { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
   { to: "/calculadora", label: "Calculadora", icon: "calculator" },
-  { to: "/ventas", label: "Ventas", icon: "sales" },
+  { to: "/cotizaciones", label: "Cotizaciones", icon: "sales" },
+  { to: "/ventas", label: "Ventas", icon: "sales", hideForWatcher: true },
   { to: "/inventario", label: "Inventario", icon: "inventory" },
-  { to: "/impresoras", label: "Impresoras", icon: "printer" },
-  { to: "/historial", label: "Historial", icon: "history" },
+  { to: "/impresoras", label: "Impresoras", icon: "printer", hideForWatcher: true },
+  { to: "/historial", label: "Historial", icon: "history", hideForWatcher: true },
 ];
+
+const roleLabel = computed(() => {
+  if (auth.isAdmin) return "Administrador";
+  if (auth.isWatcher) return "Observador";
+  return "Usuario";
+});
+
+const links = computed(() =>
+  allLinks.filter((link) => !(link.hideForWatcher && auth.isWatcher))
+);
 
 watch(
   () => route.fullPath,
@@ -55,7 +66,7 @@ watch(
         <div class="user-avatar">{{ auth.user?.username?.[0]?.toUpperCase() }}</div>
         <div class="user-meta">
           <strong>{{ auth.user?.username }}</strong>
-          <span>{{ auth.user?.role === "admin" ? "Administrador" : "Usuario" }}</span>
+          <span>{{ roleLabel }}</span>
         </div>
       </div>
     </div>

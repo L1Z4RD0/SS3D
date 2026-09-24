@@ -12,3 +12,11 @@ export const reactivateUser = (id) =>
 
 export const listAuditLogs = (params = {}) =>
   client.get("/api/admin/audit-logs", { params }).then((r) => r.data);
+
+export const getWatcherAssignments = (watcherId) =>
+  client.get(`/api/admin/watchers/${watcherId}/assignments`).then((r) => r.data);
+
+export const setWatcherAssignments = (watcherId, observedUserIds) =>
+  client
+    .put(`/api/admin/watchers/${watcherId}/assignments`, { observed_user_ids: observedUserIds })
+    .then((r) => r.data);

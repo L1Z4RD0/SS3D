@@ -4,6 +4,7 @@ from decimal import Decimal
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.dependencies import readable_user_ids
 from app.models.filament import Filament
 from app.models.printer import Printer
 from app.models.sale import Sale
@@ -17,7 +18,13 @@ from app.services.inventory import consume_filament
 
 
 def resolve_printer(db: Session, user: User, printer_id: uuid.UUID) -> Printer:
-    printer = db.query(Printer).filter(Printer.id == printer_id, Printer.user_id == user.id).first()
+    # readable_user_ids: para un usuario normal es solo el suyo; para un watcher son
+    # los usuarios que el admin le asignó (puede cotizar con sus recursos, sin tocarlos).
+    printer = (
+        db.query(Printer)
+        .filter(Printer.id == printer_id, Printer.user_id.in_(readable_user_ids(db, user)))
+        .first()
+    )
     if printer is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Impresora no encontrada")
     return printer
@@ -26,10 +33,13 @@ def resolve_printer(db: Session, user: User, printer_id: uuid.UUID) -> Printer:
 def resolve_filaments(
     db: Session, user: User, usages: list[FilamentUsageInput]
 ) -> list[tuple[Filament, Decimal]]:
+    allowed_ids = readable_user_ids(db, user)
     resolved: list[tuple[Filament, Decimal]] = []
     for usage in usages:
         filament = (
-            db.query(Filament).filter(Filament.id == usage.filament_id, Filament.user_id == user.id).first()
+            db.query(Filament)
+            .filter(Filament.id == usage.filament_id, Filament.user_id.in_(allowed_ids))
+            .first()
         )
         if filament is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"Filamento {usage.filament_id} no encontrado")
@@ -40,9 +50,12 @@ def resolve_filaments(
 def resolve_supplies(
     db: Session, user: User, usages: list[SupplyUsageInput]
 ) -> list[tuple[Supply, Decimal]]:
+    allowed_ids = readable_user_ids(db, user)
     resolved: list[tuple[Supply, Decimal]] = []
     for usage in usages:
-        supply = db.query(Supply).filter(Supply.id == usage.supply_id, Supply.user_id == user.id).first()
+        supply = (
+            db.query(Supply).filter(Supply.id == usage.supply_id, Supply.user_id.in_(allowed_ids)).first()
+        )
         if supply is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"Insumo {usage.supply_id} no encontrado")
         resolved.append((supply, usage.quantity))

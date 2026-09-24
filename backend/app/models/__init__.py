@@ -11,6 +11,7 @@ from app.models.sale_filament import SaleFilament
 from app.models.sale_supply import SaleSupply
 from app.models.supply import Supply
 from app.models.user import User
+from app.models.watcher_assignment import WatcherAssignment
 
 __all__ = [
     "AuditLog",
@@ -29,4 +30,5 @@ __all__ = [
     "SaleSupply",
     "Supply",
     "User",
+    "WatcherAssignment",
 ]

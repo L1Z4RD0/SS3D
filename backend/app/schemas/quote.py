@@ -15,6 +15,8 @@ class QuoteCreateRequest(BaseModel):
     client_name: str = Field(min_length=1, max_length=160)
     quote_date: date
     items: list[QuoteItemInput] = Field(min_length=1)
+    # Respaldo en texto del comprobante tal como se le entregó al cliente.
+    document_snapshot: str | None = Field(default=None, max_length=20000)
 
 
 class QuoteItemResponse(BaseModel):
@@ -37,6 +39,7 @@ class QuoteResponse(BaseModel):
     iva_amount: Decimal
     total: Decimal
     created_at: datetime
+    document_snapshot: str | None = None
     items: list[QuoteItemResponse]
 
     model_config = {"from_attributes": True}

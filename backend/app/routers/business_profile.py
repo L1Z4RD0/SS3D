@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_not_watcher
 from app.models.business_profile import BusinessProfile
 from app.models.user import User
 from app.schemas.business_profile import BusinessProfileResponse, BusinessProfileUpdateRequest
@@ -30,7 +30,7 @@ def get_business_profile(db: Session = Depends(get_db), current_user: User = Dep
 def update_business_profile(
     payload: BusinessProfileUpdateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_not_watcher),
 ):
     profile = _get_or_create(db, current_user.id)
     profile.business_name = payload.business_name

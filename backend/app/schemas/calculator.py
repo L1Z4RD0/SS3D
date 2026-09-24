@@ -56,3 +56,6 @@ class SaveQuoteAsSaleRequest(QuoteRequest):
     payment_method: str
     notes: str | None = None
     chosen_margin_percent: int
+    # Precio final con IVA fijado a mano por el usuario (para publicar un número
+    # redondo). Si viene, manda por sobre chosen_margin_percent.
+    manual_total_price: Decimal | None = Field(default=None, gt=0)

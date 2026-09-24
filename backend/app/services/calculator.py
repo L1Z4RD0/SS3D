@@ -40,6 +40,10 @@ class CostBreakdown:
     supplies_cost: Decimal
     shipping_cost: Decimal
     total_cost: Decimal
+    # Costo sobre el que se aplica el margen: todo menos el envío. El envío es un
+    # gasto que se traspasa al cliente tal cual (si el courier cobra $3.000, se
+    # cobran $3.000), no un insumo sobre el que se gane margen.
+    production_cost: Decimal = Decimal(0)
     supply_lines: list[SupplyUsage] = field(default_factory=list)
     filament_lines: list[FilamentUsage] = field(default_factory=list)
 
@@ -79,9 +83,10 @@ def calculate_costs(
     supplies_cost = money(sum((usage.quantity * usage.unit_cost for usage in supply_usages), Decimal(0)))
     shipping = money(shipping_cost)
 
-    total_cost = money(
-        material_cost + depreciation_cost + energy_cost + postprocess_cost + supplies_cost + shipping
+    production_cost = money(
+        material_cost + depreciation_cost + energy_cost + postprocess_cost + supplies_cost
     )
+    total_cost = money(production_cost + shipping)
 
     return CostBreakdown(
         material_cost=material_cost,
@@ -91,16 +96,24 @@ def calculate_costs(
         supplies_cost=supplies_cost,
         shipping_cost=shipping,
         total_cost=total_cost,
+        production_cost=production_cost,
         supply_lines=supply_usages,
         filament_lines=filament_usages,
     )
 
 
-def _build_scenario(total_cost: Decimal, margin_percent: int, label: str) -> ScenarioResult:
-    base_price = money(total_cost * (Decimal(1) + Decimal(margin_percent) / Decimal(100)))
+def _build_scenario(
+    production_cost: Decimal, shipping_cost: Decimal, margin_percent: int, label: str
+) -> ScenarioResult:
+    # El margen se aplica solo sobre el costo de producción; el envío se suma después
+    # a precio de costo. Antes el envío entraba al margen y un envío de $3.000 subía
+    # el precio final $9.000+ con margen 200%, que es lo que se veía "disparado".
+    base_price = money(
+        production_cost * (Decimal(1) + Decimal(margin_percent) / Decimal(100)) + shipping_cost
+    )
     iva_amount = money(base_price * IVA_PERCENT / Decimal(100))
     total_price = money(base_price + iva_amount)
-    profit = money(base_price - total_cost)
+    profit = money(base_price - (production_cost + shipping_cost))
     return ScenarioResult(
         margin_percent=margin_percent,
         label=label,
@@ -111,15 +124,37 @@ def _build_scenario(total_cost: Decimal, margin_percent: int, label: str) -> Sce
     )
 
 
-def calculate_scenarios(total_cost: Decimal) -> list[ScenarioResult]:
-    return [_build_scenario(total_cost, s["margin_percent"], s["label"]) for s in MARGIN_SCENARIOS]
+def calculate_scenarios(production_cost: Decimal, shipping_cost: Decimal = Decimal(0)) -> list[ScenarioResult]:
+    return [
+        _build_scenario(production_cost, shipping_cost, s["margin_percent"], s["label"])
+        for s in MARGIN_SCENARIOS
+    ]
 
 
-def get_scenario_by_margin(total_cost: Decimal, margin_percent: int) -> ScenarioResult | None:
+def get_scenario_by_margin(
+    production_cost: Decimal, margin_percent: int, shipping_cost: Decimal = Decimal(0)
+) -> ScenarioResult | None:
     for s in MARGIN_SCENARIOS:
         if s["margin_percent"] == margin_percent:
-            return _build_scenario(total_cost, margin_percent, s["label"])
+            return _build_scenario(production_cost, shipping_cost, margin_percent, s["label"])
     return None
+
+
+def build_manual_price_scenario(total_cost: Decimal, total_price_with_iva: Decimal) -> ScenarioResult:
+    """El usuario fija el precio final que ve el cliente (IVA incluido) y de ahí se
+    deriva hacia atrás la base y el IVA, para que el número publicado sea redondo."""
+    total_price = money(total_price_with_iva)
+    base_price = money(total_price / (Decimal(1) + IVA_PERCENT / Decimal(100)))
+    iva_amount = money(total_price - base_price)
+    profit = money(base_price - total_cost)
+    return ScenarioResult(
+        margin_percent=int(calculate_margin_percent(base_price, total_cost)),
+        label="Precio manual",
+        base_price=base_price,
+        iva_amount=iva_amount,
+        total_price=total_price,
+        profit=profit,
+    )
 
 
 def calculate_margin_percent(base_price: Decimal, total_cost: Decimal) -> Decimal:

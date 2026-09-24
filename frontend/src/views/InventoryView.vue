@@ -5,10 +5,13 @@ import { formatCurrency, formatNumber, formatPercent, formatDate } from "../util
 import { GRAMS_MAX, isValidNumber, extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
 import { useFilamentCatalog } from "../composables/useFilamentCatalog";
+import { useAuthStore } from "../stores/auth";
 import { todayISO } from "../utils/format";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
 import FilamentSpoolIcon from "../components/FilamentSpoolIcon.vue";
+
+const auth = useAuthStore();
 
 const CUSTOM = "__custom__";
 
@@ -19,6 +22,9 @@ const supplies = ref([]);
 const loadingFilaments = ref(true);
 const loadingSupplies = ref(true);
 const { catalog, ensureFilamentCatalog } = useFilamentCatalog();
+// Los carretes en 0g se esconden por defecto: ya no sirven para un trabajo nuevo.
+// El registro se conserva (tiene historial de ventas), solo deja de estorbar en la lista.
+const showExhausted = ref(false);
 
 const statusLabels = { disponible: "Disponible", alerta: "Alerta", critico: "Crítico", vacio: "Agotado" };
 const statusBadge = { disponible: "badge-success", alerta: "badge-warning", critico: "badge-danger", vacio: "badge-danger" };
@@ -34,6 +40,11 @@ function swatchColor(name) {
 
 /* -------- Sort toggle (por gramos disponibles) -------- */
 const sortDirection = ref(null); // null | 'desc' | 'asc'
+function toggleExhausted() {
+  showExhausted.value = !showExhausted.value;
+  loadFilaments();
+}
+
 function toggleSort() {
   sortDirection.value = sortDirection.value === null ? "desc" : sortDirection.value === "desc" ? "asc" : null;
 }
@@ -51,7 +62,7 @@ const sortLabel = computed(() => {
 async function loadFilaments() {
   loadingFilaments.value = true;
   try {
-    filaments.value = await inventoryApi.listFilaments();
+    filaments.value = await inventoryApi.listFilaments(false, showExhausted.value);
   } finally {
     loadingFilaments.value = false;
   }
@@ -333,11 +344,14 @@ async function deleteSupply(s) {
       <div class="card-header">
         <h3>Filamentos</h3>
         <div class="flex gap-2">
+          <button class="btn btn-secondary btn-sm" @click="toggleExhausted">
+            {{ showExhausted ? "Ocultar agotados" : "Ver agotados" }}
+          </button>
           <button class="btn btn-secondary btn-sm" @click="toggleSort">
             <Icon name="filter" :size="14" />
             {{ sortLabel }}
           </button>
-          <button class="btn btn-primary btn-sm" @click="openCreateFilament">
+          <button v-if="!auth.isWatcher" class="btn btn-primary btn-sm" @click="openCreateFilament">
             <Icon name="plus" :size="15" /> Nuevo filamento
           </button>
         </div>
@@ -379,7 +393,7 @@ async function deleteSupply(s) {
               <td><span class="badge" :class="statusBadge[f.stock_status]">{{ statusLabels[f.stock_status] }}</span></td>
               <td class="text-right mono">{{ formatCurrency(f.spool_price) }}</td>
               <td class="text-right">
-                <div class="flex gap-2" style="justify-content: flex-end">
+                <div v-if="!auth.isWatcher" class="flex gap-2" style="justify-content: flex-end">
                   <button class="btn btn-icon btn-ghost" @click="openEditFilament(f)"><Icon name="edit" :size="16" /></button>
                   <button class="btn btn-icon btn-ghost" @click="deleteFilament(f)"><Icon name="trash" :size="16" /></button>
                 </div>

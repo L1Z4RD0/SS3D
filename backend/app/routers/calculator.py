@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.constants import ELECTRICITY_RATE, IVA_PERCENT, LABOR_RATE_PER_HOUR, MARGIN_SCENARIO_PERCENTS
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_not_watcher
 from app.models.sale import Sale
 from app.models.sale_supply import SaleSupply
 from app.models.user import User
@@ -19,7 +19,12 @@ from app.schemas.calculator import (
 )
 from app.schemas.sale import SaleResponse
 from app.services.audit import log_event
-from app.services.calculator import calculate_margin_percent, calculate_scenarios, get_scenario_by_margin
+from app.services.calculator import (
+    build_manual_price_scenario,
+    calculate_margin_percent,
+    calculate_scenarios,
+    get_scenario_by_margin,
+)
 from app.services.inventory import consume_supply
 from app.services.sale_builder import (
     apply_filaments_to_sale,
@@ -53,7 +58,7 @@ def compute_quote(
         electricity_rate=ELECTRICITY_RATE,
         labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
-    scenarios = calculate_scenarios(breakdown.total_cost)
+    scenarios = calculate_scenarios(breakdown.production_cost, breakdown.shipping_cost)
 
     return QuoteResponse(
         breakdown=CostBreakdownSchema(
@@ -84,14 +89,15 @@ def save_quote_as_sale(
     payload: SaveQuoteAsSaleRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_not_watcher),
 ):
     try:
         sale_date = date_type.fromisoformat(payload.sale_date)
     except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Fecha inválida, use formato YYYY-MM-DD")
 
-    if payload.chosen_margin_percent not in MARGIN_SCENARIO_PERCENTS:
+    manual_price = payload.manual_total_price
+    if manual_price is None and payload.chosen_margin_percent not in MARGIN_SCENARIO_PERCENTS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Escenario de margen inválido")
 
     printer = resolve_printer(db, current_user, payload.printer_id)
@@ -109,7 +115,12 @@ def save_quote_as_sale(
         labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
 
-    scenario = get_scenario_by_margin(breakdown.total_cost, payload.chosen_margin_percent)
+    if manual_price is not None:
+        scenario = build_manual_price_scenario(breakdown.total_cost, manual_price)
+    else:
+        scenario = get_scenario_by_margin(
+            breakdown.production_cost, payload.chosen_margin_percent, breakdown.shipping_cost
+        )
 
     printer.hours_used += payload.print_hours
 

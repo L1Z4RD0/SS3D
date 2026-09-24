@@ -9,11 +9,14 @@ import { BUSINESS_NAME, BUSINESS_LOGO_URL } from "../utils/business";
 import { formatCurrency, todayISO } from "../utils/format";
 import { GRAMS_MAX, isValidGrams, isValidNumber, gramsErrorMessage, extractApiError } from "../utils/validation";
 import { promptExhaustedFilaments } from "../utils/exhaustedFilaments";
+import { useAuthStore } from "../stores/auth";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
 import DoughnutChart from "../components/DoughnutChart.vue";
 import QuoteDocument from "../components/QuoteDocument.vue";
 import FilamentPickerModal from "../components/FilamentPickerModal.vue";
+
+const auth = useAuthStore();
 
 const printers = ref([]);
 const filaments = ref([]);
@@ -227,14 +230,33 @@ const saving = ref(false);
 const saveError = ref("");
 const saveSuccess = ref("");
 
+/* Precio manual: el usuario fija el precio final con IVA para publicar un número
+   redondo, en vez de quedarse con el que sale del margen (ej. $15.000 y no $15.351). */
+const useManualPrice = ref(false);
+const manualPrice = ref(null);
+
+const manualPriceBreakdown = computed(() => {
+  if (!useManualPrice.value || !isValidNumber(manualPrice.value, { min: 0, allowZero: false })) return null;
+  const total = Number(manualPrice.value);
+  const base = total / 1.19;
+  const cost = quote.value ? Number(quote.value.breakdown.total_cost) : 0;
+  return { total, base, iva: total - base, profit: base - cost };
+});
+
 function openSaveModal(scenario) {
   selectedScenario.value = scenario;
+  useManualPrice.value = false;
+  manualPrice.value = scenario ? Math.round(Number(scenario.total_price)) : null;
   saveError.value = "";
   saveSuccess.value = "";
   showSaveModal.value = true;
 }
 
 async function confirmSaveAsSale() {
+  if (useManualPrice.value && !isValidNumber(manualPrice.value, { min: 0, allowZero: false })) {
+    saveError.value = "Ingresa un precio final válido, mayor a 0.";
+    return;
+  }
   saving.value = true;
   saveError.value = "";
   try {
@@ -246,6 +268,7 @@ async function confirmSaveAsSale() {
       payment_method: saveForm.payment_method,
       notes: saveForm.notes || null,
       chosen_margin_percent: selectedScenario.value.margin_percent,
+      manual_total_price: useManualPrice.value ? Number(manualPrice.value) : null,
     });
     showSaveModal.value = false;
     saveSuccess.value = "Venta guardada correctamente en el Registro de Ventas.";
@@ -295,6 +318,34 @@ function openQuoteForm() {
   showQuoteFormModal.value = true;
 }
 
+/* Respaldo en texto del comprobante, para poder reimprimirlo/consultarlo después sin
+   depender de guardar un PDF (la base es relacional y guarda texto plano). */
+function buildQuoteSnapshot(clientName, quoteDate, items) {
+  const lines = [
+    BUSINESS_NAME,
+    `Cotización para: ${clientName}`,
+    `Fecha: ${quoteDate}`,
+    "",
+    "Detalle:",
+  ];
+  let subtotal = 0;
+  for (const i of items) {
+    const lineTotal = Number(i.quantity) * Number(i.unit_price);
+    subtotal += lineTotal;
+    lines.push(
+      `- ${i.description} | ${i.quantity} x ${formatCurrency(i.unit_price)} = ${formatCurrency(lineTotal)}`
+    );
+  }
+  const iva = subtotal * 0.19;
+  lines.push(
+    "",
+    `Neto: ${formatCurrency(subtotal)}`,
+    `IVA (19%): ${formatCurrency(iva)}`,
+    `TOTAL: ${formatCurrency(subtotal + iva)}`
+  );
+  return lines.join("\n");
+}
+
 async function confirmGenerateQuote() {
   if (cartItems.value.some((i) => !i.description.trim())) {
     quoteFormError.value = "Todos los productos de la cotización necesitan un nombre — revisa la lista de arriba.";
@@ -311,14 +362,16 @@ async function confirmGenerateQuote() {
   generatingQuote.value = true;
   quoteFormError.value = "";
   try {
+    const items = cartItems.value.map((i) => ({
+      description: i.description,
+      quantity: i.quantity,
+      unit_price: i.unit_price,
+    }));
     const created = await quotesApi.createQuote({
       client_name: quoteForm.client_name,
       quote_date: quoteForm.quote_date,
-      items: cartItems.value.map((i) => ({
-        description: i.description,
-        quantity: i.quantity,
-        unit_price: i.unit_price,
-      })),
+      items,
+      document_snapshot: buildQuoteSnapshot(quoteForm.client_name, quoteForm.quote_date, items),
     });
     generatedQuote.value = created;
     showQuoteFormModal.value = false;
@@ -732,6 +785,35 @@ onMounted(() => {
             <input v-model="saveForm.buyer_name" />
           </div>
         </div>
+        <div class="field mt-2">
+          <label class="flex items-center gap-2" style="cursor: pointer; font-weight: 600">
+            <input v-model="useManualPrice" type="checkbox" style="width: auto" />
+            Definir yo el precio final (IVA incluido)
+          </label>
+          <span class="field-hint">
+            Para publicar un número redondo. El IVA se recalcula hacia atrás desde ese precio.
+          </span>
+          <input
+            v-if="useManualPrice"
+            v-model.number="manualPrice"
+            type="number"
+            min="0"
+            step="1"
+            placeholder="Ej: 15000"
+            class="mt-2"
+            style="max-width: 200px"
+          />
+          <div v-if="manualPriceBreakdown" class="alert alert-info mt-2">
+            Neto {{ formatCurrency(manualPriceBreakdown.base) }} + IVA
+            {{ formatCurrency(manualPriceBreakdown.iva) }} =
+            <strong>{{ formatCurrency(manualPriceBreakdown.total) }}</strong>
+            · Ganancia: {{ formatCurrency(manualPriceBreakdown.profit) }}
+          </div>
+          <div v-else-if="useManualPrice" class="alert alert-danger mt-2">
+            Ingresa un precio final válido, mayor a 0.
+          </div>
+        </div>
+
         <div class="field mt-2">
           <label>Notas</label>
           <textarea v-model="saveForm.notes" rows="2" />

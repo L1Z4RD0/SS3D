@@ -26,6 +26,8 @@ class Quote(UUIDMixin, TimestampMixin, Base):
     iva_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
     iva_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     total: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    # Respaldo del comprobante tal como se le mostró al cliente, en texto plano.
+    document_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     items: Mapped[list["QuoteItem"]] = relationship(back_populates="quote", cascade="all, delete-orphan")
 

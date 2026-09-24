@@ -9,8 +9,14 @@ from app.dependencies import require_admin
 from app.models.audit_log import AuditLog
 from app.models.role import Role
 from app.models.user import User
+from app.models.watcher_assignment import WatcherAssignment
 from app.schemas.audit_log import AuditLogPage, AuditLogResponse
-from app.schemas.user import UserCreateRequest, UserResponse
+from app.schemas.user import (
+    UserCreateRequest,
+    UserResponse,
+    WatcherAssignmentsRequest,
+    WatcherAssignmentsResponse,
+)
 from app.security import hash_password
 from app.services.audit import log_event
 
@@ -121,6 +127,67 @@ def reactivate_user(
     )
     db.commit()
     return _to_user_response(user)
+
+
+@router.get("/watchers/{watcher_id}/assignments", response_model=WatcherAssignmentsResponse)
+def get_watcher_assignments(watcher_id: uuid.UUID, db: Session = Depends(get_db)):
+    watcher = db.query(User).options(joinedload(User.role)).get(watcher_id)
+    if watcher is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Usuario no encontrado")
+    if watcher.role.name != "watcher":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "El usuario no tiene rol de watcher")
+
+    rows = (
+        db.query(WatcherAssignment.observed_user_id)
+        .filter(WatcherAssignment.watcher_user_id == watcher_id)
+        .all()
+    )
+    return WatcherAssignmentsResponse(watcher_user_id=watcher_id, observed_user_ids=[r[0] for r in rows])
+
+
+@router.put("/watchers/{watcher_id}/assignments", response_model=WatcherAssignmentsResponse)
+def set_watcher_assignments(
+    watcher_id: uuid.UUID,
+    payload: WatcherAssignmentsRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    watcher = db.query(User).options(joinedload(User.role)).get(watcher_id)
+    if watcher is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Usuario no encontrado")
+    if watcher.role.name != "watcher":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "El usuario no tiene rol de watcher")
+
+    requested = {uid for uid in payload.observed_user_ids if uid != watcher_id}
+    if requested:
+        found = {
+            u.id
+            for u in db.query(User).options(joinedload(User.role)).filter(User.id.in_(requested)).all()
+            if u.role.name != "watcher"
+        }
+        missing = requested - found
+        if missing:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "Solo se pueden asignar usuarios existentes que no sean watchers",
+            )
+
+    db.query(WatcherAssignment).filter(WatcherAssignment.watcher_user_id == watcher_id).delete()
+    for observed_id in requested:
+        db.add(WatcherAssignment(watcher_user_id=watcher_id, observed_user_id=observed_id))
+
+    log_event(
+        db,
+        user_id=current_user.id,
+        event_type="WATCHER_ASSIGNMENTS_UPDATED",
+        entity_type="user",
+        entity_id=watcher_id,
+        details={"watcher": watcher.username, "observed_count": len(requested)},
+        ip_address=request.client.host if request.client else None,
+    )
+    db.commit()
+    return WatcherAssignmentsResponse(watcher_user_id=watcher_id, observed_user_ids=sorted(requested, key=str))
 
 
 @router.get("/audit-logs", response_model=AuditLogPage)

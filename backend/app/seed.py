@@ -6,7 +6,7 @@ from app.models.role import Role
 from app.models.user import User
 from app.security import hash_password
 
-ROLE_NAMES = ["admin", "user"]
+ROLE_NAMES = ["admin", "user", "watcher"]
 
 
 def run() -> None:

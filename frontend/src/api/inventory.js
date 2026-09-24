@@ -1,7 +1,11 @@
 import client from "./client";
 
-export const listFilaments = (includeInactive = false) =>
-  client.get("/api/inventory/filaments", { params: { include_inactive: includeInactive } }).then((r) => r.data);
+export const listFilaments = (includeInactive = false, includeExhausted = false) =>
+  client
+    .get("/api/inventory/filaments", {
+      params: { include_inactive: includeInactive, include_exhausted: includeExhausted },
+    })
+    .then((r) => r.data);
 
 export const createFilament = (payload) =>
   client.post("/api/inventory/filaments", payload).then((r) => r.data);

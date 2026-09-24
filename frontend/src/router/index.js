@@ -23,9 +23,15 @@ const routes = [
     component: () => import("../views/CalculatorView.vue"),
   },
   {
+    path: "/cotizaciones",
+    name: "quotes",
+    component: () => import("../views/QuotesView.vue"),
+  },
+  {
     path: "/ventas",
     name: "sales",
     component: () => import("../views/SalesView.vue"),
+    meta: { blockedForWatcher: true },
   },
   {
     path: "/inventario",
@@ -36,11 +42,13 @@ const routes = [
     path: "/impresoras",
     name: "printers",
     component: () => import("../views/PrintersView.vue"),
+    meta: { blockedForWatcher: true },
   },
   {
     path: "/historial",
     name: "history",
     component: () => import("../views/HistoryView.vue"),
+    meta: { blockedForWatcher: true },
   },
   {
     path: "/admin",
@@ -72,6 +80,11 @@ router.beforeEach((to) => {
   }
   if (to.meta.requiresAdmin && !auth.isAdmin) {
     return { name: "dashboard" };
+  }
+  // El watcher solo observa: no entra a Ventas, Impresoras ni Historial (datos propios
+  // que no tiene), aunque escriba la URL a mano.
+  if (to.meta.blockedForWatcher && auth.isWatcher) {
+    return { name: "inventory" };
   }
   return true;
 });

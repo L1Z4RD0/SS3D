@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, readable_user_ids, require_not_watcher
 from app.models.sale_supply import SaleSupply
 from app.models.supply import Supply
 from app.models.user import User
@@ -51,7 +51,7 @@ def list_supplies(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = db.query(Supply).filter(Supply.user_id == current_user.id)
+    query = db.query(Supply).filter(Supply.user_id.in_(readable_user_ids(db, current_user)))
     if not include_inactive:
         query = query.filter(Supply.is_active.is_(True))
     supplies = query.order_by(Supply.category, Supply.name).all()
@@ -63,7 +63,7 @@ def create_supply(
     payload: SupplyCreateRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_not_watcher),
 ):
     supply = Supply(
         user_id=current_user.id,
@@ -97,7 +97,7 @@ def update_supply(
     payload: SupplyUpdateRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_not_watcher),
 ):
     supply = _get_owned_supply(db, supply_id, current_user)
     changes = payload.model_dump(exclude_unset=True)
@@ -129,7 +129,7 @@ def delete_supply(
     supply_id: uuid.UUID,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_not_watcher),
 ):
     supply = _get_owned_supply(db, supply_id, current_user)
     has_sales = db.query(SaleSupply.id).filter(SaleSupply.supply_id == supply.id).first() is not None

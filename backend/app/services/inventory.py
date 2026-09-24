@@ -5,11 +5,19 @@ from app.models.supply import Supply
 
 
 def filament_stock_status(filament: Filament) -> tuple[Decimal, str]:
+    # El porcentaje es "qué tan lleno está el carrete", así que se mide contra la
+    # capacidad del carrete (spool_weight_g), no contra el stock con el que se cargó.
+    # Antes usaba initial_stock_g: un carrete de 1000g cargado con 950g quedaba en
+    # 100% (950/950) en vez de 95%, y uno cargado con 500g mostraba porcentajes que
+    # no correspondían a lo que realmente quedaba.
+    reference_g = filament.spool_weight_g if filament.spool_weight_g and filament.spool_weight_g > 0 else None
+    if reference_g is None:
+        reference_g = filament.initial_stock_g
+
     stock_percent = Decimal(0)
-    if filament.initial_stock_g and filament.initial_stock_g > 0:
-        stock_percent = (filament.available_g / filament.initial_stock_g * Decimal(100)).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP
-        )
+    if reference_g and reference_g > 0:
+        raw_percent = filament.available_g / reference_g * Decimal(100)
+        stock_percent = min(raw_percent, Decimal(100)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     if filament.available_g <= 0:
         status = "vacio"

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, SmallInteger, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, SmallInteger, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -20,5 +20,8 @@ class User(UUIDMixin, TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     failed_login_attempts: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Contador propio de cotizaciones: solo sube, así el número nunca se reutiliza
+    # aunque se borren cotizaciones viejas.
+    last_quote_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
     role: Mapped["Role"] = relationship(back_populates="users")
