@@ -1,4 +1,5 @@
 import uuid
+from datetime import date
 from decimal import Decimal
 
 from pydantic import BaseModel, Field
@@ -53,6 +54,8 @@ class QuoteResponse(BaseModel):
 
 class SaveQuoteAsSaleRequest(QuoteRequest):
     sale_date: str
+    # Fecha de entrega comprometida (si no viene, la del pedido).
+    promised_delivery_date: date | None = None
     client_name: str = Field(min_length=1, max_length=160)
     buyer_name: str | None = Field(default=None, max_length=160)
     payment_method: str

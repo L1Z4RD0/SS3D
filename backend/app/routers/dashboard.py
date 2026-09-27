@@ -18,19 +18,21 @@ from app.schemas.dashboard import (
     StockAlertItem,
 )
 from app.services.inventory import filament_stock_status
-from app.services.sale_builder import sales_visible_to
+from app.models.sale import STATUS_DELIVERED
+from app.services.sale_builder import sales_counted_for
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 
 def _dated_sales_query(db: Session, user: User, date_from: date | None, date_to: date | None):
-    # Dueño: todas las ventas de su inventario (también las que registró un observador).
-    # Observador: las ventas que registró él.
-    query = db.query(Sale).filter(sales_visible_to(user))
+    # Solo cuentan los pedidos Entregados, por su fecha real de entrega: antes de eso el
+    # dinero no entró. Dueño: los de su inventario (también los que registró un
+    # observador). Observador: los que registró él.
+    query = db.query(Sale).filter(sales_counted_for(user), Sale.status == STATUS_DELIVERED)
     if date_from is not None:
-        query = query.filter(Sale.sale_date >= date_from)
+        query = query.filter(Sale.delivered_date >= date_from)
     if date_to is not None:
-        query = query.filter(Sale.sale_date <= date_to)
+        query = query.filter(Sale.delivered_date <= date_to)
     return query
 
 

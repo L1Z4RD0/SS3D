@@ -63,7 +63,7 @@ function isSelected(m) {
 <template>
   <div>
     <div class="page-header">
-      <p class="page-subtitle">Estadísticas de tu negocio agrupadas por mes — selecciona uno para verlo en detalle, o varios para comparar su evolución.</p>
+      <p class="page-subtitle">Estadísticas de tu negocio agrupadas por mes — selecciona uno para verlo en detalle, o varios para comparar su evolución. Cuenta los pedidos Entregados, en el mes de su entrega.</p>
     </div>
 
     <div v-if="loading" class="empty-state">Cargando...</div>

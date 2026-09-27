@@ -9,7 +9,8 @@ from app.dependencies import get_current_user
 from app.models.sale import Sale
 from app.models.user import User
 from app.schemas.history import MonthlySummary
-from app.services.sale_builder import sales_visible_to
+from app.models.sale import STATUS_DELIVERED
+from app.services.sale_builder import sales_counted_for
 
 router = APIRouter(prefix="/api/history", tags=["history"])
 
@@ -32,12 +33,13 @@ MONTH_NAMES = [
 
 @router.get("/monthly", response_model=list[MonthlySummary])
 def get_monthly_history(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    year_expr = extract("year", Sale.sale_date)
-    month_expr = extract("month", Sale.sale_date)
+    # Solo pedidos Entregados, agrupados por el mes de su fecha real de entrega.
+    year_expr = extract("year", Sale.delivered_date)
+    month_expr = extract("month", Sale.delivered_date)
 
     rows = (
         db.query(Sale)
-        .filter(sales_visible_to(current_user))
+        .filter(sales_counted_for(current_user), Sale.status == STATUS_DELIVERED)
         .with_entities(
             year_expr.label("year"),
             month_expr.label("month"),

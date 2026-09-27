@@ -423,6 +423,14 @@ tbody tr:hover {
 .badge-info { background: var(--info-soft); color: var(--info); }
 .badge-neutral { background: var(--surface-alt); color: var(--text-muted); border: 1px solid var(--border); }
 
+/* Estados de pedido: mismos colores en Ventas y en el Calendario. */
+.status-pendiente { background: var(--warning-soft); color: var(--warning); }
+.status-en_produccion { background: var(--info-soft); color: var(--info); }
+.status-lista { background: var(--accent-soft); color: var(--accent); }
+.status-entregada { background: var(--success-soft); color: var(--success); }
+.status-cancelado { background: var(--surface-alt); color: var(--text-faint); border: 1px solid var(--border); }
+.badge-overdue { background: var(--danger-soft); color: var(--danger); }
+
 /* ---------- Stat cards ---------- */
 
 .stat-card {
@@ -562,6 +570,12 @@ tbody tr:hover {
 .alert-info {
   background: var(--info-soft);
   color: var(--info);
+}
+
+.alert-warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+  display: block;
 }
 
 .spinner {

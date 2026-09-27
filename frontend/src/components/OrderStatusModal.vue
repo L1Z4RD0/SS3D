@@ -1,0 +1,219 @@
+<script setup>
+import { ref, computed, onMounted } from "vue";
+import * as salesApi from "../api/sales";
+import { formatCurrency, formatDate, formatDateTime, todayISO } from "../utils/format";
+import { extractApiError } from "../utils/validation";
+import { confirmAction } from "../composables/useConfirm";
+import { STATUS_LABELS, statusClass, statusOptions, isOverdue } from "../utils/orderStatus";
+import Modal from "./Modal.vue";
+
+/* Detalle de un pedido: datos clave, línea de tiempo de estados (cuándo se creó, cómo
+   avanzó y quién lo movió) y botones para cambiar de estado. Se usa en Ventas y en el
+   Calendario. El servidor valida cada cambio; aquí solo se muestran los permitidos. */
+const props = defineProps({
+  saleId: { type: String, required: true },
+});
+const emit = defineEmits(["close", "changed"]);
+
+const sale = ref(null);
+const loading = ref(true);
+const busy = ref(false);
+const error = ref("");
+
+const today = todayISO();
+const overdue = computed(() => sale.value && isOverdue(sale.value, today));
+const options = computed(() => (sale.value?.can_edit ? statusOptions(sale.value) : []));
+
+async function load() {
+  loading.value = true;
+  error.value = "";
+  try {
+    sale.value = await salesApi.getSale(props.saleId);
+  } catch (err) {
+    error.value = extractApiError(err, "No se pudo cargar el pedido.");
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function applyStatus(opt) {
+  let skipConfirmed = false;
+  if (opt.kind === "skip") {
+    const ok = await confirmAction({
+      title: "Entregar directo",
+      message:
+        `El pedido está ${STATUS_LABELS[sale.value.status]}. Se marcará como Entregado hoy y los pasos ` +
+        "intermedios quedarán registrados con la misma hora. Desde ese momento cuenta como ingreso.",
+      confirmLabel: "Marcar entregado",
+    });
+    if (!ok) return;
+    skipConfirmed = true;
+  } else if (opt.status === "entregada") {
+    const ok = await confirmAction({
+      title: "Entregar pedido",
+      message: "Se marcará como Entregado hoy. Es un estado final y desde ese momento cuenta como ingreso.",
+      confirmLabel: "Marcar entregado",
+    });
+    if (!ok) return;
+  }
+  busy.value = true;
+  error.value = "";
+  try {
+    sale.value = await salesApi.changeSaleStatus(sale.value.id, {
+      status: opt.status,
+      skip_confirmed: skipConfirmed,
+      today,
+    });
+    emit("changed", sale.value);
+  } catch (err) {
+    error.value = extractApiError(err, "No se pudo cambiar el estado.");
+  } finally {
+    busy.value = false;
+  }
+}
+
+onMounted(load);
+</script>
+
+<template>
+  <Modal :title="sale ? sale.client_name : 'Pedido'" subtitle="Estado y línea de tiempo del pedido" width="560px" @close="emit('close')">
+    <div v-if="loading" class="empty-state">Cargando...</div>
+    <div v-else-if="!sale" class="alert alert-danger">{{ error }}</div>
+    <template v-else>
+      <div class="order-summary">
+        <div>
+          <span class="badge" :class="statusClass(sale.status)">{{ STATUS_LABELS[sale.status] }}</span>
+          <span v-if="overdue" class="badge badge-overdue" style="margin-left: 6px">Atrasado</span>
+        </div>
+        <dl>
+          <dt>Pedido</dt>
+          <dd>{{ formatDate(sale.sale_date) }}</dd>
+          <dt>Entrega comprometida</dt>
+          <dd :class="{ 'text-danger': overdue }">{{ formatDate(sale.promised_delivery_date) }}</dd>
+          <template v-if="sale.delivered_date">
+            <dt>Entregado</dt>
+            <dd>{{ formatDate(sale.delivered_date) }}</dd>
+          </template>
+          <dt>Precio</dt>
+          <dd class="mono">{{ formatCurrency(sale.price) }}</dd>
+          <dt>Inventario de</dt>
+          <dd>{{ sale.owner_username }}</dd>
+          <dt>Registrada por</dt>
+          <dd>{{ sale.created_by_username || "Usuario eliminado" }}</dd>
+          <template v-if="sale.buyer_name">
+            <dt>Comprador</dt>
+            <dd>{{ sale.buyer_name }}</dd>
+          </template>
+        </dl>
+      </div>
+
+      <div v-if="options.length" class="status-actions">
+        <button
+          v-for="opt in options"
+          :key="opt.status + opt.kind"
+          type="button"
+          class="btn btn-sm"
+          :class="opt.kind === 'next' ? 'btn-primary' : 'btn-secondary'"
+          :disabled="busy"
+          @click="applyStatus(opt)"
+        >
+          {{ opt.label }}
+        </button>
+      </div>
+      <p v-else-if="!sale.can_edit" class="field-hint">
+        Solo lectura: este pedido lo gestiona {{ sale.owner_username }}.
+      </p>
+
+      <div v-if="error" class="alert alert-danger mt-2">{{ error }}</div>
+
+      <h4 class="timeline-title">Línea de tiempo</h4>
+      <ol class="timeline">
+        <li v-for="(h, i) in sale.status_history" :key="i">
+          <span class="timeline-dot" :class="statusClass(h.status)"></span>
+          <div>
+            <strong>{{ STATUS_LABELS[h.status] }}</strong>
+            <span class="text-muted text-sm"> · {{ formatDateTime(h.changed_at) }}</span>
+            <div class="text-sm text-muted">
+              {{ h.changed_by_username || "—" }}<template v-if="h.note"> · {{ h.note }}</template>
+            </div>
+          </div>
+        </li>
+      </ol>
+
+      <div class="form-actions">
+        <button type="button" class="btn btn-secondary" @click="emit('close')">Cerrar</button>
+      </div>
+    </template>
+  </Modal>
+</template>
+
+<style scoped>
+.order-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.order-summary dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 14px;
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.order-summary dt {
+  color: var(--text-muted);
+}
+
+.order-summary dd {
+  margin: 0;
+}
+
+.text-danger {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.timeline-title {
+  margin: 16px 0 8px;
+  font-size: 0.9rem;
+}
+
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-left: 2px solid var(--border);
+}
+
+.timeline li {
+  position: relative;
+  display: flex;
+  gap: 10px;
+  padding-left: 14px;
+}
+
+.timeline-dot {
+  position: absolute;
+  left: -8px;
+  top: 4px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--surface);
+  /* El color del estado (de la clase status-*) como punto sólido. */
+  background: currentColor;
+}
+</style>

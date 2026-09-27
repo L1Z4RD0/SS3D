@@ -76,11 +76,15 @@ onMounted(loadAll);
         <div>
           <h1>{{ BUSINESS_NAME }}</h1>
           <p v-if="auth.isWatcher" class="page-subtitle">
-            Resumen de las ventas que registraste con el inventario de los usuarios que observas
+            Resumen de los pedidos entregados que registraste con el inventario de los usuarios que observas
           </p>
           <p v-else class="page-subtitle">
-            Resumen ejecutivo de tu negocio de impresión 3D (incluye las ventas que registró un observador con tu
+            Resumen ejecutivo de tu negocio de impresión 3D (incluye los pedidos que registró un observador con tu
             inventario)
+          </p>
+          <p class="page-subtitle" style="font-size: 0.8rem">
+            Solo cuentan los pedidos <strong>Entregados</strong>, según su fecha de entrega. Los pedidos abiertos aún no
+            suman ingresos.
           </p>
         </div>
       </div>

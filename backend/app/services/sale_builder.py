@@ -2,28 +2,59 @@ import uuid
 from decimal import Decimal
 
 from fastapi import HTTPException, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.dependencies import is_watcher, readable_user_ids
 from app.models.filament import Filament
 from app.models.printer import Printer
-from app.models.sale import Sale
+from app.models.sale import ORDER_STATUSES, Sale
 from app.models.sale_filament import SaleFilament
 from app.models.supply import Supply
 from app.models.user import User
 from app.schemas.calculator import FilamentUsageInput, SupplyUsageInput
-from app.schemas.sale import ExhaustedFilamentInfo, SaleFilamentResponse, SaleResponse, SaleSupplyResponse
+from app.schemas.sale import (
+    ExhaustedFilamentInfo,
+    SaleFilamentResponse,
+    SaleResponse,
+    SaleStatusHistoryResponse,
+    SaleSupplyResponse,
+)
 from app.services.calculator import CostBreakdown, FilamentUsage, SupplyUsage, calculate_costs, money
 from app.services.inventory import consume_filament
 
 
-def sales_visible_to(user: User):
-    """Filtro de las ventas que ve cada usuario (listado, Dashboard, Historial).
-    Un usuario ve las de su inventario, incluidas las que registró un observador por él;
-    un observador ve las que registró él mismo, de cualquiera de sus usuarios asignados."""
+def sales_counted_for(user: User):
+    """Ventas que suman en el Dashboard y el Historial de cada usuario (además, solo las
+    Entregadas). Un usuario: las de su inventario, incluidas las que registró un observador
+    por él. Un observador: las que registró él, de cualquiera de sus asignados."""
     if is_watcher(user):
         return Sale.created_by_user_id == user.id
     return Sale.user_id == user.id
+
+
+def sales_listed_for(db: Session, user: User):
+    """Pedidos que ve cada usuario en Ventas y el Calendario. El observador ve también los
+    pedidos agendados de sus usuarios asignados (los que no registró, solo lectura)."""
+    if is_watcher(user):
+        return or_(Sale.created_by_user_id == user.id, Sale.user_id.in_(readable_user_ids(db, user)))
+    return Sale.user_id == user.id
+
+
+def sales_editable_by(user: User):
+    """Pedidos que cada usuario puede editar, cambiar de estado o eliminar: el dueño todos
+    los suyos; el observador solo los que registró él."""
+    if is_watcher(user):
+        return Sale.created_by_user_id == user.id
+    return Sale.user_id == user.id
+
+
+def can_edit_sale(sale: Sale, viewer: User | None) -> bool:
+    if viewer is None:
+        return True
+    if is_watcher(viewer):
+        return sale.created_by_user_id == viewer.id
+    return sale.user_id == viewer.id
 
 
 def resolve_sale_owner(db: Session, user: User, owner_id: uuid.UUID | None) -> uuid.UUID:
@@ -181,8 +212,32 @@ def apply_filaments_to_sale(
     return exhausted
 
 
-def to_sale_response(sale: Sale, exhausted_filaments: list[Filament] | None = None) -> SaleResponse:
+def to_sale_response(
+    sale: Sale,
+    exhausted_filaments: list[Filament] | None = None,
+    viewer: User | None = None,
+    include_history: bool = False,
+) -> SaleResponse:
+    history = []
+    if include_history:
+        history = [
+            SaleStatusHistoryResponse(
+                status=h.status,
+                changed_at=h.changed_at,
+                changed_by_username=h.changed_by.username if h.changed_by is not None else None,
+                note=h.note,
+                is_migration=h.is_migration,
+            )
+            # Los pasos de una entrega directa tienen la misma hora: desempata el orden natural.
+            for h in sorted(sale.status_history, key=lambda h: (h.changed_at, ORDER_STATUSES.index(h.status)))
+        ]
     return SaleResponse(
+        status=sale.status,
+        promised_delivery_date=sale.promised_delivery_date,
+        delivered_date=sale.delivered_date,
+        warehouse_item_id=sale.warehouse_item_id,
+        can_edit=can_edit_sale(sale, viewer),
+        status_history=history,
         id=sale.id,
         sale_date=sale.sale_date,
         client_name=sale.client_name,

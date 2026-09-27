@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, Field
@@ -10,7 +10,11 @@ PAYMENT_METHODS = ("efectivo", "transferencia", "debito", "credito", "por_cobrar
 
 
 class SaleCreateRequest(BaseModel):
+    # Fecha del pedido.
     sale_date: date
+    # Fecha de entrega comprometida. Si no viene (ej. una versión vieja de la app en
+    # caché), el servidor usa la fecha del pedido.
+    promised_delivery_date: date | None = None
     client_name: str = Field(min_length=1, max_length=160)
     buyer_name: str | None = Field(default=None, max_length=160)
     # Solo para el observador (watcher): de qué usuario asignado es el inventario con que
@@ -30,6 +34,10 @@ class SaleCreateRequest(BaseModel):
 
 class SaleUpdateRequest(BaseModel):
     sale_date: date | None = None
+    # Editable mientras el pedido no esté Entregado ni Cancelado.
+    promised_delivery_date: date | None = None
+    # Solo en Entregada: corrige la fecha real de entrega.
+    delivered_date: date | None = None
     client_name: str | None = Field(default=None, min_length=1, max_length=160)
     buyer_name: str | None = Field(default=None, max_length=160)
     printer_id: uuid.UUID | None = None
@@ -42,6 +50,22 @@ class SaleUpdateRequest(BaseModel):
     supplies: list[SupplyUsageInput] | None = None
     payment_method: str | None = Field(default=None, pattern="^(" + "|".join(PAYMENT_METHODS) + ")$")
     notes: str | None = None
+
+
+class SaleStatusChangeRequest(BaseModel):
+    status: str = Field(pattern="^(pendiente|en_produccion|lista|entregada|cancelado)$")
+    # Pasar directo a Entregada desde Pendiente o En producción exige confirmarlo.
+    skip_confirmed: bool = False
+    # Día local del usuario (para la fecha real de entrega). Si no viene, hoy del servidor.
+    today: date | None = None
+
+
+class SaleStatusHistoryResponse(BaseModel):
+    status: str
+    changed_at: datetime
+    changed_by_username: str | None
+    note: str | None
+    is_migration: bool
 
 
 class SaleSupplyResponse(BaseModel):
@@ -100,9 +124,19 @@ class SaleResponse(BaseModel):
     margin_percent: Decimal
     payment_method: str
     notes: str | None
+    # Ciclo de vida del pedido
+    status: str
+    promised_delivery_date: date
+    delivered_date: date | None
+    warehouse_item_id: uuid.UUID | None = None
+    # Si quien consulta puede editarlo / cambiarle el estado (el dueño, o el observador
+    # que lo registró). Los pedidos de sus asignados que no registró los ve solo lectura.
+    can_edit: bool = True
     supplies_used: list[SaleSupplyResponse]
     filaments_used: list[SaleFilamentResponse]
     exhausted_filaments: list[ExhaustedFilamentInfo] = Field(default_factory=list)
+    # Solo se incluye al pedir un pedido puntual o al cambiarle el estado.
+    status_history: list[SaleStatusHistoryResponse] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 

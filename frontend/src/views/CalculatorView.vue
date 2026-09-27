@@ -313,7 +313,15 @@ async function handleCalculate() {
 /* -------- Save as sale (only for single/no filament jobs) -------- */
 const showSaveModal = ref(false);
 const selectedScenario = ref(null);
-const saveForm = reactive({ sale_date: todayISO(), client_name: "", buyer_name: "", payment_method: "efectivo", notes: "" });
+const saveForm = reactive({
+  sale_date: todayISO(),
+  // El pedido nace Pendiente con esta fecha de entrega comprometida (la usa el Calendario).
+  promised_delivery_date: todayISO(),
+  client_name: "",
+  buyer_name: "",
+  payment_method: "efectivo",
+  notes: "",
+});
 const saving = ref(false);
 const saveError = ref("");
 const saveSuccess = ref("");
@@ -369,6 +377,7 @@ async function confirmSaveAsSale() {
     const sale = await calculatorApi.saveQuoteAsSale({
       ...buildQuotePayload(),
       sale_date: saveForm.sale_date,
+      promised_delivery_date: saveForm.promised_delivery_date,
       client_name: saveForm.client_name,
       buyer_name: saveForm.buyer_name || null,
       payment_method: saveForm.payment_method,
@@ -377,7 +386,8 @@ async function confirmSaveAsSale() {
       manual_price: useManualPrice.value ? Number(manualPrice.value) : null,
     });
     showSaveModal.value = false;
-    saveSuccess.value = "Venta guardada correctamente en el Registro de Ventas.";
+    saveSuccess.value =
+      "Pedido creado en estado Pendiente. Lo verás en Ventas; cuenta como ingreso cuando lo marques como Entregado.";
     clearDraft();
     await loadCatalog();
     await promptExhaustedFilaments(sale.exhausted_filaments);
@@ -938,8 +948,12 @@ onMounted(() => {
         </template>
         <div class="form-grid">
           <div class="field">
-            <label>Fecha</label>
+            <label>Fecha del pedido</label>
             <input v-model="saveForm.sale_date" type="date" required />
+          </div>
+          <div class="field">
+            <label>Fecha de entrega comprometida</label>
+            <input v-model="saveForm.promised_delivery_date" type="date" required />
           </div>
           <div class="field">
             <label>Método de pago</label>

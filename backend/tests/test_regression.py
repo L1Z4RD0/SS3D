@@ -2,7 +2,7 @@
 from datetime import date
 from decimal import Decimal
 
-from conftest import sale_payload
+from conftest import deliver, sale_payload
 
 from app.models.audit_log import AuditLog
 from app.models.filament import Filament
@@ -72,11 +72,15 @@ def test_printer_life_unchanged_by_listing(client, db, make):
 
 
 def test_dashboard_and_history_count_sales(client, make):
+    """Desde la Fase 2 una venta cuenta al entregarse (antes contaba al crearse)."""
     u = make.user()
     p = make.printer(u)
     today = date.today()
-    client.post("/api/sales", headers=make.headers(u), json=sale_payload(p, price=10000))
-    client.post("/api/sales", headers=make.headers(u), json={**sale_payload(p, price=5000), "payment_method": "transferencia"})
+    a = client.post("/api/sales", headers=make.headers(u), json=sale_payload(p, price=10000)).json()
+    b = client.post("/api/sales", headers=make.headers(u),
+                    json={**sale_payload(p, price=5000), "payment_method": "transferencia"}).json()
+    deliver(client, make.headers(u), a["id"], today)
+    deliver(client, make.headers(u), b["id"], today)
     s = client.get("/api/dashboard/summary", headers=make.headers(u),
                    params={"date_from": str(today), "date_to": str(today)}).json()
     assert s["total_jobs"] == 2 and Decimal(s["total_revenue"]) == Decimal(15000)

@@ -14,8 +14,11 @@ import { useObservedUsers } from "../composables/useObservedUsers";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
 import FilamentPickerModal from "../components/FilamentPickerModal.vue";
+import OrderStatusModal from "../components/OrderStatusModal.vue";
+import { STATUS_LABELS, NEXT_ACTION, statusClass, isOverdue } from "../utils/orderStatus";
 
 const auth = useAuthStore();
+const today = todayISO();
 // Observador: registra ventas para uno de sus usuarios asignados, usando SOLO el
 // inventario de ese usuario (los inventarios nunca se mezclan en una venta).
 const { observedUsers, loadObservedUsers, ownerName } = useObservedUsers();
@@ -41,7 +44,7 @@ const printers = ref([]);
 const filaments = ref([]);
 const supplies = ref([]);
 
-const filters = reactive({ date_from: "", date_to: "", client: "", printer_id: "", payment_method: "", search: "" });
+const filters = reactive({ date_from: "", date_to: "", client: "", printer_id: "", payment_method: "", search: "", status: "" });
 
 const paymentLabel = (v) => PAYMENT_METHODS.find((p) => p.value === v)?.label || v;
 
@@ -77,7 +80,7 @@ function applyFilters() {
 }
 
 function resetFilters() {
-  Object.assign(filters, { date_from: "", date_to: "", client: "", printer_id: "", payment_method: "", search: "" });
+  Object.assign(filters, { date_from: "", date_to: "", client: "", printer_id: "", payment_method: "", search: "", status: "" });
   applyFilters();
 }
 
@@ -112,6 +115,10 @@ const filamentRowError = ref("");
 
 const emptyForm = () => ({
   sale_date: todayISO(),
+  // Fecha de entrega comprometida (la usa el Calendario); por defecto, hoy.
+  promised_delivery_date: todayISO(),
+  // Solo en pedidos Entregados: fecha real de entrega (corregible).
+  delivered_date: "",
   client_name: "",
   buyer_name: "",
   owner_id: "", // solo observador: de quién es el inventario de esta venta
@@ -125,6 +132,13 @@ const emptyForm = () => ({
 const form = reactive(emptyForm());
 // Venta que se está editando (para mostrar dueño y quién la registró).
 const editingSale = ref(null);
+
+/* Edición según el estado del pedido (el servidor lo valida igual):
+   Pendiente: todo. En producción / Lista: la pieza ya se fabrica, no se tocan materiales,
+   horas ni envío; solo precio, fecha de entrega, trabajo, comprador, pago y notas.
+   Entregada: todo como siempre, más la fecha real de entrega. */
+const editingStatus = computed(() => editingSale.value?.status || "pendiente");
+const productionLocked = computed(() => ["en_produccion", "lista"].includes(editingStatus.value));
 
 /* -------- Inventario disponible para la venta --------
    Usuario normal: todo lo suyo. Observador: solo lo del usuario elegido en "Venta para". */
@@ -360,6 +374,8 @@ function openEdit(sale) {
     shipping_cost: Number(sale.shipping_cost),
     payment_method: sale.payment_method,
     notes: sale.notes || "",
+    promised_delivery_date: sale.promised_delivery_date,
+    delivered_date: sale.delivered_date || "",
   });
   supplyRows.value = sale.supplies_used.map((s) => ({ supply_id: s.supply_id, quantity: Number(s.quantity_used) }));
   filamentRows.value = sale.filaments_used.map((f) => ({
@@ -378,17 +394,25 @@ function openEdit(sale) {
 }
 
 function buildPayload() {
-  return {
-    sale_date: form.sale_date,
+  const orderData = {
     client_name: form.client_name,
     buyer_name: form.buyer_name || null,
-    // Solo al crear y solo el observador: el dueño no se cambia al editar.
-    ...(auth.isWatcher && !editingId.value ? { owner_id: form.owner_id } : {}),
-    ...buildJobPayload(),
     ...buildPricingPayload(),
     payment_method: form.payment_method,
     notes: form.notes || null,
   };
+  // En producción / Lista solo viajan los datos del pedido (no materiales ni horas).
+  if (productionLocked.value) return { ...orderData, promised_delivery_date: form.promised_delivery_date };
+  const payload = {
+    ...orderData,
+    sale_date: form.sale_date,
+    // Solo al crear y solo el observador: el dueño no se cambia al editar.
+    ...(auth.isWatcher && !editingId.value ? { owner_id: form.owner_id } : {}),
+    ...buildJobPayload(),
+  };
+  if (editingStatus.value === "entregada") payload.delivered_date = form.delivered_date;
+  else payload.promised_delivery_date = form.promised_delivery_date;
+  return payload;
 }
 
 function isValidOrEmpty(value, opts) {
@@ -406,6 +430,11 @@ function validateJobInputs() {
 function validateSaleForm() {
   if (auth.isWatcher && !form.owner_id) return "Selecciona el usuario para el que registras la venta.";
   if (!form.printer_id) return "Selecciona una impresora.";
+  if (editingStatus.value === "entregada") {
+    if (!form.delivered_date) return "Indica la fecha real de entrega.";
+  } else if (!form.promised_delivery_date) {
+    return "Indica la fecha de entrega comprometida.";
+  }
   const jobError = validateJobInputs();
   if (jobError) return jobError;
   if (useManualPrice.value) {
@@ -458,6 +487,41 @@ async function handleDelete(sale) {
   await loadSales();
 }
 
+/* -------- Estados del pedido -------- */
+const statusModalSaleId = ref(null);
+const advancingId = ref(null);
+
+// Botón rápido para el paso siguiente (el resto de opciones está en el detalle).
+async function advance(sale) {
+  const next = NEXT_ACTION[sale.status];
+  if (!next) return;
+  if (next.status === "entregada") {
+    const ok = await confirmAction({
+      title: "Entregar pedido",
+      message: `"${sale.client_name}" se marcará como Entregado hoy. Es un estado final y desde ese momento cuenta como ingreso.`,
+      confirmLabel: "Marcar entregado",
+    });
+    if (!ok) return;
+  }
+  advancingId.value = sale.id;
+  try {
+    await salesApi.changeSaleStatus(sale.id, { status: next.status, today });
+    await loadSales();
+  } catch (err) {
+    await confirmAction({
+      title: "No se pudo cambiar el estado",
+      message: extractApiError(err, "Intenta de nuevo."),
+      confirmLabel: "Entendido",
+    });
+  } finally {
+    advancingId.value = null;
+  }
+}
+
+function deliveryLabel(sale) {
+  return sale.delivered_date ? `Entregado ${formatDate(sale.delivered_date)}` : `Entrega ${formatDate(sale.promised_delivery_date)}`;
+}
+
 const pageLabel = computed(() => {
   if (!total.value) return "0 resultados";
   const from = offset.value + 1;
@@ -508,7 +572,15 @@ onMounted(async () => {
             <option v-for="pm in PAYMENT_METHODS" :key="pm.value" :value="pm.value">{{ pm.label }}</option>
           </select>
         </div>
-        <div class="field" style="grid-column: span 2">
+        <div class="field">
+          <label>Estado</label>
+          <select v-model="filters.status">
+            <option value="">Todos</option>
+            <option value="abiertos">Abiertos (sin entregar)</option>
+            <option v-for="(label, key) in STATUS_LABELS" :key="key" :value="key">{{ label }}</option>
+          </select>
+        </div>
+        <div class="field">
           <label>Buscar (cliente, comprador, notas)</label>
           <input v-model="filters.search" placeholder="Buscar..." />
         </div>
@@ -530,7 +602,8 @@ onMounted(async () => {
           <table>
             <thead>
               <tr>
-                <th>Fecha</th>
+                <th>Pedido</th>
+                <th>Estado</th>
                 <th>Cliente</th>
                 <th v-if="auth.isWatcher">Inventario de</th>
                 <th>Registrada por</th>
@@ -544,7 +617,25 @@ onMounted(async () => {
             </thead>
             <tbody>
               <tr v-for="s in sales" :key="s.id">
-                <td>{{ formatDate(s.sale_date) }}</td>
+                <td>
+                  {{ formatDate(s.sale_date) }}
+                  <div class="text-sm" :class="isOverdue(s, today) ? 'overdue-text' : 'text-muted'">{{ deliveryLabel(s) }}</div>
+                </td>
+                <td>
+                  <div class="flex items-center gap-2" style="flex-wrap: wrap">
+                    <span class="badge" :class="statusClass(s.status)">{{ STATUS_LABELS[s.status] }}</span>
+                    <span v-if="isOverdue(s, today)" class="badge badge-overdue">Atrasado</span>
+                  </div>
+                  <button
+                    v-if="s.can_edit && NEXT_ACTION[s.status]"
+                    type="button"
+                    class="btn btn-secondary btn-sm mt-2"
+                    :disabled="advancingId === s.id"
+                    @click="advance(s)"
+                  >
+                    {{ NEXT_ACTION[s.status].label }}
+                  </button>
+                </td>
                 <td>
                   <strong>{{ s.client_name }}</strong>
                   <div v-if="s.buyer_name" class="text-muted text-sm">{{ s.buyer_name }}</div>
@@ -562,8 +653,15 @@ onMounted(async () => {
                 <td><span class="badge badge-neutral">{{ paymentLabel(s.payment_method) }}</span></td>
                 <td class="text-right">
                   <div class="flex gap-2" style="justify-content: flex-end">
-                    <button class="btn btn-icon btn-ghost" @click="openEdit(s)"><Icon name="edit" :size="16" /></button>
-                    <button class="btn btn-icon btn-ghost" @click="handleDelete(s)"><Icon name="trash" :size="16" /></button>
+                    <button class="btn btn-icon btn-ghost" title="Estado y línea de tiempo" @click="statusModalSaleId = s.id">
+                      <Icon name="history" :size="16" />
+                    </button>
+                    <template v-if="s.can_edit">
+                      <button v-if="s.status !== 'cancelado'" class="btn btn-icon btn-ghost" title="Editar" @click="openEdit(s)">
+                        <Icon name="edit" :size="16" />
+                      </button>
+                      <button class="btn btn-icon btn-ghost" title="Eliminar" @click="handleDelete(s)"><Icon name="trash" :size="16" /></button>
+                    </template>
                   </div>
                 </td>
               </tr>
@@ -597,10 +695,23 @@ onMounted(async () => {
             indicando que la hiciste tú ({{ auth.user?.username }}).
           </span>
         </div>
+        <div v-if="productionLocked" class="alert alert-warning" style="margin-bottom: 14px">
+          Pedido <strong>{{ STATUS_LABELS[editingStatus] }}</strong>: la pieza ya se está fabricando, así que no se
+          cambian materiales, horas ni envío. Puedes editar precio, fecha de entrega, trabajo, comprador, método de pago
+          y notas.
+        </div>
         <div class="form-grid">
           <div class="field">
-            <label>Fecha</label>
-            <input v-model="form.sale_date" type="date" required />
+            <label>Fecha del pedido</label>
+            <input v-model="form.sale_date" type="date" required :disabled="productionLocked" />
+          </div>
+          <div v-if="editingStatus === 'entregada'" class="field">
+            <label>Fecha real de entrega</label>
+            <input v-model="form.delivered_date" type="date" required />
+          </div>
+          <div v-else class="field">
+            <label>Fecha de entrega comprometida</label>
+            <input v-model="form.promised_delivery_date" type="date" required />
           </div>
           <div class="field">
             <label>Método de pago</label>
@@ -618,22 +729,22 @@ onMounted(async () => {
           </div>
           <div class="field">
             <label>Impresora</label>
-            <select v-model="form.printer_id" required :disabled="auth.isWatcher && !form.owner_id">
+            <select v-model="form.printer_id" required :disabled="productionLocked || (auth.isWatcher && !form.owner_id)">
               <option value="" disabled>{{ auth.isWatcher && !form.owner_id ? "Primero elige el usuario" : "Selecciona" }}</option>
               <option v-for="p in ownerPrinters" :key="p.id" :value="p.id">{{ p.name }}</option>
             </select>
           </div>
           <div class="field">
             <label>Horas de impresión</label>
-            <input v-model.number="form.print_hours" type="number" min="0" step="0.1" />
+            <input v-model.number="form.print_hours" type="number" min="0" step="0.1" :disabled="productionLocked" />
           </div>
           <div class="field">
             <label>Horas de postprocesado</label>
-            <input v-model.number="form.postprocess_hours" type="number" min="0" step="0.1" />
+            <input v-model.number="form.postprocess_hours" type="number" min="0" step="0.1" :disabled="productionLocked" />
           </div>
           <div class="field" style="grid-column: span 2">
             <label>Envío / embalaje (CLP)</label>
-            <input v-model.number="form.shipping_cost" type="number" min="0" step="1" />
+            <input v-model.number="form.shipping_cost" type="number" min="0" step="1" :disabled="productionLocked" />
           </div>
         </div>
 
@@ -644,14 +755,14 @@ onMounted(async () => {
               type="button"
               class="btn btn-secondary"
               style="flex: 1; justify-content: flex-start; overflow: hidden"
-              :disabled="auth.isWatcher && !form.owner_id"
+              :disabled="productionLocked || (auth.isWatcher && !form.owner_id)"
               @click="showFilamentPicker = true"
             >
               <span v-if="newFilamentId" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ filamentSummary(newFilamentId) }}</span>
               <span v-else class="text-muted" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Selecciona un filamento</span>
             </button>
-            <input v-model.number="newFilamentGrams" type="number" min="0.01" :max="GRAMS_MAX" step="0.01" placeholder="Gramos" style="width: 90px" />
-            <button type="button" class="btn btn-secondary btn-sm" @click="addFilamentRow">Agregar</button>
+            <input v-model.number="newFilamentGrams" type="number" min="0.01" :max="GRAMS_MAX" step="0.01" placeholder="Gramos" style="width: 90px" :disabled="productionLocked" />
+            <button type="button" class="btn btn-secondary btn-sm" :disabled="productionLocked" @click="addFilamentRow">Agregar</button>
           </div>
           <div v-if="!selectableFilaments.length" class="text-sm mt-1" style="color: var(--text-muted)">
             No hay filamentos con stock disponible. Los agotados (0g) no se pueden usar en una nueva venta.
@@ -663,7 +774,7 @@ onMounted(async () => {
           <div v-if="filamentRows.length" class="flex flex-col gap-2 mt-2">
             <div v-for="row in filamentRows" :key="row.id" class="flex items-center justify-between text-sm" style="background: var(--surface-alt); padding: 6px 10px; border-radius: 8px">
               <span>{{ filamentName(row.filament_id) }} — {{ row.grams_used }}g</span>
-              <button type="button" class="btn btn-icon btn-ghost btn-sm" @click="removeFilamentRow(row.id)">
+              <button v-if="!productionLocked" type="button" class="btn btn-icon btn-ghost btn-sm" @click="removeFilamentRow(row.id)">
                 <Icon name="close" :size="13" />
               </button>
             </div>
@@ -673,18 +784,18 @@ onMounted(async () => {
         <div class="field mt-2">
           <label>Consumibles usados</label>
           <div class="flex gap-2">
-            <select v-model="newSupplyId" style="flex: 1">
+            <select v-model="newSupplyId" style="flex: 1" :disabled="productionLocked">
               <option value="" disabled>Selecciona un insumo</option>
               <option v-for="s in ownerSupplies" :key="s.id" :value="s.id">{{ s.name }}</option>
             </select>
-            <input v-model.number="newSupplyQty" type="number" min="0" step="1" placeholder="Cant." style="width: 70px" />
-            <button type="button" class="btn btn-secondary btn-sm" @click="addSupplyRow">Agregar</button>
+            <input v-model.number="newSupplyQty" type="number" min="0" step="1" placeholder="Cant." style="width: 70px" :disabled="productionLocked" />
+            <button type="button" class="btn btn-secondary btn-sm" :disabled="productionLocked" @click="addSupplyRow">Agregar</button>
           </div>
           <div v-if="supplyRowError" class="alert alert-danger mt-2">{{ supplyRowError }}</div>
           <div v-if="supplyRows.length" class="flex flex-col gap-2 mt-2">
             <div v-for="row in supplyRows" :key="row.supply_id" class="flex items-center justify-between text-sm" style="background: var(--surface-alt); padding: 6px 10px; border-radius: 8px">
               <span>{{ supplyName(row.supply_id) }} × {{ row.quantity }}</span>
-              <button type="button" class="btn btn-icon btn-ghost btn-sm" @click="removeSupplyRow(row.supply_id)">
+              <button v-if="!productionLocked" type="button" class="btn btn-icon btn-ghost btn-sm" @click="removeSupplyRow(row.supply_id)">
                 <Icon name="close" :size="13" />
               </button>
             </div>
@@ -763,6 +874,13 @@ onMounted(async () => {
       </form>
     </Modal>
 
+    <OrderStatusModal
+      v-if="statusModalSaleId"
+      :sale-id="statusModalSaleId"
+      @close="statusModalSaleId = null"
+      @changed="loadSales"
+    />
+
     <FilamentPickerModal
       v-if="showFilamentPicker"
       :filaments="ownerFilaments"
@@ -775,6 +893,11 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.overdue-text {
+  color: var(--danger);
+  font-weight: 700;
+}
+
 /* Quién registró la venta. Resaltado cuando no fue el dueño del inventario (ej. un
    observador), para que el dueño lo note de inmediato. */
 .seller-tag {

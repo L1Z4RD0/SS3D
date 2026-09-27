@@ -1,5 +1,6 @@
 import uuid
 from datetime import date
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session, joinedload
@@ -7,15 +8,28 @@ from sqlalchemy.orm import Session, joinedload
 from app.constants import ELECTRICITY_RATE, LABOR_RATE_PER_HOUR
 from app.database import get_db
 from app.dependencies import get_current_user, is_watcher, readable_user_ids
-from app.models.sale import Sale
+from app.models.sale import ORDER_STATUSES, STATUS_CANCELLED, STATUS_DELIVERED, Sale
 from app.models.sale_filament import SaleFilament
 from app.models.sale_supply import SaleSupply
 from app.models.user import User
-from app.schemas.sale import SaleCreateRequest, SalePage, SaleResponse, SaleUpdateRequest
+from app.schemas.sale import (
+    SaleCreateRequest,
+    SalePage,
+    SaleResponse,
+    SaleStatusChangeRequest,
+    SaleUpdateRequest,
+)
 from app.services.audit import log_event
 from app.services.calculator import calculate_margin_percent, money
 from app.services.inventory import consume_supply, restore_filament, restore_supply
-from app.services.order_status import record_status, start_as_delivered, sync_legacy_dates
+from app.services.order_status import (
+    LOCKED_PRODUCTION_STATUSES,
+    OPEN_STATUSES,
+    STATUS_LABELS,
+    change_status,
+    record_status,
+    start_as_pending,
+)
 from app.services.sale_builder import (
     apply_filaments_to_sale,
     build_cost_breakdown,
@@ -23,39 +37,96 @@ from app.services.sale_builder import (
     resolve_printer,
     resolve_sale_owner,
     resolve_supplies,
-    sales_visible_to,
+    sales_editable_by,
+    sales_listed_for,
     to_sale_response,
 )
 
 router = APIRouter(prefix="/api/sales", tags=["sales"])
 
+# En En producción y Lista la pieza ya se está fabricando: solo se editan estos datos.
+EDITABLE_WHILE_IN_PRODUCTION = ("client_name", "buyer_name", "notes", "payment_method", "price", "promised_delivery_date")
+LOCKED_FIELD_LABELS = {
+    "sale_date": "fecha del pedido",
+    "printer_id": "impresora",
+    "print_hours": "horas de impresión",
+    "postprocess_hours": "horas de postprocesado",
+    "shipping_cost": "envío",
+    "filaments": "filamentos",
+    "supplies": "consumibles",
+}
 
-def _sale_query(db: Session, user: User):
-    return (
-        db.query(Sale)
-        .options(
-            joinedload(Sale.printer),
-            joinedload(Sale.filament),
-            joinedload(Sale.owner),
-            joinedload(Sale.created_by),
-            joinedload(Sale.supplies_used).joinedload(SaleSupply.supply),
-            joinedload(Sale.filaments_used).joinedload(SaleFilament.filament),
-        )
-        .filter(sales_visible_to(user))
+
+def _sale_query(db: Session):
+    return db.query(Sale).options(
+        joinedload(Sale.printer),
+        joinedload(Sale.filament),
+        joinedload(Sale.owner),
+        joinedload(Sale.created_by),
+        joinedload(Sale.supplies_used).joinedload(SaleSupply.supply),
+        joinedload(Sale.filaments_used).joinedload(SaleFilament.filament),
     )
 
 
-def _get_visible_sale(db: Session, sale_id: uuid.UUID, user: User) -> Sale:
-    sale = _sale_query(db, user).filter(Sale.id == sale_id).first()
+def _get_listed_sale(db: Session, sale_id: uuid.UUID, user: User) -> Sale:
+    sale = _sale_query(db).filter(sales_listed_for(db, user), Sale.id == sale_id).first()
     if sale is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Venta no encontrada")
     return sale
 
 
-def _require_still_assigned(db: Session, user: User, sale: Sale) -> None:
-    """Un observador solo puede tocar ventas de usuarios que todavía tiene asignados."""
+def _get_editable_sale(db: Session, sale_id: uuid.UUID, user: User) -> Sale:
+    """Pedido que el usuario puede modificar. Para un pedido ajeno responde 404 (no se
+    revela nada que no pueda tocar)."""
+    sale = _sale_query(db).filter(sales_editable_by(user), Sale.id == sale_id).first()
+    if sale is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Venta no encontrada")
     if is_watcher(user) and sale.user_id not in readable_user_ids(db, user):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Ya no tienes asignado al dueño de esta venta.")
+    return sale
+
+
+def _parse_status_filter(raw: str | None) -> list[str] | None:
+    if not raw:
+        return None
+    wanted: list[str] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if part == "abiertos":
+            wanted.extend(OPEN_STATUSES)
+        elif part in ORDER_STATUSES:
+            wanted.append(part)
+        else:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Estado inválido: {part}")
+    return wanted
+
+
+def _lines(items, key_attr, qty_attr):
+    return sorted((str(getattr(i, key_attr)), Decimal(getattr(i, qty_attr)).normalize()) for i in items)
+
+
+def _locked_changes(sale: Sale, payload: SaleUpdateRequest, changes: dict) -> list[str]:
+    """Datos de fabricación que el pedido intenta cambiar (solo cuenta si el valor cambia:
+    la app puede reenviar el mismo valor sin que eso sea un cambio)."""
+    changed = []
+    for field in ("sale_date", "printer_id", "print_hours", "postprocess_hours", "shipping_cost"):
+        if field in changes and changes[field] is not None and changes[field] != getattr(sale, field):
+            changed.append(field)
+    if payload.filaments is not None and "filaments" in payload.model_fields_set:
+        if _lines(payload.filaments, "filament_id", "grams_used") != _lines(sale.filaments_used, "filament_id", "grams_used"):
+            changed.append("filaments")
+    if payload.supplies is not None and "supplies" in payload.model_fields_set:
+        if _lines(payload.supplies, "supply_id", "quantity") != _lines(sale.supplies_used, "supply_id", "quantity_used"):
+            changed.append("supplies")
+    return changed
+
+
+def _set_price(sale: Sale, price) -> None:
+    price = money(price)
+    sale.base_price = price
+    sale.iva_percent = 0
+    sale.iva_amount = 0
+    sale.total_price = price
 
 
 @router.get("", response_model=SalePage)
@@ -68,10 +139,11 @@ def list_sales(
     printer_id: uuid.UUID | None = Query(default=None),
     payment_method: str | None = Query(default=None),
     search: str | None = Query(default=None),
+    status_filter: str | None = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
-    query = _sale_query(db, current_user)
+    query = _sale_query(db).filter(sales_listed_for(db, current_user))
     if date_from is not None:
         query = query.filter(Sale.sale_date >= date_from)
     if date_to is not None:
@@ -82,6 +154,9 @@ def list_sales(
         query = query.filter(Sale.printer_id == printer_id)
     if payment_method is not None:
         query = query.filter(Sale.payment_method == payment_method)
+    statuses = _parse_status_filter(status_filter)
+    if statuses is not None:
+        query = query.filter(Sale.status.in_(statuses))
     if search is not None:
         like = f"%{search}%"
         query = query.filter(
@@ -90,12 +165,12 @@ def list_sales(
 
     total = query.count()
     rows = query.order_by(Sale.sale_date.desc(), Sale.created_at.desc()).offset(offset).limit(limit).all()
-    return SalePage(items=[to_sale_response(s) for s in rows], total=total)
+    return SalePage(items=[to_sale_response(s, viewer=current_user) for s in rows], total=total)
 
 
 @router.get("/{sale_id}", response_model=SaleResponse)
 def get_sale(sale_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return to_sale_response(_get_visible_sale(db, sale_id, current_user))
+    return to_sale_response(_get_listed_sale(db, sale_id, current_user), viewer=current_user, include_history=True)
 
 
 @router.post("", response_model=SaleResponse, status_code=status.HTTP_201_CREATED)
@@ -153,10 +228,12 @@ def create_sale(
         payment_method=payload.payment_method,
         notes=payload.notes,
     )
-    start_as_delivered(sale)
+    # El consumo es igual que siempre (se descuenta al crear); lo que cambia es que el
+    # pedido nace Pendiente y no cuenta como ingreso hasta que se entrega.
+    start_as_pending(sale, payload.promised_delivery_date)
     db.add(sale)
     db.flush()
-    record_status(db, sale, sale.status, current_user, "Venta registrada")
+    record_status(db, sale, sale.status, current_user, "Pedido creado")
 
     exhausted_filaments = apply_filaments_to_sale(db, sale, resolved_filaments)
 
@@ -175,11 +252,13 @@ def create_sale(
             "client_name": sale.client_name,
             "price": str(price),
             "owner_id": str(owner_id),
+            "status": sale.status,
+            "promised_delivery_date": sale.promised_delivery_date.isoformat(),
         },
         ip_address=request.client.host if request.client else None,
     )
     db.commit()
-    return to_sale_response(_get_visible_sale(db, sale.id, current_user), exhausted_filaments)
+    return to_sale_response(_get_listed_sale(db, sale.id, current_user), exhausted_filaments, viewer=current_user)
 
 
 @router.put("/{sale_id}", response_model=SaleResponse)
@@ -190,8 +269,79 @@ def update_sale(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    sale = _get_visible_sale(db, sale_id, current_user)
-    _require_still_assigned(db, current_user, sale)
+    sale = _get_editable_sale(db, sale_id, current_user)
+    changes = payload.model_dump(exclude_unset=True)
+    ip = request.client.host if request.client else None
+
+    # ---- Reglas según el estado del pedido ----
+    if sale.status == STATUS_CANCELLED:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Un pedido cancelado no se puede editar.")
+    new_delivered = changes.get("delivered_date")
+    if new_delivered is not None and new_delivered != sale.delivered_date and sale.status != STATUS_DELIVERED:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "La fecha real de entrega solo existe en pedidos entregados.")
+    new_promised = changes.get("promised_delivery_date")
+    if new_promised is not None and new_promised != sale.promised_delivery_date and sale.status == STATUS_DELIVERED:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Un pedido entregado ya no tiene fecha comprometida editable."
+        )
+    date_changes = {}
+    if new_promised is not None and new_promised != sale.promised_delivery_date:
+        date_changes["promised_delivery_date"] = (sale.promised_delivery_date, new_promised)
+    if new_delivered is not None and new_delivered != sale.delivered_date:
+        date_changes["delivered_date"] = (sale.delivered_date, new_delivered)
+
+    if sale.status in LOCKED_PRODUCTION_STATUSES:
+        # En producción / Lista: la pieza ya se está fabricando. No se tocan materiales,
+        # horas ni costos; solo datos del pedido y el precio.
+        locked = _locked_changes(sale, payload, changes)
+        if locked:
+            names = ", ".join(LOCKED_FIELD_LABELS[f] for f in locked)
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"El pedido está {STATUS_LABELS[sale.status]}: no se pueden cambiar {names}. "
+                "Solo precio, fecha de entrega, trabajo, comprador, método de pago y notas.",
+            )
+        for field in EDITABLE_WHILE_IN_PRODUCTION:
+            if field == "price" or field not in changes:
+                continue
+            # Comprador y notas se pueden vaciar; el resto de los campos no admite vacío.
+            if changes[field] is None and field not in ("buyer_name", "notes"):
+                continue
+            setattr(sale, field, changes[field])
+        if changes.get("price") is not None:
+            _set_price(sale, changes["price"])
+            sale.profit = money(sale.base_price - sale.total_cost)
+            sale.margin_percent = calculate_margin_percent(sale.base_price, sale.total_cost)
+        exhausted_filaments = []
+    else:
+        exhausted_filaments = _update_full(db, sale, payload, changes, current_user)
+
+    log_event(
+        db,
+        user_id=current_user.id,
+        event_type="SALE_UPDATED",
+        entity_type="sale",
+        entity_id=sale.id,
+        details={"changes": {k: str(v) for k, v in changes.items()}, "owner_id": str(sale.user_id), "status": sale.status},
+        ip_address=ip,
+    )
+    if date_changes:
+        log_event(
+            db,
+            user_id=current_user.id,
+            event_type="SALE_DELIVERY_DATE_CHANGED",
+            entity_type="sale",
+            entity_id=sale.id,
+            details={k: {"from": str(a), "to": str(b)} for k, (a, b) in date_changes.items()},
+            ip_address=ip,
+        )
+    db.commit()
+    return to_sale_response(_get_listed_sale(db, sale.id, current_user), exhausted_filaments, viewer=current_user)
+
+
+def _update_full(db: Session, sale: Sale, payload: SaleUpdateRequest, changes: dict, current_user: User):
+    """Edición completa (Pendiente y Entregada): igual que siempre, devuelve lo que usaba
+    la venta y vuelve a descontar lo nuevo, recalculando costos."""
     # El dueño de una venta no cambia al editarla: sus recursos siguen siendo los suyos.
     owner_ids = [sale.user_id]
 
@@ -208,8 +358,6 @@ def update_sale(
         restore_supply(ss.supply, ss.quantity_used)
         db.delete(ss)
     db.flush()
-
-    changes = payload.model_dump(exclude_unset=True)
 
     new_printer_id = changes.get("printer_id", sale.printer_id)
     new_print_hours = changes.get("print_hours", sale.print_hours)
@@ -245,11 +393,7 @@ def update_sale(
     )
 
     if new_price is not None:
-        price = money(new_price)
-        sale.base_price = price
-        sale.iva_percent = 0
-        sale.iva_amount = 0
-        sale.total_price = price
+        _set_price(sale, new_price)
     # Sin precio nuevo, la venta conserva exactamente lo que se cobró (incluidas las
     # ventas antiguas registradas con IVA). La ganancia sale del neto cobrado.
     profit = money(sale.base_price - breakdown.total_cost)
@@ -260,9 +404,10 @@ def update_sale(
     for field, value in changes.items():
         if field in ("supplies", "filaments", "price"):
             continue
+        if field in ("promised_delivery_date", "delivered_date") and value is None:
+            continue
         setattr(sale, field, value)
 
-    sync_legacy_dates(sale)
     sale.printer_id = printer.id
     sale.print_hours = new_print_hours
     sale.postprocess_hours = new_postprocess_hours
@@ -281,18 +426,34 @@ def update_sale(
     for supply, qty in resolved_supplies:
         consume_supply(supply, qty)
         db.add(SaleSupply(sale_id=sale.id, supply_id=supply.id, quantity_used=qty, unit_cost_snapshot=supply.unit_cost or 0))
+    return exhausted_filaments
 
+
+@router.post("/{sale_id}/status", response_model=SaleResponse)
+def change_sale_status(
+    sale_id: uuid.UUID,
+    payload: SaleStatusChangeRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    sale = _get_editable_sale(db, sale_id, current_user)
+    previous = sale.status
+    path = change_status(
+        db, sale, payload.status, current_user, skip_confirmed=payload.skip_confirmed, today=payload.today or date.today()
+    )
     log_event(
         db,
         user_id=current_user.id,
-        event_type="SALE_UPDATED",
+        event_type="SALE_STATUS_CHANGED",
         entity_type="sale",
         entity_id=sale.id,
-        details={"changes": {k: str(v) for k, v in changes.items()}, "owner_id": str(sale.user_id)},
+        details={"from": previous, "to": sale.status, "steps": path, "owner_id": str(sale.user_id)},
         ip_address=request.client.host if request.client else None,
     )
     db.commit()
-    return to_sale_response(_get_visible_sale(db, sale.id, current_user), exhausted_filaments)
+    db.expire_all()
+    return to_sale_response(_get_listed_sale(db, sale.id, current_user), viewer=current_user, include_history=True)
 
 
 @router.delete("/{sale_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -302,8 +463,7 @@ def delete_sale(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    sale = _get_visible_sale(db, sale_id, current_user)
-    _require_still_assigned(db, current_user, sale)
+    sale = _get_editable_sale(db, sale_id, current_user)
 
     sale.printer.hours_used -= sale.print_hours
     for sf in sale.filaments_used:
@@ -322,6 +482,7 @@ def delete_sale(
             "sale_date": sale.sale_date.isoformat(),
             "price": str(sale.total_price),
             "owner_id": str(sale.user_id),
+            "status": sale.status,
         },
         ip_address=request.client.host if request.client else None,
     )

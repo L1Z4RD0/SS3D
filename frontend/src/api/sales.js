@@ -8,6 +8,11 @@ export const updateSale = (id, payload) => client.put(`/api/sales/${id}`, payloa
 
 export const deleteSale = (id) => client.delete(`/api/sales/${id}`);
 
+export const getSale = (id) => client.get(`/api/sales/${id}`).then((r) => r.data);
+
+export const changeSaleStatus = (id, payload) =>
+  client.post(`/api/sales/${id}/status`, payload).then((r) => r.data);
+
 export const PAYMENT_METHODS = [
   { value: "efectivo", label: "Efectivo" },
   { value: "transferencia", label: "Transferencia" },
