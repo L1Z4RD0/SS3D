@@ -10,7 +10,7 @@ from app.models.quote import Quote, QuoteItem
 from app.models.user import User
 from app.schemas.quote import QuoteCreateRequest, QuotePage, QuoteResponse
 from app.services.audit import log_event
-from app.services.calculator import iva_percent_for, money
+from app.services.calculator import money
 
 router = APIRouter(prefix="/api/quotes", tags=["quotes"])
 
@@ -66,10 +66,9 @@ def create_quote(
         )
         for item in payload.items
     ]
+    # Sin IVA: el total es la suma de los productos, al precio que puso el usuario.
+    # (Las columnas de IVA quedan en 0; se conservan por las cotizaciones antiguas.)
     subtotal = money(sum((i.subtotal for i in items), 0))
-    iva_percent = iva_percent_for(current_user)
-    iva_amount = money(subtotal * iva_percent / 100)
-    total = money(subtotal + iva_amount)
 
     quote = Quote(
         user_id=current_user.id,
@@ -77,9 +76,9 @@ def create_quote(
         client_name=payload.client_name,
         quote_date=payload.quote_date,
         subtotal=subtotal,
-        iva_percent=iva_percent,
-        iva_amount=iva_amount,
-        total=total,
+        iva_percent=0,
+        iva_amount=0,
+        total=subtotal,
         document_snapshot=payload.document_snapshot,
         items=items,
     )

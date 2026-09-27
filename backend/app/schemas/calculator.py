@@ -33,22 +33,22 @@ class CostBreakdown(BaseModel):
     supplies_cost: Decimal
     shipping_cost: Decimal
     total_cost: Decimal
+    # Material + depreciación + energía: lo único sobre lo que se aplica el margen.
+    margin_base_cost: Decimal
+    # Postprocesado + consumibles + envío: se suman al final, sin margen.
+    extras_cost: Decimal
 
 
 class ScenarioItem(BaseModel):
     margin_percent: int
     label: str
-    base_price: Decimal
-    iva_amount: Decimal
-    total_price: Decimal
+    price: Decimal
     profit: Decimal
 
 
 class QuoteResponse(BaseModel):
     breakdown: CostBreakdown
     scenarios: list[ScenarioItem]
-    # IVA efectivo con que se calcularon los escenarios (0 si el usuario no lo tiene activo).
-    iva_percent: Decimal
 
 
 class SaveQuoteAsSaleRequest(QuoteRequest):
@@ -58,6 +58,6 @@ class SaveQuoteAsSaleRequest(QuoteRequest):
     payment_method: str
     notes: str | None = None
     chosen_margin_percent: int
-    # Precio final con IVA fijado a mano por el usuario (para publicar un número
-    # redondo). Si viene, manda por sobre chosen_margin_percent.
-    manual_total_price: Decimal | None = Field(default=None, gt=0)
+    # Precio fijado a mano por el usuario (ej. para redondear). Si viene, manda por
+    # sobre chosen_margin_percent.
+    manual_price: Decimal | None = Field(default=None, gt=0)

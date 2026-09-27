@@ -9,12 +9,27 @@ import { formatCurrency, formatPercent, formatDate, todayISO } from "../utils/fo
 import { GRAMS_MAX, isValidGrams, isValidNumber, gramsErrorMessage, extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
 import { promptExhaustedFilaments } from "../utils/exhaustedFilaments";
-import { useIva, IVA_PERCENT } from "../composables/useIva";
+import { useAuthStore } from "../stores/auth";
+import { useObservedUsers } from "../composables/useObservedUsers";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
 import FilamentPickerModal from "../components/FilamentPickerModal.vue";
 
-const { ivaEnabled, ivaRate } = useIva();
+const auth = useAuthStore();
+// Observador: registra ventas para uno de sus usuarios asignados, usando SOLO el
+// inventario de ese usuario (los inventarios nunca se mezclan en una venta).
+const { observedUsers, loadObservedUsers, ownerName } = useObservedUsers();
+
+function withOwner(label, ownerId) {
+  const owner = ownerName(ownerId);
+  return owner ? `${label} — de ${owner}` : label;
+}
+
+// Quién registró la venta, siempre visible (transparencia con el dueño del inventario).
+function sellerLabel(sale) {
+  if (!sale.created_by_username) return "Usuario eliminado";
+  return sale.created_by_user_id === auth.user?.id ? `${sale.created_by_username} (tú)` : sale.created_by_username;
+}
 
 const sales = ref([]);
 const total = ref(0);
@@ -99,6 +114,7 @@ const emptyForm = () => ({
   sale_date: todayISO(),
   client_name: "",
   buyer_name: "",
+  owner_id: "", // solo observador: de quién es el inventario de esta venta
   printer_id: "",
   print_hours: 0,
   postprocess_hours: 0,
@@ -107,20 +123,41 @@ const emptyForm = () => ({
   notes: "",
 });
 const form = reactive(emptyForm());
+// Venta que se está editando (para mostrar dueño y quién la registró).
+const editingSale = ref(null);
+
+/* -------- Inventario disponible para la venta --------
+   Usuario normal: todo lo suyo. Observador: solo lo del usuario elegido en "Venta para". */
+const saleOwnerId = computed(() => (auth.isWatcher ? form.owner_id : null));
+function ownedBySaleOwner(item) {
+  return !auth.isWatcher || item.owner_id === saleOwnerId.value;
+}
+const ownerPrinters = computed(() => printers.value.filter(ownedBySaleOwner));
+const ownerFilaments = computed(() => filaments.value.filter(ownedBySaleOwner));
+const ownerSupplies = computed(() => supplies.value.filter(ownedBySaleOwner));
+
+// Al cambiar de usuario se vacía lo elegido: eran recursos del inventario anterior.
+function onOwnerChange() {
+  form.printer_id = "";
+  filamentRows.value = [];
+  supplyRows.value = [];
+  newFilamentId.value = "";
+  newSupplyId.value = "";
+}
 
 /* -------- Precio: el sistema sugiere, el usuario decide --------
    Con los datos del trabajo se calculan en vivo los mismos escenarios de la
    Calculadora; el usuario elige uno o marca la casilla y escribe su propio precio
-   final (IVA incluido si está activo), p. ej. para redondear. */
+   (p. ej. para redondear). La ganancia se calcula igual contra el costo total. */
 const suggestion = ref(null); // respuesta de /api/calculator/quote
 const suggesting = ref(false);
 const suggestError = ref("");
 const selectedMargin = ref(null);
 const useManualPrice = ref(false);
 const manualPrice = ref(null);
-// Al editar: precio con que se guardó la venta. Si el usuario deja el total tal cual,
-// no se manda precio y el backend conserva exactamente lo cobrado (y su IVA original).
-const originalPrice = ref(null); // { total, ivaRate }
+// Al editar: precio con que se guardó la venta. Si el usuario lo deja tal cual, no se
+// manda precio y el backend conserva exactamente lo cobrado.
+const originalPrice = ref(null);
 let suggestSeq = 0;
 let suggestTimer = null;
 
@@ -130,11 +167,9 @@ const selectedScenario = computed(
 
 const manualPriceBreakdown = computed(() => {
   if (!useManualPrice.value || !isValidNumber(manualPrice.value, { min: 0, allowZero: false })) return null;
-  const total = Number(manualPrice.value);
-  const rate = isOriginalPrice(total) ? originalPrice.value.ivaRate : ivaRate.value;
-  const base = total / (1 + rate);
+  const price = Number(manualPrice.value);
   const cost = suggestion.value ? Number(suggestion.value.breakdown.total_cost) : null;
-  return { total, base, iva: total - base, profit: cost === null ? null : base - cost };
+  return { price, profit: cost === null ? null : price - cost };
 });
 
 function buildJobPayload() {
@@ -188,7 +223,7 @@ watch(
 watch(useManualPrice, (on) => {
   if (!on || manualPrice.value) return;
   // Parte del escenario elegido redondeado como guía; el usuario lo ajusta.
-  manualPrice.value = selectedScenario.value ? Math.round(Number(selectedScenario.value.total_price)) : null;
+  manualPrice.value = selectedScenario.value ? Math.round(Number(selectedScenario.value.price)) : null;
 });
 
 function resetPricing() {
@@ -200,17 +235,13 @@ function resetPricing() {
   originalPrice.value = null;
 }
 
-function isOriginalPrice(total) {
-  return !!originalPrice.value && total === originalPrice.value.total;
-}
-
 function buildPricingPayload() {
   if (useManualPrice.value) {
-    const total = Number(manualPrice.value);
-    if (isOriginalPrice(total)) return {};
-    return { base_price: null, manual_total_price: total };
+    const price = Number(manualPrice.value);
+    if (originalPrice.value !== null && price === originalPrice.value) return {};
+    return { price };
   }
-  return { base_price: Number(selectedScenario.value.base_price), manual_total_price: null };
+  return { price: Number(selectedScenario.value.price) };
 }
 
 function addFilamentRow() {
@@ -247,7 +278,7 @@ function removeFilamentRow(id) {
 }
 // Filaments at 0g can't be picked for a new sale — they're kept visible in Inventario
 // (marked "Agotado") but excluded here so a sale can't be logged against empty stock.
-const selectableFilaments = computed(() => filaments.value.filter((f) => Number(f.available_g) > 0));
+const selectableFilaments = computed(() => ownerFilaments.value.filter((f) => Number(f.available_g) > 0));
 
 const availableFilamentOptions = computed(() =>
   selectableFilaments.value.filter((f) => !filamentRows.value.some((r) => r.filament_id === f.id))
@@ -303,7 +334,10 @@ function supplyName(id) {
 
 function openCreate() {
   editingId.value = null;
+  editingSale.value = null;
   Object.assign(form, emptyForm());
+  // Con un solo usuario asignado no hay nada que elegir.
+  if (auth.isWatcher && observedUsers.value.length === 1) form.owner_id = observedUsers.value[0].id;
   supplyRows.value = [];
   filamentRows.value = [];
   resetPricing();
@@ -313,10 +347,13 @@ function openCreate() {
 
 function openEdit(sale) {
   editingId.value = sale.id;
+  editingSale.value = sale;
   Object.assign(form, {
     sale_date: sale.sale_date,
     client_name: sale.client_name,
     buyer_name: sale.buyer_name || "",
+    // El dueño de una venta no cambia al editarla.
+    owner_id: sale.owner_id,
     printer_id: sale.printer_id,
     print_hours: Number(sale.print_hours),
     postprocess_hours: Number(sale.postprocess_hours),
@@ -333,9 +370,9 @@ function openEdit(sale) {
   resetPricing();
   // La venta ya tiene un precio acordado: se abre con ese precio fijado a mano para
   // no cambiarlo sin querer. Desmarcando la casilla se puede elegir un escenario.
-  originalPrice.value = { total: Number(sale.total_price), ivaRate: Number(sale.iva_percent) / 100 };
+  originalPrice.value = Number(sale.price);
   useManualPrice.value = true;
-  manualPrice.value = Number(sale.total_price);
+  manualPrice.value = Number(sale.price);
   formError.value = "";
   showModal.value = true;
 }
@@ -345,6 +382,8 @@ function buildPayload() {
     sale_date: form.sale_date,
     client_name: form.client_name,
     buyer_name: form.buyer_name || null,
+    // Solo al crear y solo el observador: el dueño no se cambia al editar.
+    ...(auth.isWatcher && !editingId.value ? { owner_id: form.owner_id } : {}),
     ...buildJobPayload(),
     ...buildPricingPayload(),
     payment_method: form.payment_method,
@@ -365,11 +404,12 @@ function validateJobInputs() {
 }
 
 function validateSaleForm() {
+  if (auth.isWatcher && !form.owner_id) return "Selecciona el usuario para el que registras la venta.";
   if (!form.printer_id) return "Selecciona una impresora.";
   const jobError = validateJobInputs();
   if (jobError) return jobError;
   if (useManualPrice.value) {
-    if (!isValidNumber(manualPrice.value, { min: 0, allowZero: false })) return "Ingresa un precio final válido, mayor a 0.";
+    if (!isValidNumber(manualPrice.value, { min: 0, allowZero: false })) return "Ingresa un precio válido, mayor a 0.";
   } else if (!selectedScenario.value) {
     return suggestError.value || "Elige uno de los precios sugeridos o marca \"Definir yo el precio final\".";
   }
@@ -426,7 +466,7 @@ const pageLabel = computed(() => {
 });
 
 onMounted(async () => {
-  await loadCatalog();
+  await Promise.all([loadCatalog(), loadObservedUsers()]);
   await loadSales();
 });
 </script>
@@ -434,8 +474,12 @@ onMounted(async () => {
 <template>
   <div>
     <div class="page-header">
-      <p class="page-subtitle">Historial de trabajos vendidos, con costos y ganancia calculados automáticamente</p>
-      <button class="btn btn-primary" @click="openCreate">
+      <p v-if="auth.isWatcher" class="page-subtitle">
+        Ventas que registraste con el inventario de los usuarios que observas. Cada venta queda en el registro del
+        dueño del inventario, indicando que la hiciste tú.
+      </p>
+      <p v-else class="page-subtitle">Historial de trabajos vendidos, con costos y ganancia calculados automáticamente</p>
+      <button class="btn btn-primary" :disabled="auth.isWatcher && !observedUsers.length" @click="openCreate">
         <Icon name="plus" :size="16" /> Nueva venta
       </button>
     </div>
@@ -454,7 +498,7 @@ onMounted(async () => {
           <label>Impresora</label>
           <select v-model="filters.printer_id">
             <option value="">Todas</option>
-            <option v-for="p in printers" :key="p.id" :value="p.id">{{ p.name }}</option>
+            <option v-for="p in printers" :key="p.id" :value="p.id">{{ withOwner(p.name, p.owner_id) }}</option>
           </select>
         </div>
         <div class="field">
@@ -488,8 +532,10 @@ onMounted(async () => {
               <tr>
                 <th>Fecha</th>
                 <th>Cliente</th>
+                <th v-if="auth.isWatcher">Inventario de</th>
+                <th>Registrada por</th>
                 <th>Impresora</th>
-                <th class="text-right">{{ ivaEnabled ? "Precio c/IVA" : "Precio" }}</th>
+                <th class="text-right">Precio</th>
                 <th class="text-right">Ganancia</th>
                 <th class="text-right">Margen</th>
                 <th>Pago</th>
@@ -503,8 +549,14 @@ onMounted(async () => {
                   <strong>{{ s.client_name }}</strong>
                   <div v-if="s.buyer_name" class="text-muted text-sm">{{ s.buyer_name }}</div>
                 </td>
+                <td v-if="auth.isWatcher">{{ s.owner_username }}</td>
+                <td>
+                  <span class="seller-tag" :class="{ 'is-other': s.created_by_user_id !== s.owner_id }">
+                    {{ sellerLabel(s) }}
+                  </span>
+                </td>
                 <td>{{ s.printer_name }}</td>
-                <td class="text-right mono">{{ formatCurrency(s.total_price) }}</td>
+                <td class="text-right mono">{{ formatCurrency(s.price) }}</td>
                 <td class="text-right mono" style="color: var(--success)">{{ formatCurrency(s.profit) }}</td>
                 <td class="text-right">{{ formatPercent(s.margin_percent) }}</td>
                 <td><span class="badge badge-neutral">{{ paymentLabel(s.payment_method) }}</span></td>
@@ -530,6 +582,21 @@ onMounted(async () => {
 
     <Modal v-if="showModal" :title="editingId ? 'Editar venta' : 'Nueva venta'" width="680px" @close="showModal = false">
       <form @submit.prevent="handleSubmit">
+        <div v-if="editingSale" class="alert alert-info" style="margin-bottom: 14px">
+          Inventario de <strong>{{ editingSale.owner_username }}</strong> · Registrada por
+          <strong>{{ sellerLabel(editingSale) }}</strong>
+        </div>
+        <div v-else-if="auth.isWatcher" class="field" style="margin-bottom: 14px">
+          <label>Venta para (usuario dueño del inventario)</label>
+          <select v-model="form.owner_id" required @change="onOwnerChange">
+            <option value="" disabled>Selecciona un usuario</option>
+            <option v-for="u in observedUsers" :key="u.id" :value="u.id">{{ u.username }}</option>
+          </select>
+          <span class="field-hint">
+            Solo se usan la impresora, los filamentos y los insumos de este usuario. La venta aparecerá en su registro
+            indicando que la hiciste tú ({{ auth.user?.username }}).
+          </span>
+        </div>
         <div class="form-grid">
           <div class="field">
             <label>Fecha</label>
@@ -551,9 +618,9 @@ onMounted(async () => {
           </div>
           <div class="field">
             <label>Impresora</label>
-            <select v-model="form.printer_id" required>
-              <option value="" disabled>Selecciona</option>
-              <option v-for="p in printers" :key="p.id" :value="p.id">{{ p.name }}</option>
+            <select v-model="form.printer_id" required :disabled="auth.isWatcher && !form.owner_id">
+              <option value="" disabled>{{ auth.isWatcher && !form.owner_id ? "Primero elige el usuario" : "Selecciona" }}</option>
+              <option v-for="p in ownerPrinters" :key="p.id" :value="p.id">{{ p.name }}</option>
             </select>
           </div>
           <div class="field">
@@ -577,6 +644,7 @@ onMounted(async () => {
               type="button"
               class="btn btn-secondary"
               style="flex: 1; justify-content: flex-start; overflow: hidden"
+              :disabled="auth.isWatcher && !form.owner_id"
               @click="showFilamentPicker = true"
             >
               <span v-if="newFilamentId" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ filamentSummary(newFilamentId) }}</span>
@@ -607,7 +675,7 @@ onMounted(async () => {
           <div class="flex gap-2">
             <select v-model="newSupplyId" style="flex: 1">
               <option value="" disabled>Selecciona un insumo</option>
-              <option v-for="s in supplies" :key="s.id" :value="s.id">{{ s.name }}</option>
+              <option v-for="s in ownerSupplies" :key="s.id" :value="s.id">{{ s.name }}</option>
             </select>
             <input v-model.number="newSupplyQty" type="number" min="0" step="1" placeholder="Cant." style="width: 70px" />
             <button type="button" class="btn btn-secondary btn-sm" @click="addSupplyRow">Agregar</button>
@@ -641,22 +709,20 @@ onMounted(async () => {
               >
                 <input v-model="selectedMargin" type="radio" :value="s.margin_percent" :disabled="useManualPrice" />
                 <span class="price-option-title">{{ s.label }} <span class="text-muted">+{{ s.margin_percent }}%</span></span>
-                <strong class="mono price-option-total">{{ formatCurrency(s.total_price) }}</strong>
-                <span class="price-option-meta">
-                  <template v-if="ivaEnabled">Neto {{ formatCurrency(s.base_price) }} · </template>Ganancia {{ formatCurrency(s.profit) }}
-                </span>
+                <strong class="mono price-option-total">{{ formatCurrency(s.price) }}</strong>
+                <span class="price-option-meta">Ganancia {{ formatCurrency(s.profit) }}</span>
               </label>
             </div>
             <span class="field-hint">
-              Costo del trabajo: {{ formatCurrency(suggestion.breakdown.total_cost) }}<template v-if="ivaEnabled">
-                · precios con IVA ({{ IVA_PERCENT }}%) incluido</template>.
+              Costo del trabajo: {{ formatCurrency(suggestion.breakdown.total_cost) }}. El margen se aplica a material,
+              depreciación y energía; postprocesado, consumibles y envío se suman al final sin margen.
               <template v-if="suggesting">Actualizando...</template>
             </span>
           </template>
 
           <label class="manual-price-toggle flex items-center gap-2 mt-2">
             <input v-model="useManualPrice" type="checkbox" style="width: auto" />
-            Definir yo el precio final{{ ivaEnabled ? " (IVA incluido)" : "" }}
+            Definir yo el precio final
           </label>
           <template v-if="useManualPrice">
             <input
@@ -665,15 +731,11 @@ onMounted(async () => {
               min="0"
               step="1"
               placeholder="Ej: 15000"
-              :aria-label="ivaEnabled ? 'Precio final con IVA' : 'Precio final'"
+              aria-label="Precio final"
               style="max-width: 200px"
             />
             <div v-if="manualPriceBreakdown" class="alert alert-info">
-              <template v-if="ivaEnabled">
-                Neto {{ formatCurrency(manualPriceBreakdown.base) }} + IVA {{ formatCurrency(manualPriceBreakdown.iva) }} =
-              </template>
-              <template v-else>Precio:</template>
-              <strong>{{ formatCurrency(manualPriceBreakdown.total) }}</strong>
+              Precio: <strong>{{ formatCurrency(manualPriceBreakdown.price) }}</strong>
               <template v-if="manualPriceBreakdown.profit !== null">
                 · Ganancia:
                 <span :style="{ color: manualPriceBreakdown.profit < 0 ? 'var(--danger)' : undefined }">
@@ -703,7 +765,7 @@ onMounted(async () => {
 
     <FilamentPickerModal
       v-if="showFilamentPicker"
-      :filaments="filaments"
+      :filaments="ownerFilaments"
       :exclude-ids="filamentRows.map((r) => r.filament_id)"
       title="Seleccionar filamento"
       @select="onFilamentPicked"
@@ -713,6 +775,21 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+/* Quién registró la venta. Resaltado cuando no fue el dueño del inventario (ej. un
+   observador), para que el dueño lo note de inmediato. */
+.seller-tag {
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.seller-tag.is-other {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 700;
+}
+
 .price-options {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

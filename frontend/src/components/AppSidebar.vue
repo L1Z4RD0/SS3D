@@ -13,10 +13,10 @@ const allLinks = [
   { to: "/dashboard", label: "Dashboard", icon: "dashboard" },
   { to: "/calculadora", label: "Calculadora", icon: "calculator" },
   { to: "/cotizaciones", label: "Cotizaciones", icon: "sales" },
-  { to: "/ventas", label: "Ventas", icon: "sales", hideForWatcher: true },
+  { to: "/ventas", label: "Ventas", icon: "sales" },
   { to: "/inventario", label: "Inventario", icon: "inventory" },
   { to: "/impresoras", label: "Impresoras", icon: "printer", hideForWatcher: true },
-  { to: "/historial", label: "Historial", icon: "history", hideForWatcher: true },
+  { to: "/historial", label: "Historial", icon: "history" },
 ];
 
 const roleLabel = computed(() => {

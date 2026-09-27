@@ -7,7 +7,6 @@ de usuario ni un registro en base de datos.
 from decimal import Decimal
 from typing import TypedDict
 
-IVA_PERCENT = Decimal("19")
 ELECTRICITY_RATE = Decimal("287")  # CLP / kWh
 LABOR_RATE_PER_HOUR = Decimal("5000")  # CLP / hora de postprocesado
 

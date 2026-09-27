@@ -23,6 +23,5 @@ class CurrentUserResponse(BaseModel):
     username: str
     role: str
     is_active: bool
-    iva_enabled: bool
 
     model_config = {"from_attributes": True}

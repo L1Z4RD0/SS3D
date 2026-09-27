@@ -9,8 +9,9 @@ const props = defineProps({
 });
 
 const quoteNumberLabel = computed(() => `COT-${String(props.quote.quote_number).padStart(4, "0")}`);
-// Se decide por la cotización (no por el usuario actual): una generada con IVA se
-// sigue mostrando con IVA aunque después se apague, y viceversa.
+// La app ya no calcula IVA (las cotizaciones nuevas lo guardan en 0). Esto solo existe
+// para reimprimir tal cual las cotizaciones antiguas que se entregaron con IVA; sin
+// esas líneas, sus productos no sumarían el total que vio el cliente.
 const hasIva = computed(() => Number(props.quote.iva_percent) > 0);
 </script>
 

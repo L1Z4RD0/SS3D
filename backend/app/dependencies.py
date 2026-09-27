@@ -44,12 +44,13 @@ def is_watcher(user: User) -> bool:
 
 
 def require_not_watcher(current_user: User = Depends(get_current_user)) -> User:
-    """Bloquea toda escritura para los watchers. Su rol es solo mirar: no pueden
-    crear/editar/borrar nada ni afectar el inventario de los usuarios que observan."""
+    """Bloquea a los watchers en todo lo que sea administrar inventario e impresoras.
+    Un watcher puede cotizar y registrar ventas con el inventario de sus usuarios
+    asignados (eso se controla en ventas/calculadora), pero no editar ese inventario."""
     if is_watcher(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Tu cuenta es de solo lectura: puedes ver inventario y generar cotizaciones, pero no modificar datos.",
+            detail="Como observador puedes ver inventario, cotizar y registrar ventas, pero no modificar inventario ni impresoras.",
         )
     return current_user
 

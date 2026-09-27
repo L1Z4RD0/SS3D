@@ -9,6 +9,7 @@ from app.dependencies import get_current_user
 from app.models.sale import Sale
 from app.models.user import User
 from app.schemas.history import MonthlySummary
+from app.services.sale_builder import sales_visible_to
 
 router = APIRouter(prefix="/api/history", tags=["history"])
 
@@ -36,7 +37,7 @@ def get_monthly_history(db: Session = Depends(get_db), current_user: User = Depe
 
     rows = (
         db.query(Sale)
-        .filter(Sale.user_id == current_user.id)
+        .filter(sales_visible_to(current_user))
         .with_entities(
             year_expr.label("year"),
             month_expr.label("month"),
@@ -44,7 +45,6 @@ def get_monthly_history(db: Session = Depends(get_db), current_user: User = Depe
             func.coalesce(func.sum(Sale.base_price), 0),
             func.coalesce(func.sum(Sale.profit), 0),
             func.coalesce(func.sum(Sale.total_cost), 0),
-            func.coalesce(func.sum(Sale.iva_amount), 0),
             func.coalesce(func.sum(Sale.print_hours), 0),
             func.coalesce(func.sum(Sale.grams_used), 0),
             func.coalesce(func.sum(Sale.depreciation_cost), 0),
@@ -63,7 +63,6 @@ def get_monthly_history(db: Session = Depends(get_db), current_user: User = Depe
         total_revenue,
         total_profit,
         total_cost,
-        total_iva,
         total_hours,
         total_grams,
         total_depr,
@@ -87,7 +86,6 @@ def get_monthly_history(db: Session = Depends(get_db), current_user: User = Depe
                 total_profit=total_profit,
                 total_cost=total_cost,
                 avg_margin_percent=avg_margin,
-                total_iva=total_iva,
                 total_print_hours=total_hours,
                 total_filament_used_g=total_grams,
                 total_depreciation=total_depr,

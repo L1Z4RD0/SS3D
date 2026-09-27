@@ -1,8 +1,6 @@
 <script setup>
 import { ref, reactive, onMounted, computed } from "vue";
 import * as adminApi from "../api/admin";
-import * as authApi from "../api/auth";
-import { useAuthStore } from "../stores/auth";
 import { formatDateTime } from "../utils/format";
 import { extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
@@ -65,27 +63,6 @@ async function toggleUser(user) {
     await adminApi.deactivateUser(user.id);
   }
   await loadUsers();
-}
-
-/* -------- IVA por usuario (beta: apagado por defecto) -------- */
-const auth = useAuthStore();
-const ivaSavingId = ref(null);
-const ivaError = ref("");
-
-async function toggleIva(user) {
-  ivaSavingId.value = user.id;
-  ivaError.value = "";
-  try {
-    const updated = await adminApi.setUserIva(user.id, !user.iva_enabled);
-    user.iva_enabled = updated.iva_enabled;
-    // Si el admin se lo cambia a sí mismo, refrescar su sesión para que la
-    // Calculadora/Ventas lo reflejen sin tener que recargar la página.
-    if (user.id === auth.user?.id) auth.user = await authApi.fetchMe();
-  } catch (err) {
-    ivaError.value = extractApiError(err, "No se pudo cambiar el IVA del usuario.");
-  } finally {
-    ivaSavingId.value = null;
-  }
 }
 
 /* -------- Audit logs -------- */
@@ -212,8 +189,6 @@ onMounted(() => {
         </button>
       </div>
 
-      <div v-if="ivaError" class="alert alert-danger" style="margin-bottom: 12px">{{ ivaError }}</div>
-
       <div v-if="loadingUsers" class="empty-state">Cargando...</div>
       <div v-else class="table-wrap">
         <table>
@@ -222,7 +197,6 @@ onMounted(() => {
               <th>Usuario</th>
               <th>Rol</th>
               <th>Estado</th>
-              <th title="Si está apagado, los cálculos de este usuario no incluyen IVA">IVA</th>
               <th>Intentos fallidos</th>
               <th>Bloqueado hasta</th>
               <th>Creado</th>
@@ -249,20 +223,6 @@ onMounted(() => {
                 <span class="badge" :class="u.is_active ? 'badge-success' : 'badge-danger'">
                   {{ u.is_active ? "Activo" : "Desactivado" }}
                 </span>
-              </td>
-              <td>
-                <label class="iva-switch" :title="u.iva_enabled ? 'IVA activo (19%)' : 'IVA apagado'">
-                  <input
-                    type="checkbox"
-                    role="switch"
-                    :checked="u.iva_enabled"
-                    :disabled="ivaSavingId === u.id"
-                    :aria-label="`IVA para ${u.username}`"
-                    @change="toggleIva(u)"
-                  />
-                  <span class="iva-switch-track" aria-hidden="true"></span>
-                  <span class="text-sm">{{ u.iva_enabled ? "Activo" : "Apagado" }}</span>
-                </label>
               </td>
               <td class="text-right mono">{{ u.failed_login_attempts }}</td>
               <td>{{ u.locked_until ? formatDateTime(u.locked_until) : "-" }}</td>
@@ -369,7 +329,7 @@ onMounted(() => {
             <label>Rol</label>
             <select v-model="userForm.role">
               <option value="user">Usuario</option>
-              <option value="watcher">Observador (solo lectura)</option>
+              <option value="watcher">Observador (cotiza y vende con inventario de otros)</option>
               <option value="admin">Administrador</option>
             </select>
           </div>
@@ -389,7 +349,7 @@ onMounted(() => {
     <Modal
       v-if="showWatcherModal && watcherTarget"
       :title="`Usuarios que observa ${watcherTarget.username}`"
-      subtitle="Solo podrá ver el inventario de los usuarios marcados. No puede modificar nada."
+      subtitle="Podrá ver el inventario de los usuarios marcados, cotizar y registrar ventas con él (cada venta indica que la hizo el observador). No puede modificar inventario ni impresoras."
       width="520px"
       @close="showWatcherModal = false"
     >
@@ -425,60 +385,3 @@ onMounted(() => {
     </Modal>
   </div>
 </template>
-
-<style scoped>
-.iva-switch {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.iva-switch input {
-  position: absolute;
-  opacity: 0;
-  width: 1px;
-  height: 1px;
-}
-
-.iva-switch-track {
-  position: relative;
-  width: 36px;
-  height: 20px;
-  border-radius: 999px;
-  background: var(--border);
-  transition: background 0.15s;
-  flex-shrink: 0;
-}
-
-.iva-switch-track::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
-  transition: transform 0.15s;
-}
-
-.iva-switch input:checked + .iva-switch-track {
-  background: var(--primary);
-}
-
-.iva-switch input:checked + .iva-switch-track::after {
-  transform: translateX(16px);
-}
-
-.iva-switch input:focus-visible + .iva-switch-track {
-  box-shadow: 0 0 0 3px var(--primary-soft);
-}
-
-.iva-switch input:disabled + .iva-switch-track {
-  opacity: 0.5;
-}
-</style>

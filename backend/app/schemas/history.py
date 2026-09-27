@@ -12,7 +12,6 @@ class MonthlySummary(BaseModel):
     total_profit: Decimal
     total_cost: Decimal
     avg_margin_percent: Decimal
-    total_iva: Decimal
     total_print_hours: Decimal
     total_filament_used_g: Decimal
     total_depreciation: Decimal

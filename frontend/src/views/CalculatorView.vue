@@ -10,7 +10,6 @@ import { formatCurrency, todayISO } from "../utils/format";
 import { GRAMS_MAX, isValidGrams, isValidNumber, gramsErrorMessage, extractApiError } from "../utils/validation";
 import { promptExhaustedFilaments } from "../utils/exhaustedFilaments";
 import { useAuthStore } from "../stores/auth";
-import { useIva, IVA_PERCENT } from "../composables/useIva";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
 import DoughnutChart from "../components/DoughnutChart.vue";
@@ -19,7 +18,6 @@ import FilamentPickerModal from "../components/FilamentPickerModal.vue";
 import { useObservedUsers } from "../composables/useObservedUsers";
 
 const auth = useAuthStore();
-const { ivaEnabled, ivaRate } = useIva();
 // Observador: cotiza con recursos de varios usuarios (puede mezclarlos), así que cada
 // impresora/filamento/insumo muestra de quién es. Para los demás roles no aparece nada.
 const { namesById, loadObservedUsers, ownerName } = useObservedUsers();
@@ -255,8 +253,8 @@ function validateJobInputs() {
 }
 
 /* -------- Precio manual en la tabla de escenarios --------
-   El sistema sugiere los escenarios, pero el usuario decide el precio final (IVA
-   incluido) que se usa tanto para guardar la venta como para la cotización. */
+   El sistema sugiere los escenarios, pero el usuario decide el precio que se usa tanto
+   para guardar la venta como para la cotización. La ganancia se calcula igual. */
 const useCustomPrice = ref(false);
 const customPrice = ref(null);
 
@@ -264,25 +262,27 @@ function round2(n) {
   return Math.round(n * 100) / 100;
 }
 
+// Recargo equivalente sobre la base del margen (material + depreciación + energía),
+// para comparar un precio manual con los escenarios 90/140/190. Los extras
+// (postprocesado, consumibles, envío) no llevan margen, así que se descuentan.
+function markupPercent(price, breakdown) {
+  const marginBase = Number(breakdown.margin_base_cost);
+  if (marginBase <= 0) return 0;
+  return Math.round(((price - Number(breakdown.extras_cost)) / marginBase - 1) * 100);
+}
+
 // Escenario "virtual" con la misma forma que los del backend, para reutilizar
-// openSaveModal/addToCart tal cual. El margen se muestra igual que en los otros
-// escenarios: recargo sobre el costo de producción (el envío pasa a costo).
+// openSaveModal/addToCart tal cual.
 const customScenario = computed(() => {
   if (!quote.value || !useCustomPrice.value) return null;
   if (!isValidNumber(customPrice.value, { min: 0, allowZero: false })) return null;
-  const total = Number(customPrice.value);
-  const base = round2(total / (1 + ivaRate.value));
-  const shipping = Number(quote.value.breakdown.shipping_cost);
-  const totalCost = Number(quote.value.breakdown.total_cost);
-  const production = totalCost - shipping;
+  const price = round2(Number(customPrice.value));
   return {
     manual: true,
     label: "Precio manual",
-    margin_percent: production > 0 ? Math.round(((base - shipping) / production - 1) * 100) : 0,
-    base_price: base,
-    iva_amount: round2(total - base),
-    total_price: total,
-    profit: round2(base - totalCost),
+    margin_percent: markupPercent(price, quote.value.breakdown),
+    price,
+    profit: round2(price - Number(quote.value.breakdown.total_cost)),
   };
 });
 
@@ -290,7 +290,7 @@ watch(useCustomPrice, (on) => {
   if (!on || customPrice.value || !quote.value) return;
   // Parte del "Precio Normal" redondeado como guía; el usuario lo ajusta a su gusto.
   const reference = quote.value.scenarios[1] || quote.value.scenarios[0];
-  customPrice.value = reference ? Math.round(Number(reference.total_price)) : null;
+  customPrice.value = reference ? Math.round(Number(reference.price)) : null;
 });
 
 async function handleCalculate() {
@@ -318,26 +318,36 @@ const saving = ref(false);
 const saveError = ref("");
 const saveSuccess = ref("");
 
-/* Precio manual: el usuario fija el precio final con IVA para publicar un número
+/* Precio manual: el usuario fija el precio a su criterio para publicar un número
    redondo, en vez de quedarse con el que sale del margen (ej. $15.000 y no $15.351). */
 const useManualPrice = ref(false);
 const manualPrice = ref(null);
 
 const manualPriceBreakdown = computed(() => {
   if (!useManualPrice.value || !isValidNumber(manualPrice.value, { min: 0, allowZero: false })) return null;
-  const total = Number(manualPrice.value);
-  const base = total / (1 + ivaRate.value);
+  const price = Number(manualPrice.value);
   const cost = quote.value ? Number(quote.value.breakdown.total_cost) : 0;
-  return { total, base, iva: total - base, profit: base - cost };
+  return { price, profit: price - cost };
+});
+
+/* Una venta usa solo el inventario de un dueño. El observador puede cotizar mezclando
+   recursos de varios usuarios, pero para guardar como venta todo debe ser del dueño de
+   la impresora. Para los demás roles todo es propio y esto no aplica. */
+const saleOwnerId = computed(() => printers.value.find((p) => p.id === form.printer_id)?.owner_id || null);
+const saleOwnerMismatch = computed(() => {
+  if (!auth.isWatcher || !saleOwnerId.value) return false;
+  const filamentOwners = buildFilamentsPayload().map((u) => filaments.value.find((f) => f.id === u.filament_id)?.owner_id);
+  const supplyOwners = supplyRows.value.map((r) => supplies.value.find((s) => s.id === r.supply_id)?.owner_id);
+  return [...filamentOwners, ...supplyOwners].some((id) => id && id !== saleOwnerId.value);
 });
 
 function openSaveModal(scenario) {
   selectedScenario.value = scenario;
   useManualPrice.value = !!scenario?.manual;
   manualPrice.value = scenario?.manual
-    ? Number(scenario.total_price)
+    ? Number(scenario.price)
     : scenario
-      ? Math.round(Number(scenario.total_price))
+      ? Math.round(Number(scenario.price))
       : null;
   saveError.value = "";
   saveSuccess.value = "";
@@ -345,8 +355,12 @@ function openSaveModal(scenario) {
 }
 
 async function confirmSaveAsSale() {
+  if (saleOwnerMismatch.value) {
+    saveError.value = "Para guardar como venta, la impresora, los filamentos y los insumos deben ser del mismo usuario.";
+    return;
+  }
   if (useManualPrice.value && !isValidNumber(manualPrice.value, { min: 0, allowZero: false })) {
-    saveError.value = "Ingresa un precio final válido, mayor a 0.";
+    saveError.value = "Ingresa un precio válido, mayor a 0.";
     return;
   }
   saving.value = true;
@@ -360,7 +374,7 @@ async function confirmSaveAsSale() {
       payment_method: saveForm.payment_method,
       notes: saveForm.notes || null,
       chosen_margin_percent: selectedScenario.value.margin_percent,
-      manual_total_price: useManualPrice.value ? Number(manualPrice.value) : null,
+      manual_price: useManualPrice.value ? Number(manualPrice.value) : null,
     });
     showSaveModal.value = false;
     saveSuccess.value = "Venta guardada correctamente en el Registro de Ventas.";
@@ -383,7 +397,7 @@ function addToCart(scenario) {
     id: crypto.randomUUID(),
     description: "",
     quantity: 1,
-    unit_price: Number(scenario.base_price),
+    unit_price: Number(scenario.price),
   });
 }
 
@@ -391,11 +405,10 @@ function removeFromCart(id) {
   cartItems.value = cartItems.value.filter((i) => i.id !== id);
 }
 
-const cartSubtotal = computed(() =>
+// Sin IVA: el total es lo que el usuario puso por producto, tal cual.
+const cartTotal = computed(() =>
   cartItems.value.reduce((sum, i) => sum + (Number(i.quantity) || 0) * (Number(i.unit_price) || 0), 0)
 );
-const cartIvaAmount = computed(() => cartSubtotal.value * ivaRate.value);
-const cartTotal = computed(() => cartSubtotal.value + cartIvaAmount.value);
 
 /* -------- Generate quote (Cotización) -------- */
 const showQuoteFormModal = ref(false);
@@ -428,17 +441,7 @@ function buildQuoteSnapshot(clientName, quoteDate, items) {
       `- ${i.description} | ${i.quantity} x ${formatCurrency(i.unit_price)} = ${formatCurrency(lineTotal)}`
     );
   }
-  if (ivaEnabled.value) {
-    const iva = subtotal * ivaRate.value;
-    lines.push(
-      "",
-      `Neto: ${formatCurrency(subtotal)}`,
-      `IVA (${IVA_PERCENT}%): ${formatCurrency(iva)}`,
-      `TOTAL: ${formatCurrency(subtotal + iva)}`
-    );
-  } else {
-    lines.push("", `TOTAL: ${formatCurrency(subtotal)}`);
-  }
+  lines.push("", `TOTAL: ${formatCurrency(subtotal)}`);
   return lines.join("\n");
 }
 
@@ -616,7 +619,8 @@ onMounted(() => {
   <div>
     <div class="page-header">
       <p v-if="auth.isWatcher" class="page-subtitle">
-        Calcula el costo real de un trabajo con los recursos de los usuarios que observas y agrégalo a una cotización
+        Calcula el costo real de un trabajo con los recursos de los usuarios que observas, guárdalo como venta o
+        agrégalo a una cotización
       </p>
       <p v-else class="page-subtitle">Calcula el costo real de un trabajo, guárdalo como venta o agrégalo a una cotización</p>
     </div>
@@ -785,9 +789,11 @@ onMounted(() => {
               <DoughnutChart :labels="breakdownLabels" :values="breakdownValues" />
               <table style="min-width: unset">
                 <tbody>
+                  <tr class="breakdown-group"><td colspan="2">Con margen (90 / 140 / 190%)</td></tr>
                   <tr><td>Material</td><td class="text-right mono">{{ formatCurrency(quote.breakdown.material_cost) }}</td></tr>
                   <tr><td>Depreciación</td><td class="text-right mono">{{ formatCurrency(quote.breakdown.depreciation_cost) }}</td></tr>
                   <tr><td>Energía</td><td class="text-right mono">{{ formatCurrency(quote.breakdown.energy_cost) }}</td></tr>
+                  <tr class="breakdown-group"><td colspan="2">Extras (se suman al final, sin margen)</td></tr>
                   <tr><td>Postprocesado</td><td class="text-right mono">{{ formatCurrency(quote.breakdown.postprocess_cost) }}</td></tr>
                   <tr><td>Consumibles</td><td class="text-right mono">{{ formatCurrency(quote.breakdown.supplies_cost) }}</td></tr>
                   <tr><td>Envío</td><td class="text-right mono">{{ formatCurrency(quote.breakdown.shipping_cost) }}</td></tr>
@@ -810,12 +816,7 @@ onMounted(() => {
                   <tr>
                     <th>Escenario</th>
                     <th>Margen</th>
-                    <template v-if="ivaEnabled">
-                      <th class="text-right">Precio sin IVA</th>
-                      <th class="text-right">IVA</th>
-                      <th class="text-right">Precio con IVA</th>
-                    </template>
-                    <th v-else class="text-right">Precio</th>
+                    <th class="text-right">Precio</th>
                     <th class="text-right">Ganancia</th>
                     <th></th>
                   </tr>
@@ -824,15 +825,11 @@ onMounted(() => {
                   <tr v-for="s in quote.scenarios" :key="s.margin_percent">
                     <td><strong>{{ s.label }}</strong></td>
                     <td><span class="badge badge-neutral">+{{ s.margin_percent }}%</span></td>
-                    <template v-if="ivaEnabled">
-                      <td class="text-right mono">{{ formatCurrency(s.base_price) }}</td>
-                      <td class="text-right mono">{{ formatCurrency(s.iva_amount) }}</td>
-                    </template>
-                    <td class="text-right mono"><strong>{{ formatCurrency(s.total_price) }}</strong></td>
+                    <td class="text-right mono"><strong>{{ formatCurrency(s.price) }}</strong></td>
                     <td class="text-right mono" style="color: var(--success)">{{ formatCurrency(s.profit) }}</td>
                     <td class="text-right">
                       <div class="flex flex-col gap-2" style="align-items: flex-end">
-                        <button v-if="!auth.isWatcher" class="btn btn-primary btn-sm" style="width: 100%" @click="openSaveModal(s)">Guardar como venta</button>
+                        <button class="btn btn-primary btn-sm" style="width: 100%" @click="openSaveModal(s)">Guardar como venta</button>
                         <button class="btn btn-secondary btn-sm" style="width: 100%" @click="addToCart(s)">Agregar a cotización</button>
                       </div>
                     </td>
@@ -842,10 +839,6 @@ onMounted(() => {
                     <td>
                       <span v-if="customScenario" class="badge badge-neutral">+{{ customScenario.margin_percent }}%</span>
                     </td>
-                    <template v-if="ivaEnabled">
-                      <td class="text-right mono">{{ customScenario ? formatCurrency(customScenario.base_price) : "—" }}</td>
-                      <td class="text-right mono">{{ customScenario ? formatCurrency(customScenario.iva_amount) : "—" }}</td>
-                    </template>
                     <td class="text-right">
                       <input
                         v-model.number="customPrice"
@@ -853,7 +846,7 @@ onMounted(() => {
                         min="0"
                         step="1"
                         placeholder="Ej: 15000"
-                        :aria-label="ivaEnabled ? 'Precio final con IVA' : 'Precio final'"
+                        aria-label="Precio final"
                         style="width: 120px; text-align: right"
                       />
                     </td>
@@ -865,7 +858,7 @@ onMounted(() => {
                     </td>
                     <td class="text-right">
                       <div class="flex flex-col gap-2" style="align-items: flex-end">
-                        <button v-if="!auth.isWatcher" class="btn btn-primary btn-sm" style="width: 100%" :disabled="!customScenario" @click="openSaveModal(customScenario)">Guardar como venta</button>
+                        <button class="btn btn-primary btn-sm" style="width: 100%" :disabled="!customScenario" @click="openSaveModal(customScenario)">Guardar como venta</button>
                         <button class="btn btn-secondary btn-sm" style="width: 100%" :disabled="!customScenario" @click="addToCart(customScenario)">Agregar a cotización</button>
                       </div>
                     </td>
@@ -874,11 +867,8 @@ onMounted(() => {
               </table>
             </div>
             <p v-if="useCustomPrice" class="field-hint mt-2">
-              <template v-if="ivaEnabled">
-                Escribe el precio final con IVA incluido; el neto y el IVA se calculan hacia atrás.
-              </template>
-              <template v-else>Escribe el precio final que quieres cobrar.</template>
-              Ese es el precio que se guarda en la venta y el que aparece en la cotización.
+              Escribe el precio que quieres cobrar, guiándote por los escenarios. Ese es el precio que se guarda
+              en la venta y el que aparece en la cotización; la ganancia se calcula contra el costo total.
               <span v-if="customScenario && customScenario.profit < 0" style="color: var(--danger)">
                 Ojo: con este precio vendes bajo el costo.
               </span>
@@ -919,10 +909,6 @@ onMounted(() => {
                 </table>
               </div>
               <div class="flex flex-col gap-1 mt-4" style="align-items: flex-end">
-                <template v-if="ivaEnabled">
-                  <span class="text-sm text-muted">Subtotal: {{ formatCurrency(cartSubtotal) }}</span>
-                  <span class="text-sm text-muted">IVA ({{ IVA_PERCENT }}%): {{ formatCurrency(cartIvaAmount) }}</span>
-                </template>
                 <span style="font-weight: 700">Total: {{ formatCurrency(cartTotal) }}</span>
                 <button class="btn btn-primary mt-2" @click="openQuoteForm">Generar cotización</button>
               </div>
@@ -937,9 +923,19 @@ onMounted(() => {
         <div class="alert alert-info mt-2" style="margin-bottom: 14px">
           <template v-if="selectedScenario.manual">Precio manual</template>
           <template v-else>{{ selectedScenario.label }} (+{{ selectedScenario.margin_percent }}%)</template>
-          · {{ ivaEnabled ? "Total con IVA" : "Total" }}:
-          <strong>{{ formatCurrency(selectedScenario.total_price) }}</strong>
+          · Precio:
+          <strong>{{ formatCurrency(selectedScenario.price) }}</strong>
         </div>
+        <template v-if="auth.isWatcher">
+          <div v-if="saleOwnerMismatch" class="alert alert-danger" style="margin-bottom: 14px">
+            Esta cotización mezcla recursos de distintos usuarios. Para guardarla como venta, la impresora, los
+            filamentos y los insumos deben ser del mismo usuario.
+          </div>
+          <div v-else class="alert alert-info" style="margin-bottom: 14px">
+            Venta para <strong>{{ ownerName(saleOwnerId) }}</strong>: se descuenta de su inventario y quedará registrada
+            como hecha por ti ({{ auth.user?.username }}).
+          </div>
+        </template>
         <div class="form-grid">
           <div class="field">
             <label>Fecha</label>
@@ -963,12 +959,9 @@ onMounted(() => {
         <div class="field mt-2">
           <label class="flex items-center gap-2" style="cursor: pointer; font-weight: 600">
             <input v-model="useManualPrice" type="checkbox" style="width: auto" />
-            Definir yo el precio final{{ ivaEnabled ? " (IVA incluido)" : "" }}
+            Definir yo el precio final
           </label>
-          <span class="field-hint">
-            Para publicar un número redondo.
-            <template v-if="ivaEnabled">El IVA se recalcula hacia atrás desde ese precio.</template>
-          </span>
+          <span class="field-hint">Para cobrar un número redondo o a tu criterio.</span>
           <input
             v-if="useManualPrice"
             v-model.number="manualPrice"
@@ -980,16 +973,14 @@ onMounted(() => {
             style="max-width: 200px"
           />
           <div v-if="manualPriceBreakdown" class="alert alert-info mt-2">
-            <template v-if="ivaEnabled">
-              Neto {{ formatCurrency(manualPriceBreakdown.base) }} + IVA
-              {{ formatCurrency(manualPriceBreakdown.iva) }} =
-            </template>
-            <template v-else>Precio:</template>
-            <strong>{{ formatCurrency(manualPriceBreakdown.total) }}</strong>
-            · Ganancia: {{ formatCurrency(manualPriceBreakdown.profit) }}
+            Precio: <strong>{{ formatCurrency(manualPriceBreakdown.price) }}</strong>
+            · Ganancia:
+            <span :style="{ color: manualPriceBreakdown.profit < 0 ? 'var(--danger)' : undefined }">
+              {{ formatCurrency(manualPriceBreakdown.profit) }}
+            </span>
           </div>
           <div v-else-if="useManualPrice" class="alert alert-danger mt-2">
-            Ingresa un precio final válido, mayor a 0.
+            Ingresa un precio válido, mayor a 0.
           </div>
         </div>
 
@@ -1002,7 +993,7 @@ onMounted(() => {
 
         <div class="form-actions">
           <button type="button" class="btn btn-secondary" @click="showSaveModal = false">Cancelar</button>
-          <button type="submit" class="btn btn-primary" :disabled="saving">
+          <button type="submit" class="btn btn-primary" :disabled="saving || saleOwnerMismatch">
             {{ saving ? "Guardando..." : "Confirmar venta" }}
           </button>
         </div>
@@ -1023,7 +1014,7 @@ onMounted(() => {
         </div>
 
         <div class="alert alert-info mt-4">
-          {{ cartItems.length }} ítem(s) · {{ ivaEnabled ? "Total con IVA" : "Total" }}: <strong>{{ formatCurrency(cartTotal) }}</strong>
+          {{ cartItems.length }} ítem(s) · Total: <strong>{{ formatCurrency(cartTotal) }}</strong>
         </div>
 
         <div v-if="quoteFormError" class="alert alert-danger mt-4">{{ quoteFormError }}</div>
@@ -1075,6 +1066,15 @@ onMounted(() => {
 
 .custom-price-row td {
   background: var(--primary-soft);
+}
+
+.breakdown-group td {
+  padding-top: 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 
 /* Dueño de un recurso (solo lo ve el observador). */

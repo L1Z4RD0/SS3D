@@ -1,27 +1,28 @@
 import uuid
 from datetime import date
-from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.constants import ELECTRICITY_RATE, LABOR_RATE_PER_HOUR
 from app.database import get_db
-from app.dependencies import get_current_user, require_not_watcher
+from app.dependencies import get_current_user, is_watcher, readable_user_ids
 from app.models.sale import Sale
 from app.models.sale_filament import SaleFilament
 from app.models.sale_supply import SaleSupply
 from app.models.user import User
 from app.schemas.sale import SaleCreateRequest, SalePage, SaleResponse, SaleUpdateRequest
 from app.services.audit import log_event
-from app.services.calculator import build_manual_price_scenario, calculate_margin_percent, iva_percent_for, money
+from app.services.calculator import calculate_margin_percent, money
 from app.services.inventory import consume_supply, restore_filament, restore_supply
 from app.services.sale_builder import (
     apply_filaments_to_sale,
     build_cost_breakdown,
     resolve_filaments,
     resolve_printer,
+    resolve_sale_owner,
     resolve_supplies,
+    sales_visible_to,
     to_sale_response,
 )
 
@@ -34,32 +35,26 @@ def _sale_query(db: Session, user: User):
         .options(
             joinedload(Sale.printer),
             joinedload(Sale.filament),
+            joinedload(Sale.owner),
+            joinedload(Sale.created_by),
             joinedload(Sale.supplies_used).joinedload(SaleSupply.supply),
             joinedload(Sale.filaments_used).joinedload(SaleFilament.filament),
         )
-        .filter(Sale.user_id == user.id)
+        .filter(sales_visible_to(user))
     )
 
 
-def _get_owned_sale(db: Session, sale_id: uuid.UUID, user: User) -> Sale:
+def _get_visible_sale(db: Session, sale_id: uuid.UUID, user: User) -> Sale:
     sale = _sale_query(db, user).filter(Sale.id == sale_id).first()
     if sale is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Venta no encontrada")
     return sale
 
 
-def _resolve_pricing(
-    base_price: Decimal | None, manual_total_price: Decimal | None, total_cost: Decimal, iva_percent: Decimal
-) -> tuple[Decimal, Decimal, Decimal, Decimal]:
-    """Devuelve (base, iva, total, ganancia). Con precio manual el total con IVA es
-    exactamente el que escribió el usuario y la base se deriva hacia atrás; si no,
-    el IVA se suma sobre la base como siempre."""
-    if manual_total_price is not None:
-        scenario = build_manual_price_scenario(total_cost, manual_total_price, iva_percent=iva_percent)
-        return scenario.base_price, scenario.iva_amount, scenario.total_price, scenario.profit
-    base = money(base_price)
-    iva_amount = money(base * iva_percent / 100)
-    return base, iva_amount, money(base + iva_amount), money(base - total_cost)
+def _require_still_assigned(db: Session, user: User, sale: Sale) -> None:
+    """Un observador solo puede tocar ventas de usuarios que todavía tiene asignados."""
+    if is_watcher(user) and sale.user_id not in readable_user_ids(db, user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Ya no tienes asignado al dueño de esta venta.")
 
 
 @router.get("", response_model=SalePage)
@@ -99,8 +94,7 @@ def list_sales(
 
 @router.get("/{sale_id}", response_model=SaleResponse)
 def get_sale(sale_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    sale = _get_owned_sale(db, sale_id, current_user)
-    return to_sale_response(sale)
+    return to_sale_response(_get_visible_sale(db, sale_id, current_user))
 
 
 @router.post("", response_model=SaleResponse, status_code=status.HTTP_201_CREATED)
@@ -108,11 +102,14 @@ def create_sale(
     payload: SaleCreateRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_not_watcher),
+    current_user: User = Depends(get_current_user),
 ):
-    printer = resolve_printer(db, current_user, payload.printer_id)
-    resolved_filaments = resolve_filaments(db, current_user, payload.filaments)
-    resolved_supplies = resolve_supplies(db, current_user, payload.supplies)
+    # La venta usa solo el inventario de un dueño: el propio usuario, o el usuario
+    # asignado que eligió el observador. Así los inventarios nunca se mezclan.
+    owner_id = resolve_sale_owner(db, current_user, payload.owner_id)
+    printer = resolve_printer(db, current_user, payload.printer_id, [owner_id])
+    resolved_filaments = resolve_filaments(db, current_user, payload.filaments, [owner_id])
+    resolved_supplies = resolve_supplies(db, current_user, payload.supplies, [owner_id])
 
     breakdown = build_cost_breakdown(
         printer=printer,
@@ -125,26 +122,24 @@ def create_sale(
         labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
 
-    iva_percent = iva_percent_for(current_user)
-    base_price, iva_amount, total_price, profit = _resolve_pricing(
-        payload.base_price, payload.manual_total_price, breakdown.total_cost, iva_percent
-    )
-    margin_percent = calculate_margin_percent(base_price, breakdown.total_cost)
-
+    price = money(payload.price)
     printer.hours_used += payload.print_hours
 
     sale = Sale(
-        user_id=current_user.id,
+        user_id=owner_id,
+        created_by_user_id=current_user.id,
         sale_date=payload.sale_date,
         client_name=payload.client_name,
         buyer_name=payload.buyer_name,
         printer_id=printer.id,
         print_hours=payload.print_hours,
         postprocess_hours=payload.postprocess_hours,
-        base_price=base_price,
-        iva_percent=iva_percent,
-        iva_amount=iva_amount,
-        total_price=total_price,
+        # Sin IVA: lo cobrado es el precio. Las columnas de IVA quedan en 0 (se conservan
+        # por las ventas antiguas registradas con IVA).
+        base_price=price,
+        iva_percent=0,
+        iva_amount=0,
+        total_price=price,
         material_cost=breakdown.material_cost,
         depreciation_cost=breakdown.depreciation_cost,
         energy_cost=breakdown.energy_cost,
@@ -152,8 +147,8 @@ def create_sale(
         supplies_cost=breakdown.supplies_cost,
         shipping_cost=breakdown.shipping_cost,
         total_cost=breakdown.total_cost,
-        profit=profit,
-        margin_percent=margin_percent,
+        profit=money(price - breakdown.total_cost),
+        margin_percent=calculate_margin_percent(price, breakdown.total_cost),
         payment_method=payload.payment_method,
         notes=payload.notes,
     )
@@ -172,11 +167,16 @@ def create_sale(
         event_type="SALE_CREATED",
         entity_type="sale",
         entity_id=sale.id,
-        details={"source": "manual", "client_name": sale.client_name, "total_price": str(sale.total_price)},
+        details={
+            "source": "manual",
+            "client_name": sale.client_name,
+            "price": str(price),
+            "owner_id": str(owner_id),
+        },
         ip_address=request.client.host if request.client else None,
     )
     db.commit()
-    return to_sale_response(_get_owned_sale(db, sale.id, current_user), exhausted_filaments)
+    return to_sale_response(_get_visible_sale(db, sale.id, current_user), exhausted_filaments)
 
 
 @router.put("/{sale_id}", response_model=SaleResponse)
@@ -185,9 +185,12 @@ def update_sale(
     payload: SaleUpdateRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_not_watcher),
+    current_user: User = Depends(get_current_user),
 ):
-    sale = _get_owned_sale(db, sale_id, current_user)
+    sale = _get_visible_sale(db, sale_id, current_user)
+    _require_still_assigned(db, current_user, sale)
+    # El dueño de una venta no cambia al editarla: sus recursos siguen siendo los suyos.
+    owner_ids = [sale.user_id]
 
     old_printer = sale.printer
     old_filament_rows = list(sale.filaments_used)
@@ -209,22 +212,20 @@ def update_sale(
     new_print_hours = changes.get("print_hours", sale.print_hours)
     new_postprocess_hours = changes.get("postprocess_hours", sale.postprocess_hours)
     new_shipping_cost = changes.get("shipping_cost", sale.shipping_cost)
-    new_base_price = changes.get("base_price")
-    new_manual_total_price = changes.get("manual_total_price")
-    price_changed = new_base_price is not None or new_manual_total_price is not None
+    new_price = changes.get("price")
     # payload.filaments/supplies are typed Pydantic objects; model_dump() would
     # have flattened them into plain dicts, so read them straight off the payload.
     new_filaments = payload.filaments if "filaments" in payload.model_fields_set else None
     new_supplies = payload.supplies if "supplies" in payload.model_fields_set else None
 
-    printer = resolve_printer(db, current_user, new_printer_id)
+    printer = resolve_printer(db, current_user, new_printer_id, owner_ids)
     resolved_supplies = (
-        resolve_supplies(db, current_user, new_supplies)
+        resolve_supplies(db, current_user, new_supplies, owner_ids)
         if new_supplies is not None
         else [(ss.supply, ss.quantity_used) for ss in old_supply_rows]
     )
     resolved_filaments = (
-        resolve_filaments(db, current_user, new_filaments)
+        resolve_filaments(db, current_user, new_filaments, owner_ids)
         if new_filaments is not None
         else [(sf.filament, sf.grams_used) for sf in old_filament_rows]
     )
@@ -240,24 +241,21 @@ def update_sale(
         labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
 
-    if price_changed:
-        # Un precio nuevo sigue la configuración de IVA actual del usuario.
-        iva_percent = iva_percent_for(current_user)
-        base_price, iva_amount, total_price, profit = _resolve_pricing(
-            new_base_price, new_manual_total_price, breakdown.total_cost, iva_percent
-        )
-    else:
-        # Precio sin tocar: la venta conserva exactamente lo que se cobró y con qué IVA
-        # (una venta registrada con IVA no lo pierde por editarla con el IVA apagado).
-        iva_percent = sale.iva_percent
-        base_price, iva_amount, total_price = sale.base_price, sale.iva_amount, sale.total_price
-        profit = money(base_price - breakdown.total_cost)
-    margin_percent = calculate_margin_percent(base_price, breakdown.total_cost)
+    if new_price is not None:
+        price = money(new_price)
+        sale.base_price = price
+        sale.iva_percent = 0
+        sale.iva_amount = 0
+        sale.total_price = price
+    # Sin precio nuevo, la venta conserva exactamente lo que se cobró (incluidas las
+    # ventas antiguas registradas con IVA). La ganancia sale del neto cobrado.
+    profit = money(sale.base_price - breakdown.total_cost)
+    margin_percent = calculate_margin_percent(sale.base_price, breakdown.total_cost)
 
     printer.hours_used += new_print_hours
 
     for field, value in changes.items():
-        if field in ("supplies", "filaments", "manual_total_price", "base_price"):
+        if field in ("supplies", "filaments", "price"):
             continue
         setattr(sale, field, value)
 
@@ -265,10 +263,6 @@ def update_sale(
     sale.print_hours = new_print_hours
     sale.postprocess_hours = new_postprocess_hours
     sale.shipping_cost = new_shipping_cost
-    sale.base_price = base_price
-    sale.iva_percent = iva_percent
-    sale.iva_amount = iva_amount
-    sale.total_price = total_price
     sale.material_cost = breakdown.material_cost
     sale.depreciation_cost = breakdown.depreciation_cost
     sale.energy_cost = breakdown.energy_cost
@@ -290,11 +284,11 @@ def update_sale(
         event_type="SALE_UPDATED",
         entity_type="sale",
         entity_id=sale.id,
-        details={"changes": {k: str(v) for k, v in changes.items()}},
+        details={"changes": {k: str(v) for k, v in changes.items()}, "owner_id": str(sale.user_id)},
         ip_address=request.client.host if request.client else None,
     )
     db.commit()
-    return to_sale_response(_get_owned_sale(db, sale.id, current_user), exhausted_filaments)
+    return to_sale_response(_get_visible_sale(db, sale.id, current_user), exhausted_filaments)
 
 
 @router.delete("/{sale_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -302,9 +296,10 @@ def delete_sale(
     sale_id: uuid.UUID,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_not_watcher),
+    current_user: User = Depends(get_current_user),
 ):
-    sale = _get_owned_sale(db, sale_id, current_user)
+    sale = _get_visible_sale(db, sale_id, current_user)
+    _require_still_assigned(db, current_user, sale)
 
     sale.printer.hours_used -= sale.print_hours
     for sf in sale.filaments_used:
@@ -321,7 +316,8 @@ def delete_sale(
         details={
             "client_name": sale.client_name,
             "sale_date": sale.sale_date.isoformat(),
-            "total_price": str(sale.total_price),
+            "price": str(sale.total_price),
+            "owner_id": str(sale.user_id),
         },
         ip_address=request.client.host if request.client else None,
     )

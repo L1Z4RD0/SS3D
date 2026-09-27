@@ -195,7 +195,6 @@ def me(current_user: User = Depends(get_current_user)):
         username=current_user.username,
         role=current_user.role.name,
         is_active=current_user.is_active,
-        iva_enabled=current_user.iva_enabled,
     )
 
 

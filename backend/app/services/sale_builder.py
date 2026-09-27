@@ -4,7 +4,7 @@ from decimal import Decimal
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.dependencies import readable_user_ids
+from app.dependencies import is_watcher, readable_user_ids
 from app.models.filament import Filament
 from app.models.printer import Printer
 from app.models.sale import Sale
@@ -17,23 +17,49 @@ from app.services.calculator import CostBreakdown, FilamentUsage, SupplyUsage, c
 from app.services.inventory import consume_filament
 
 
-def resolve_printer(db: Session, user: User, printer_id: uuid.UUID) -> Printer:
+def sales_visible_to(user: User):
+    """Filtro de las ventas que ve cada usuario (listado, Dashboard, Historial).
+    Un usuario ve las de su inventario, incluidas las que registró un observador por él;
+    un observador ve las que registró él mismo, de cualquiera de sus usuarios asignados."""
+    if is_watcher(user):
+        return Sale.created_by_user_id == user.id
+    return Sale.user_id == user.id
+
+
+def resolve_sale_owner(db: Session, user: User, owner_id: uuid.UUID | None) -> uuid.UUID:
+    """Dueño del inventario con que se registra una venta. Un usuario normal solo vende
+    lo suyo; un observador debe elegir a uno de los usuarios que tiene asignados."""
+    if not is_watcher(user):
+        if owner_id is not None and owner_id != user.id:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Solo puedes registrar ventas con tu propio inventario.")
+        return user.id
+    if owner_id is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Selecciona el usuario para el que registras la venta.")
+    if owner_id not in readable_user_ids(db, user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "No tienes asignado a ese usuario.")
+    return owner_id
+
+
+def resolve_printer(
+    db: Session, user: User, printer_id: uuid.UUID, allowed_user_ids: list[uuid.UUID] | None = None
+) -> Printer:
     # readable_user_ids: para un usuario normal es solo el suyo; para un watcher son
-    # los usuarios que el admin le asignó (puede cotizar con sus recursos, sin tocarlos).
-    printer = (
-        db.query(Printer)
-        .filter(Printer.id == printer_id, Printer.user_id.in_(readable_user_ids(db, user)))
-        .first()
-    )
+    # los usuarios que el admin le asignó. Al registrar una venta se restringe al dueño
+    # de la venta (allowed_user_ids), para que no se mezclen inventarios.
+    allowed_ids = allowed_user_ids if allowed_user_ids is not None else readable_user_ids(db, user)
+    printer = db.query(Printer).filter(Printer.id == printer_id, Printer.user_id.in_(allowed_ids)).first()
     if printer is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Impresora no encontrada")
     return printer
 
 
 def resolve_filaments(
-    db: Session, user: User, usages: list[FilamentUsageInput]
+    db: Session,
+    user: User,
+    usages: list[FilamentUsageInput],
+    allowed_user_ids: list[uuid.UUID] | None = None,
 ) -> list[tuple[Filament, Decimal]]:
-    allowed_ids = readable_user_ids(db, user)
+    allowed_ids = allowed_user_ids if allowed_user_ids is not None else readable_user_ids(db, user)
     resolved: list[tuple[Filament, Decimal]] = []
     for usage in usages:
         filament = (
@@ -48,9 +74,12 @@ def resolve_filaments(
 
 
 def resolve_supplies(
-    db: Session, user: User, usages: list[SupplyUsageInput]
+    db: Session,
+    user: User,
+    usages: list[SupplyUsageInput],
+    allowed_user_ids: list[uuid.UUID] | None = None,
 ) -> list[tuple[Supply, Decimal]]:
-    allowed_ids = readable_user_ids(db, user)
+    allowed_ids = allowed_user_ids if allowed_user_ids is not None else readable_user_ids(db, user)
     resolved: list[tuple[Supply, Decimal]] = []
     for usage in usages:
         supply = (
@@ -158,6 +187,10 @@ def to_sale_response(sale: Sale, exhausted_filaments: list[Filament] | None = No
         sale_date=sale.sale_date,
         client_name=sale.client_name,
         buyer_name=sale.buyer_name,
+        owner_id=sale.user_id,
+        owner_username=sale.owner.username,
+        created_by_user_id=sale.created_by_user_id,
+        created_by_username=sale.created_by.username if sale.created_by is not None else None,
         printer_id=sale.printer_id,
         printer_name=sale.printer.name,
         filament_id=sale.filament_id,
@@ -165,10 +198,9 @@ def to_sale_response(sale: Sale, exhausted_filaments: list[Filament] | None = No
         grams_used=sale.grams_used,
         print_hours=sale.print_hours,
         postprocess_hours=sale.postprocess_hours,
-        base_price=sale.base_price,
-        iva_percent=sale.iva_percent,
-        iva_amount=sale.iva_amount,
-        total_price=sale.total_price,
+        # total_price: lo que se cobró. En ventas antiguas registradas con IVA incluye
+        # ese IVA; en las nuevas es igual a base_price (la app ya no calcula IVA).
+        price=sale.total_price,
         material_cost=sale.material_cost,
         depreciation_cost=sale.depreciation_cost,
         energy_cost=sale.energy_cost,

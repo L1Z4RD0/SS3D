@@ -10,9 +10,6 @@ export const deactivateUser = (id) =>
 export const reactivateUser = (id) =>
   client.patch(`/api/admin/users/${id}/reactivate`).then((r) => r.data);
 
-export const setUserIva = (id, enabled) =>
-  client.patch(`/api/admin/users/${id}/iva`, { enabled }).then((r) => r.data);
-
 export const listAuditLogs = (params = {}) =>
   client.get("/api/admin/audit-logs", { params }).then((r) => r.data);
 

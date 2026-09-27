@@ -18,12 +18,15 @@ from app.schemas.dashboard import (
     StockAlertItem,
 )
 from app.services.inventory import filament_stock_status
+from app.services.sale_builder import sales_visible_to
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 
 def _dated_sales_query(db: Session, user: User, date_from: date | None, date_to: date | None):
-    query = db.query(Sale).filter(Sale.user_id == user.id)
+    # Dueño: todas las ventas de su inventario (también las que registró un observador).
+    # Observador: las ventas que registró él.
+    query = db.query(Sale).filter(sales_visible_to(user))
     if date_from is not None:
         query = query.filter(Sale.sale_date >= date_from)
     if date_to is not None:
@@ -44,14 +47,13 @@ def get_summary(
         func.coalesce(func.sum(Sale.base_price), 0),
         func.coalesce(func.sum(Sale.profit), 0),
         func.coalesce(func.sum(Sale.total_cost), 0),
-        func.coalesce(func.sum(Sale.iva_amount), 0),
         func.coalesce(func.sum(Sale.print_hours), 0),
         func.coalesce(func.sum(Sale.grams_used), 0),
         func.coalesce(func.sum(Sale.depreciation_cost), 0),
         func.coalesce(func.sum(Sale.energy_cost), 0),
     ).one()
 
-    total_jobs, total_revenue, total_profit, total_cost, total_iva, total_hours, total_grams, total_depr, total_energy = row
+    total_jobs, total_revenue, total_profit, total_cost, total_hours, total_grams, total_depr, total_energy = row
 
     avg_margin = Decimal(0)
     if total_revenue and Decimal(total_revenue) > 0:
@@ -65,7 +67,6 @@ def get_summary(
         total_profit=total_profit,
         total_cost=total_cost,
         avg_margin_percent=avg_margin,
-        total_iva=total_iva,
         total_print_hours=total_hours,
         total_filament_used_g=total_grams,
         total_depreciation=total_depr,

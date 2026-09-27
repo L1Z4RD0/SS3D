@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.constants import ELECTRICITY_RATE, LABOR_RATE_PER_HOUR, MARGIN_SCENARIO_PERCENTS
 from app.database import get_db
-from app.dependencies import get_current_user, require_not_watcher
+from app.dependencies import get_current_user
 from app.models.sale import Sale
 from app.models.sale_supply import SaleSupply
 from app.models.user import User
@@ -24,7 +24,6 @@ from app.services.calculator import (
     calculate_margin_percent,
     calculate_scenarios,
     get_scenario_by_margin,
-    iva_percent_for,
 )
 from app.services.inventory import consume_supply
 from app.services.sale_builder import (
@@ -32,6 +31,7 @@ from app.services.sale_builder import (
     build_cost_breakdown,
     resolve_filaments,
     resolve_printer,
+    resolve_sale_owner,
     resolve_supplies,
     to_sale_response,
 )
@@ -45,6 +45,8 @@ def compute_quote(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # Para cotizar, un observador puede combinar recursos de cualquiera de sus usuarios
+    # asignados (solo para vender se exige que todo sea de un mismo dueño).
     printer = resolve_printer(db, current_user, payload.printer_id)
     resolved_filaments = resolve_filaments(db, current_user, payload.filaments)
     resolved_supplies = resolve_supplies(db, current_user, payload.supplies)
@@ -59,11 +61,8 @@ def compute_quote(
         electricity_rate=ELECTRICITY_RATE,
         labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
-    iva_percent = iva_percent_for(current_user)
-    scenarios = calculate_scenarios(breakdown.production_cost, breakdown.shipping_cost, iva_percent=iva_percent)
 
     return QuoteResponse(
-        iva_percent=iva_percent,
         breakdown=CostBreakdownSchema(
             material_cost=breakdown.material_cost,
             depreciation_cost=breakdown.depreciation_cost,
@@ -72,17 +71,12 @@ def compute_quote(
             supplies_cost=breakdown.supplies_cost,
             shipping_cost=breakdown.shipping_cost,
             total_cost=breakdown.total_cost,
+            margin_base_cost=breakdown.margin_base_cost,
+            extras_cost=breakdown.extras_cost,
         ),
         scenarios=[
-            ScenarioItem(
-                margin_percent=s.margin_percent,
-                label=s.label,
-                base_price=s.base_price,
-                iva_amount=s.iva_amount,
-                total_price=s.total_price,
-                profit=s.profit,
-            )
-            for s in scenarios
+            ScenarioItem(margin_percent=s.margin_percent, label=s.label, price=s.price, profit=s.profit)
+            for s in calculate_scenarios(breakdown)
         ],
     )
 
@@ -92,20 +86,31 @@ def save_quote_as_sale(
     payload: SaveQuoteAsSaleRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_not_watcher),
+    current_user: User = Depends(get_current_user),
 ):
     try:
         sale_date = date_type.fromisoformat(payload.sale_date)
     except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Fecha inválida, use formato YYYY-MM-DD")
 
-    manual_price = payload.manual_total_price
+    manual_price = payload.manual_price
     if manual_price is None and payload.chosen_margin_percent not in MARGIN_SCENARIO_PERCENTS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Escenario de margen inválido")
 
+    # La venta es del dueño de la impresora. Para vender, los filamentos e insumos tienen
+    # que ser de ese mismo dueño (un observador puede cotizar mezclando, pero no vender así).
     printer = resolve_printer(db, current_user, payload.printer_id)
+    owner_id = resolve_sale_owner(db, current_user, printer.user_id)
     resolved_filaments = resolve_filaments(db, current_user, payload.filaments)
     resolved_supplies = resolve_supplies(db, current_user, payload.supplies)
+    foreign = [f for f, _ in resolved_filaments if f.user_id != owner_id] + [
+        s for s, _ in resolved_supplies if s.user_id != owner_id
+    ]
+    if foreign:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Para guardar como venta, la impresora, los filamentos y los insumos deben ser del mismo usuario.",
+        )
 
     breakdown = build_cost_breakdown(
         printer=printer,
@@ -118,31 +123,28 @@ def save_quote_as_sale(
         labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
 
-    iva_percent = iva_percent_for(current_user)
     if manual_price is not None:
-        scenario = build_manual_price_scenario(breakdown.total_cost, manual_price, iva_percent=iva_percent)
+        scenario = build_manual_price_scenario(breakdown.total_cost, manual_price)
     else:
-        scenario = get_scenario_by_margin(
-            breakdown.production_cost,
-            payload.chosen_margin_percent,
-            breakdown.shipping_cost,
-            iva_percent=iva_percent,
-        )
+        scenario = get_scenario_by_margin(breakdown, payload.chosen_margin_percent)
 
     printer.hours_used += payload.print_hours
 
     sale = Sale(
-        user_id=current_user.id,
+        user_id=owner_id,
+        created_by_user_id=current_user.id,
         sale_date=sale_date,
         client_name=payload.client_name,
         buyer_name=payload.buyer_name,
         printer_id=printer.id,
         print_hours=payload.print_hours,
         postprocess_hours=payload.postprocess_hours,
-        base_price=scenario.base_price,
-        iva_percent=iva_percent,
-        iva_amount=scenario.iva_amount,
-        total_price=scenario.total_price,
+        # Sin IVA: lo cobrado es el precio (columnas de IVA en 0, se conservan por las
+        # ventas antiguas).
+        base_price=scenario.price,
+        iva_percent=0,
+        iva_amount=0,
+        total_price=scenario.price,
         material_cost=breakdown.material_cost,
         depreciation_cost=breakdown.depreciation_cost,
         energy_cost=breakdown.energy_cost,
@@ -151,7 +153,7 @@ def save_quote_as_sale(
         shipping_cost=breakdown.shipping_cost,
         total_cost=breakdown.total_cost,
         profit=scenario.profit,
-        margin_percent=calculate_margin_percent(scenario.base_price, breakdown.total_cost),
+        margin_percent=calculate_margin_percent(scenario.price, breakdown.total_cost),
         payment_method=payload.payment_method,
         notes=payload.notes,
     )
@@ -177,7 +179,12 @@ def save_quote_as_sale(
         event_type="SALE_CREATED",
         entity_type="sale",
         entity_id=sale.id,
-        details={"source": "calculator", "client_name": sale.client_name, "total_price": str(sale.total_price)},
+        details={
+            "source": "calculator",
+            "client_name": sale.client_name,
+            "price": str(sale.total_price),
+            "owner_id": str(owner_id),
+        },
         ip_address=request.client.host if request.client else None,
     )
     db.commit()

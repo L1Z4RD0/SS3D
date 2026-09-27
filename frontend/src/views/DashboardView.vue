@@ -7,9 +7,9 @@ import { BUSINESS_NAME, BUSINESS_LOGO_URL } from "../utils/business";
 import StatCard from "../components/StatCard.vue";
 import DoughnutChart from "../components/DoughnutChart.vue";
 import Icon from "../components/Icon.vue";
-import { useIva } from "../composables/useIva";
+import { useAuthStore } from "../stores/auth";
 
-const { ivaEnabled } = useIva();
+const auth = useAuthStore();
 
 const summary = ref(null);
 const byPrinter = ref([]);
@@ -75,7 +75,13 @@ onMounted(loadAll);
         <img :src="BUSINESS_LOGO_URL" alt="Logo del negocio" class="dashboard-logo" />
         <div>
           <h1>{{ BUSINESS_NAME }}</h1>
-          <p class="page-subtitle">Resumen ejecutivo de tu negocio de impresión 3D</p>
+          <p v-if="auth.isWatcher" class="page-subtitle">
+            Resumen de las ventas que registraste con el inventario de los usuarios que observas
+          </p>
+          <p v-else class="page-subtitle">
+            Resumen ejecutivo de tu negocio de impresión 3D (incluye las ventas que registró un observador con tu
+            inventario)
+          </p>
         </div>
       </div>
       <div
@@ -112,11 +118,6 @@ onMounted(loadAll);
         <StatCard label="Ganancia" :value="formatCurrency(summary.total_profit)" />
         <StatCard label="Margen promedio" :value="formatPercent(summary.avg_margin_percent)" />
         <StatCard label="Costo total" :value="formatCurrency(summary.total_cost)" />
-        <StatCard
-          v-if="ivaEnabled || Number(summary.total_iva) > 0"
-          label="IVA cobrado"
-          :value="formatCurrency(summary.total_iva)"
-        />
         <StatCard label="Horas impresas" :value="formatNumber(summary.total_print_hours, 1)" />
         <StatCard label="Filamento usado" :value="`${formatNumber(summary.total_filament_used_g, 0)} g`" />
         <StatCard label="Luz gastada" :value="formatCurrency(summary.total_energy)" />
@@ -171,7 +172,7 @@ onMounted(loadAll);
         </div>
       </div>
 
-      <div class="card">
+      <div v-if="!auth.isWatcher" class="card">
         <div class="card-header">
           <h3>Alertas de stock de filamento</h3>
         </div>

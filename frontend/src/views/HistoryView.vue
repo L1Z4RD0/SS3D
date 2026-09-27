@@ -4,9 +4,6 @@ import * as historyApi from "../api/history";
 import { formatCurrency, formatNumber, formatPercent } from "../utils/format";
 import StatCard from "../components/StatCard.vue";
 import MonthlyTrendChart from "../components/MonthlyTrendChart.vue";
-import { useIva } from "../composables/useIva";
-
-const { ivaEnabled } = useIva();
 
 const months = ref([]);
 const selectedKeys = ref([]);
@@ -35,10 +32,6 @@ const selectedMonths = computed(() =>
     .filter((m) => selectedKeys.value.includes(monthKey(m)))
     .sort((a, b) => a.year - b.year || a.month - b.month)
 );
-
-// El IVA se muestra si está activo o si algún mes seleccionado tiene IVA registrado
-// (ventas de antes de apagarlo), para no esconder montos reales.
-const showIva = computed(() => ivaEnabled.value || selectedMonths.value.some((m) => Number(m.total_iva) > 0));
 
 const singleMonth = computed(() => (selectedMonths.value.length === 1 ? selectedMonths.value[0] : null));
 const isComparing = computed(() => selectedMonths.value.length >= 2);
@@ -111,7 +104,6 @@ function isSelected(m) {
           <StatCard label="Ganancia" :value="formatCurrency(singleMonth.total_profit)" />
           <StatCard label="Margen promedio" :value="formatPercent(singleMonth.avg_margin_percent)" />
           <StatCard label="Costo total" :value="formatCurrency(singleMonth.total_cost)" />
-          <StatCard v-if="showIva" label="IVA cobrado" :value="formatCurrency(singleMonth.total_iva)" />
           <StatCard label="Horas impresas" :value="formatNumber(singleMonth.total_print_hours, 1)" />
           <StatCard label="Filamento usado" :value="`${formatNumber(singleMonth.total_filament_used_g, 0)} g`" />
         </div>
@@ -147,7 +139,6 @@ function isSelected(m) {
                   <th class="text-right">Ganancia</th>
                   <th class="text-right">Costo</th>
                   <th class="text-right">Margen</th>
-                  <th v-if="showIva" class="text-right">IVA</th>
                   <th class="text-right">Horas</th>
                   <th class="text-right">Filamento</th>
                 </tr>
@@ -160,7 +151,6 @@ function isSelected(m) {
                   <td class="text-right mono" style="color: var(--success)">{{ formatCurrency(m.total_profit) }}</td>
                   <td class="text-right mono">{{ formatCurrency(m.total_cost) }}</td>
                   <td class="text-right">{{ formatPercent(m.avg_margin_percent) }}</td>
-                  <td v-if="showIva" class="text-right mono">{{ formatCurrency(m.total_iva) }}</td>
                   <td class="text-right mono">{{ formatNumber(m.total_print_hours, 1) }}</td>
                   <td class="text-right mono">{{ formatNumber(m.total_filament_used_g, 0) }} g</td>
                 </tr>

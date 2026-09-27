@@ -15,8 +15,14 @@ from app.models.base import TimestampMixin, UUIDMixin
 class Sale(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "sales"
 
+    # Dueño de la venta: el usuario cuyo inventario (impresora, filamentos, insumos) se usó.
     user_id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Quién la registró: el mismo dueño, o un observador (watcher) que vende con el
+    # inventario del dueño. Se muestra siempre, por transparencia con el dueño.
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     sale_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     client_name: Mapped[str] = mapped_column(Text, nullable=False)
@@ -58,3 +64,5 @@ class Sale(UUIDMixin, TimestampMixin, Base):
     )
     printer: Mapped["Printer"] = relationship()
     filament: Mapped["Filament | None"] = relationship()
+    owner: Mapped["User"] = relationship(foreign_keys=[user_id])
+    created_by: Mapped["User | None"] = relationship(foreign_keys=[created_by_user_id])
