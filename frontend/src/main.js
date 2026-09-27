@@ -1,9 +1,28 @@
 import { createApp } from "vue";
 import { createPinia } from "pinia";
+import { registerSW } from "virtual:pwa-register";
 import App from "./App.vue";
 import router from "./router";
 import { useAuthStore } from "./stores/auth";
 import "./assets/main.css";
+
+// Actualización de la PWA. Antes el service worker se registraba con el script por
+// defecto, que descarga la versión nueva en segundo plano pero nunca recarga la página:
+// la app podía quedarse días mostrando una versión vieja contra un backend nuevo (así
+// se veían precios en $0 y columnas de IVA ya eliminadas). Con registerSW en modo
+// autoUpdate, apenas la versión nueva toma el control la página se recarga sola.
+// Además se revisa cada 30 minutos por si la app queda abierta mucho tiempo.
+// (El borrador de la Calculadora se guarda solo, así que una recarga no lo pierde.)
+const UPDATE_CHECK_MS = 30 * 60 * 1000;
+registerSW({
+  immediate: true,
+  onRegisteredSW(_swUrl, registration) {
+    if (!registration) return;
+    setInterval(() => {
+      if (navigator.onLine) registration.update().catch(() => {});
+    }, UPDATE_CHECK_MS);
+  },
+});
 
 const app = createApp(App);
 app.use(createPinia());
