@@ -26,6 +26,7 @@ from app.services.calculator import (
     get_scenario_by_margin,
 )
 from app.services.inventory import consume_supply
+from app.services.order_status import record_status, start_as_delivered
 from app.services.sale_builder import (
     apply_filaments_to_sale,
     build_cost_breakdown,
@@ -157,8 +158,10 @@ def save_quote_as_sale(
         payment_method=payload.payment_method,
         notes=payload.notes,
     )
+    start_as_delivered(sale)
     db.add(sale)
     db.flush()
+    record_status(db, sale, sale.status, current_user, "Venta registrada desde la Calculadora")
 
     exhausted_filaments = apply_filaments_to_sale(db, sale, resolved_filaments)
 

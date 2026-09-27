@@ -8,6 +8,7 @@ from app.database import get_db
 from app.dependencies import get_current_user, readable_user_ids, require_not_watcher
 from app.models.filament import Filament
 from app.models.sale import Sale
+from app.models.sale_filament import SaleFilament
 from app.models.user import User
 from app.schemas.filament import FilamentCreateRequest, FilamentResponse, FilamentUpdateRequest
 from app.services.audit import log_event
@@ -173,7 +174,14 @@ def delete_filament(
     current_user: User = Depends(require_not_watcher),
 ):
     filament = _get_owned_filament(db, filament_id, current_user)
-    has_sales = db.query(Sale.id).filter(Sale.filament_id == filament.id).first() is not None
+    # Cualquier pedido que lo haya usado cuenta como historial: de un solo filamento
+    # (sales.filament_id) o multicolor (sale_filaments), incluidos cancelados y los que
+    # originaron piezas del Almacén. Antes solo se miraba sales.filament_id, así que un
+    # filamento usado solo en trabajos multicolor intentaba borrarse y fallaba.
+    has_sales = (
+        db.query(Sale.id).filter(Sale.filament_id == filament.id).first() is not None
+        or db.query(SaleFilament.id).filter(SaleFilament.filament_id == filament.id).first() is not None
+    )
 
     if has_sales:
         filament.is_active = False

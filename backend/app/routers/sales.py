@@ -15,6 +15,7 @@ from app.schemas.sale import SaleCreateRequest, SalePage, SaleResponse, SaleUpda
 from app.services.audit import log_event
 from app.services.calculator import calculate_margin_percent, money
 from app.services.inventory import consume_supply, restore_filament, restore_supply
+from app.services.order_status import record_status, start_as_delivered, sync_legacy_dates
 from app.services.sale_builder import (
     apply_filaments_to_sale,
     build_cost_breakdown,
@@ -152,8 +153,10 @@ def create_sale(
         payment_method=payload.payment_method,
         notes=payload.notes,
     )
+    start_as_delivered(sale)
     db.add(sale)
     db.flush()
+    record_status(db, sale, sale.status, current_user, "Venta registrada")
 
     exhausted_filaments = apply_filaments_to_sale(db, sale, resolved_filaments)
 
@@ -259,6 +262,7 @@ def update_sale(
             continue
         setattr(sale, field, value)
 
+    sync_legacy_dates(sale)
     sale.printer_id = printer.id
     sale.print_hours = new_print_hours
     sale.postprocess_hours = new_postprocess_hours

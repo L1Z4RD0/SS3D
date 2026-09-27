@@ -1,0 +1,4 @@
+# Solo para desarrollo y pruebas (no se instala en Render: allá se usa requirements.txt).
+-r requirements.txt
+pytest>=8.3
+httpx2>=0.1

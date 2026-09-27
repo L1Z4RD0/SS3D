@@ -8,9 +8,11 @@ from app.models.refresh_token import RefreshToken
 from app.models.role import Role
 from app.models.sale import Sale
 from app.models.sale_filament import SaleFilament
+from app.models.sale_status_history import SaleStatusHistory
 from app.models.sale_supply import SaleSupply
 from app.models.supply import Supply
 from app.models.user import User
+from app.models.warehouse_item import WarehouseItem
 from app.models.watcher_assignment import WatcherAssignment
 
 __all__ = [
@@ -27,8 +29,10 @@ __all__ = [
     "Role",
     "Sale",
     "SaleFilament",
+    "SaleStatusHistory",
     "SaleSupply",
     "Supply",
     "User",
+    "WarehouseItem",
     "WatcherAssignment",
 ]

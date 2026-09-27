@@ -117,17 +117,25 @@ async function handleSubmit() {
   gap: 16px;
 }
 
+/* Foto del taller detrás del degradado original, que queda semitransparente para
+   difuminarla y mantener legible el texto. La foto va optimizada en WebP (~145 KB). */
 .login-side {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(160deg, var(--sidebar-bg), #2a2450 120%);
+  background:
+    linear-gradient(160deg, rgba(23, 24, 43, 0.78), rgba(42, 36, 80, 0.62) 120%),
+    url("../assets/login-bg.webp") center / cover no-repeat,
+    var(--sidebar-bg);
   padding: 48px;
 }
 
 .login-side-content {
+  position: relative;
   max-width: 420px;
   color: #fff;
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.35);
 }
 
 .login-side-content h2 {
