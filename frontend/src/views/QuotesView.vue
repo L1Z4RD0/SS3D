@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import * as quotesApi from "../api/quotes";
 import { formatCurrency, formatDate } from "../utils/format";
 import { extractApiError } from "../utils/validation";
@@ -11,6 +11,10 @@ const loading = ref(true);
 const loadError = ref("");
 const limit = 20;
 const offset = ref(0);
+
+// Columnas de IVA solo si alguna cotización de la página lo tiene (con el IVA
+// apagado en beta, todas salen en 0 y las columnas serían ruido).
+const showIva = computed(() => quotes.value.some((q) => Number(q.iva_amount) > 0));
 
 const selected = ref(null);
 const showDocument = ref(false);
@@ -76,8 +80,10 @@ onMounted(load);
               <th>N°</th>
               <th>Cliente</th>
               <th>Fecha</th>
-              <th class="text-right">Neto</th>
-              <th class="text-right">IVA</th>
+              <template v-if="showIva">
+                <th class="text-right">Neto</th>
+                <th class="text-right">IVA</th>
+              </template>
               <th class="text-right">Total</th>
               <th></th>
             </tr>
@@ -87,8 +93,10 @@ onMounted(load);
               <td><strong>#{{ q.quote_number }}</strong></td>
               <td>{{ q.client_name }}</td>
               <td>{{ formatDate(q.quote_date) }}</td>
-              <td class="text-right mono">{{ formatCurrency(q.subtotal) }}</td>
-              <td class="text-right mono">{{ formatCurrency(q.iva_amount) }}</td>
+              <template v-if="showIva">
+                <td class="text-right mono">{{ formatCurrency(q.subtotal) }}</td>
+                <td class="text-right mono">{{ formatCurrency(q.iva_amount) }}</td>
+              </template>
               <td class="text-right mono"><strong>{{ formatCurrency(q.total) }}</strong></td>
               <td class="text-right">
                 <button class="btn btn-secondary btn-sm" @click="openDocument(q)">Ver comprobante</button>

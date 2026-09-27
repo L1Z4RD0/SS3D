@@ -34,6 +34,7 @@ def _to_response(filament: Filament) -> FilamentResponse:
     stock_percent, stock_status = filament_stock_status(filament)
     return FilamentResponse(
         id=filament.id,
+        owner_id=filament.user_id,
         brand=filament.brand,
         type=filament.type,
         color=filament.color,

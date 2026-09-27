@@ -4,14 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import update
 from sqlalchemy.orm import Session, joinedload
 
-from app.constants import IVA_PERCENT
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.quote import Quote, QuoteItem
 from app.models.user import User
 from app.schemas.quote import QuoteCreateRequest, QuotePage, QuoteResponse
 from app.services.audit import log_event
-from app.services.calculator import money
+from app.services.calculator import iva_percent_for, money
 
 router = APIRouter(prefix="/api/quotes", tags=["quotes"])
 
@@ -68,7 +67,8 @@ def create_quote(
         for item in payload.items
     ]
     subtotal = money(sum((i.subtotal for i in items), 0))
-    iva_amount = money(subtotal * IVA_PERCENT / 100)
+    iva_percent = iva_percent_for(current_user)
+    iva_amount = money(subtotal * iva_percent / 100)
     total = money(subtotal + iva_amount)
 
     quote = Quote(
@@ -77,7 +77,7 @@ def create_quote(
         client_name=payload.client_name,
         quote_date=payload.quote_date,
         subtotal=subtotal,
-        iva_percent=IVA_PERCENT,
+        iva_percent=iva_percent,
         iva_amount=iva_amount,
         total=total,
         document_snapshot=payload.document_snapshot,

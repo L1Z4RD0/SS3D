@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted, reactive, computed } from "vue";
 import * as inventoryApi from "../api/inventory";
+import { useObservedUsers } from "../composables/useObservedUsers";
 import { formatCurrency, formatNumber, formatPercent, formatDate } from "../utils/format";
 import { GRAMS_MAX, isValidNumber, extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
@@ -48,9 +49,36 @@ function toggleExhausted() {
 function toggleSort() {
   sortDirection.value = sortDirection.value === null ? "desc" : sortDirection.value === "desc" ? "asc" : null;
 }
+/* -------- Observador: inventario de cada usuario asignado por separado --------
+   El backend le entrega al watcher los filamentos/insumos de todos sus usuarios
+   juntos; acá se muestran de a un usuario a la vez para que no se mezclen. */
+const { observedUsers, loadingObserved, loadObservedUsers } = useObservedUsers();
+const selectedOwnerId = ref(null);
+
+async function loadOwners() {
+  await loadObservedUsers();
+  if (!observedUsers.value.some((u) => u.id === selectedOwnerId.value)) {
+    selectedOwnerId.value = observedUsers.value[0]?.id ?? null;
+  }
+}
+
+function belongsToSelected(item) {
+  return !auth.isWatcher || item.owner_id === selectedOwnerId.value;
+}
+
+const ownerFilaments = computed(() => filaments.value.filter(belongsToSelected));
+const ownerSupplies = computed(() => supplies.value.filter(belongsToSelected));
+
+function ownerCounts(userId) {
+  return {
+    filaments: filaments.value.filter((f) => f.owner_id === userId).length,
+    supplies: supplies.value.filter((s) => s.owner_id === userId).length,
+  };
+}
+
 const displayedFilaments = computed(() => {
-  if (!sortDirection.value) return filaments.value;
-  const sorted = [...filaments.value].sort((a, b) => Number(a.available_g) - Number(b.available_g));
+  if (!sortDirection.value) return ownerFilaments.value;
+  const sorted = [...ownerFilaments.value].sort((a, b) => Number(a.available_g) - Number(b.available_g));
   return sortDirection.value === "desc" ? sorted.reverse() : sorted;
 });
 const sortLabel = computed(() => {
@@ -78,6 +106,7 @@ async function loadSupplies() {
 }
 
 onMounted(() => {
+  if (auth.isWatcher) loadOwners();
   loadFilaments();
   loadSupplies();
   ensureFilamentCatalog();
@@ -335,6 +364,32 @@ async function deleteSupply(s) {
       <p class="page-subtitle">Stock de filamentos e insumos, con alertas automáticas de nivel mínimo</p>
     </div>
 
+    <div v-if="auth.isWatcher" class="card owner-picker">
+      <div v-if="loadingObserved && !observedUsers.length" class="text-muted text-sm">Cargando usuarios...</div>
+      <div v-else-if="!observedUsers.length" class="text-muted text-sm">
+        Todavía no tienes usuarios asignados. Pídele al administrador que te asigne a quién observar.
+      </div>
+      <template v-else>
+        <span class="owner-picker-label">Inventario de</span>
+        <div class="owner-picker-list" role="group" aria-label="Usuario cuyo inventario ver">
+          <button
+            v-for="u in observedUsers"
+            :key="u.id"
+            type="button"
+            class="owner-chip"
+            :class="{ selected: selectedOwnerId === u.id }"
+            :aria-pressed="selectedOwnerId === u.id"
+            @click="selectedOwnerId = u.id"
+          >
+            <strong>{{ u.username }}</strong>
+            <span class="owner-chip-meta">
+              {{ ownerCounts(u.id).filaments }} filamentos · {{ ownerCounts(u.id).supplies }} insumos
+            </span>
+          </button>
+        </div>
+      </template>
+    </div>
+
     <div class="tabs">
       <button class="tab-btn" :class="{ active: tab === 'filaments' }" @click="tab = 'filaments'">Filamentos</button>
       <button class="tab-btn" :class="{ active: tab === 'supplies' }" @click="tab = 'supplies'">Insumos</button>
@@ -358,9 +413,10 @@ async function deleteSupply(s) {
       </div>
 
       <div v-if="loadingFilaments" class="empty-state">Cargando...</div>
-      <div v-else-if="!filaments.length" class="empty-state">
+      <div v-else-if="!ownerFilaments.length" class="empty-state">
         <h3>Sin filamentos registrados</h3>
-        <p>Agrega tu primer carrete para empezar a llevar el stock.</p>
+        <p v-if="auth.isWatcher">Este usuario no tiene filamentos{{ showExhausted ? "" : " con stock" }}.</p>
+        <p v-else>Agrega tu primer carrete para empezar a llevar el stock.</p>
       </div>
       <div v-else class="table-wrap">
         <table>
@@ -407,15 +463,16 @@ async function deleteSupply(s) {
     <div v-else class="card">
       <div class="card-header">
         <h3>Insumos y accesorios</h3>
-        <button class="btn btn-primary btn-sm" @click="openCreateSupply">
+        <button v-if="!auth.isWatcher" class="btn btn-primary btn-sm" @click="openCreateSupply">
           <Icon name="plus" :size="15" /> Nuevo insumo
         </button>
       </div>
 
       <div v-if="loadingSupplies" class="empty-state">Cargando...</div>
-      <div v-else-if="!supplies.length" class="empty-state">
+      <div v-else-if="!ownerSupplies.length" class="empty-state">
         <h3>Sin insumos registrados</h3>
-        <p>Agrega argollas, imanes, pegamento u otros consumibles.</p>
+        <p v-if="auth.isWatcher">Este usuario no tiene insumos registrados.</p>
+        <p v-else>Agrega argollas, imanes, pegamento u otros consumibles.</p>
       </div>
       <div v-else class="table-wrap">
         <table>
@@ -430,7 +487,7 @@ async function deleteSupply(s) {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="s in supplies" :key="s.id">
+            <tr v-for="s in ownerSupplies" :key="s.id">
               <td><strong>{{ s.name }}</strong></td>
               <td>{{ s.category }}</td>
               <td class="text-right mono">{{ formatNumber(s.quantity_available, 0) }}</td>
@@ -445,7 +502,7 @@ async function deleteSupply(s) {
                 <span v-else class="badge badge-success">OK</span>
               </td>
               <td class="text-right">
-                <div class="flex gap-2" style="justify-content: flex-end">
+                <div v-if="!auth.isWatcher" class="flex gap-2" style="justify-content: flex-end">
                   <button class="btn btn-icon btn-ghost" @click="openEditSupply(s)"><Icon name="edit" :size="16" /></button>
                   <button class="btn btn-icon btn-ghost" @click="deleteSupply(s)"><Icon name="trash" :size="16" /></button>
                 </div>
@@ -607,6 +664,55 @@ async function deleteSupply(s) {
 </template>
 
 <style scoped>
+.owner-picker {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.owner-picker-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.owner-picker-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.owner-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.owner-chip.selected {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.owner-chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.owner-chip-meta {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
 .color-swatch-grid {
   display: flex;
   flex-wrap: wrap;

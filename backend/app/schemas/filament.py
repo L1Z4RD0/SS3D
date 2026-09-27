@@ -33,6 +33,8 @@ class FilamentUpdateRequest(BaseModel):
 
 class FilamentResponse(BaseModel):
     id: uuid.UUID
+    # Dueño del carrete: un watcher recibe los de varios usuarios y los separa por esto.
+    owner_id: uuid.UUID
     brand: str
     type: str
     color: str

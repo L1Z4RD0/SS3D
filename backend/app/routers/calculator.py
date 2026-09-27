@@ -4,7 +4,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from app.constants import ELECTRICITY_RATE, IVA_PERCENT, LABOR_RATE_PER_HOUR, MARGIN_SCENARIO_PERCENTS
+from app.constants import ELECTRICITY_RATE, LABOR_RATE_PER_HOUR, MARGIN_SCENARIO_PERCENTS
 from app.database import get_db
 from app.dependencies import get_current_user, require_not_watcher
 from app.models.sale import Sale
@@ -24,6 +24,7 @@ from app.services.calculator import (
     calculate_margin_percent,
     calculate_scenarios,
     get_scenario_by_margin,
+    iva_percent_for,
 )
 from app.services.inventory import consume_supply
 from app.services.sale_builder import (
@@ -58,9 +59,11 @@ def compute_quote(
         electricity_rate=ELECTRICITY_RATE,
         labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
-    scenarios = calculate_scenarios(breakdown.production_cost, breakdown.shipping_cost)
+    iva_percent = iva_percent_for(current_user)
+    scenarios = calculate_scenarios(breakdown.production_cost, breakdown.shipping_cost, iva_percent=iva_percent)
 
     return QuoteResponse(
+        iva_percent=iva_percent,
         breakdown=CostBreakdownSchema(
             material_cost=breakdown.material_cost,
             depreciation_cost=breakdown.depreciation_cost,
@@ -115,11 +118,15 @@ def save_quote_as_sale(
         labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
 
+    iva_percent = iva_percent_for(current_user)
     if manual_price is not None:
-        scenario = build_manual_price_scenario(breakdown.total_cost, manual_price)
+        scenario = build_manual_price_scenario(breakdown.total_cost, manual_price, iva_percent=iva_percent)
     else:
         scenario = get_scenario_by_margin(
-            breakdown.production_cost, payload.chosen_margin_percent, breakdown.shipping_cost
+            breakdown.production_cost,
+            payload.chosen_margin_percent,
+            breakdown.shipping_cost,
+            iva_percent=iva_percent,
         )
 
     printer.hours_used += payload.print_hours
@@ -133,7 +140,7 @@ def save_quote_as_sale(
         print_hours=payload.print_hours,
         postprocess_hours=payload.postprocess_hours,
         base_price=scenario.base_price,
-        iva_percent=IVA_PERCENT,
+        iva_percent=iva_percent,
         iva_amount=scenario.iva_amount,
         total_price=scenario.total_price,
         material_cost=breakdown.material_cost,

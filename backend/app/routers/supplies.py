@@ -26,6 +26,7 @@ def _to_response(supply: Supply) -> SupplyResponse:
     low_stock = supply.min_alert_qty is not None and supply.quantity_available <= supply.min_alert_qty
     return SupplyResponse(
         id=supply.id,
+        owner_id=supply.user_id,
         name=supply.name,
         category=supply.category,
         quantity_available=supply.quantity_available,

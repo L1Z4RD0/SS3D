@@ -5,10 +5,11 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, is_watcher
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
-from app.schemas.auth import CurrentUserResponse, LoginRequest, TokenResponse
+from app.models.watcher_assignment import WatcherAssignment
+from app.schemas.auth import CurrentUserResponse, LoginRequest, ObservedUserResponse, TokenResponse
 from app.security import (
     LOCKOUT_DURATION,
     MAX_FAILED_LOGIN_ATTEMPTS,
@@ -194,4 +195,21 @@ def me(current_user: User = Depends(get_current_user)):
         username=current_user.username,
         role=current_user.role.name,
         is_active=current_user.is_active,
+        iva_enabled=current_user.iva_enabled,
     )
+
+
+@router.get("/me/observed-users", response_model=list[ObservedUserResponse])
+def observed_users(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Usuarios cuyo inventario puede ver este watcher (vacío para cualquier otro rol).
+    Sirve para mostrar el inventario de cada uno por separado en vez de mezclado."""
+    if not is_watcher(current_user):
+        return []
+    rows = (
+        db.query(User.id, User.username)
+        .join(WatcherAssignment, WatcherAssignment.observed_user_id == User.id)
+        .filter(WatcherAssignment.watcher_user_id == current_user.id)
+        .order_by(User.username)
+        .all()
+    )
+    return [ObservedUserResponse(id=row.id, username=row.username) for row in rows]

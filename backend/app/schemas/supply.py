@@ -40,6 +40,8 @@ class SupplyUpdateRequest(BaseModel):
 
 class SupplyResponse(BaseModel):
     id: uuid.UUID
+    # Dueño del insumo: un watcher recibe los de varios usuarios y los separa por esto.
+    owner_id: uuid.UUID
     name: str
     category: str
     quantity_available: Decimal

@@ -9,6 +9,9 @@ const props = defineProps({
 });
 
 const quoteNumberLabel = computed(() => `COT-${String(props.quote.quote_number).padStart(4, "0")}`);
+// Se decide por la cotización (no por el usuario actual): una generada con IVA se
+// sigue mostrando con IVA aunque después se apague, y viceversa.
+const hasIva = computed(() => Number(props.quote.iva_percent) > 0);
 </script>
 
 <template>
@@ -37,7 +40,7 @@ const quoteNumberLabel = computed(() => `COT-${String(props.quote.quote_number).
         <tr>
           <th>Producto</th>
           <th class="text-right">Cantidad</th>
-          <th class="text-right">Precio unitario (sin IVA)</th>
+          <th class="text-right">{{ hasIva ? "Precio unitario (sin IVA)" : "Precio unitario" }}</th>
           <th class="text-right">Subtotal</th>
         </tr>
       </thead>
@@ -52,16 +55,18 @@ const quoteNumberLabel = computed(() => `COT-${String(props.quote.quote_number).
     </table>
 
     <div class="quote-doc-totals">
-      <div>
-        <span>Total sin IVA</span>
-        <span>{{ formatCurrency(quote.subtotal) }}</span>
-      </div>
-      <div>
-        <span>IVA ({{ formatNumber(quote.iva_percent, 0) }}%)</span>
-        <span>{{ formatCurrency(quote.iva_amount) }}</span>
-      </div>
+      <template v-if="hasIva">
+        <div>
+          <span>Total sin IVA</span>
+          <span>{{ formatCurrency(quote.subtotal) }}</span>
+        </div>
+        <div>
+          <span>IVA ({{ formatNumber(quote.iva_percent, 0) }}%)</span>
+          <span>{{ formatCurrency(quote.iva_amount) }}</span>
+        </div>
+      </template>
       <div class="quote-doc-total-final">
-        <span>Total con IVA</span>
+        <span>{{ hasIva ? "Total con IVA" : "Total" }}</span>
         <span>{{ formatCurrency(quote.total) }}</span>
       </div>
     </div>

@@ -2,7 +2,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.calculator import FilamentUsageInput, SupplyUsageInput
 
@@ -17,11 +17,20 @@ class SaleCreateRequest(BaseModel):
     filaments: list[FilamentUsageInput] = Field(default_factory=list)
     print_hours: Decimal = Field(ge=0, default=0)
     postprocess_hours: Decimal = Field(ge=0, default=0)
-    base_price: Decimal = Field(ge=0)
+    base_price: Decimal | None = Field(default=None, ge=0)
+    # Precio final con IVA fijado a mano por el usuario (para publicar un número
+    # redondo). Si viene, manda por sobre base_price.
+    manual_total_price: Decimal | None = Field(default=None, gt=0)
     shipping_cost: Decimal = Field(ge=0, default=0)
     supplies: list[SupplyUsageInput] = Field(default_factory=list)
     payment_method: str = Field(pattern="^(" + "|".join(PAYMENT_METHODS) + ")$")
     notes: str | None = None
+
+    @model_validator(mode="after")
+    def _require_price(self):
+        if self.base_price is None and self.manual_total_price is None:
+            raise ValueError("Debes indicar un precio de venta.")
+        return self
 
 
 class SaleUpdateRequest(BaseModel):
@@ -33,6 +42,7 @@ class SaleUpdateRequest(BaseModel):
     print_hours: Decimal | None = Field(default=None, ge=0)
     postprocess_hours: Decimal | None = Field(default=None, ge=0)
     base_price: Decimal | None = Field(default=None, ge=0)
+    manual_total_price: Decimal | None = Field(default=None, gt=0)
     shipping_cost: Decimal | None = Field(default=None, ge=0)
     supplies: list[SupplyUsageInput] | None = None
     payment_method: str | None = Field(default=None, pattern="^(" + "|".join(PAYMENT_METHODS) + ")$")

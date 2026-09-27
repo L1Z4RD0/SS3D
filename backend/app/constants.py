@@ -23,9 +23,9 @@ class MarginScenario(TypedDict):
 
 
 MARGIN_SCENARIOS: list[MarginScenario] = [
-    {"margin_percent": 100, "label": "Precio mayorista"},
-    {"margin_percent": 150, "label": "Precio Normal"},
-    {"margin_percent": 200, "label": "Precio Personalizado"},
+    {"margin_percent": 90, "label": "Precio mayorista"},
+    {"margin_percent": 140, "label": "Precio Normal"},
+    {"margin_percent": 190, "label": "Precio Personalizado"},
 ]
 
 MARGIN_SCENARIO_PERCENTS = {s["margin_percent"] for s in MARGIN_SCENARIOS}

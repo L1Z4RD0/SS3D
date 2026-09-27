@@ -11,11 +11,20 @@ const props = defineProps({
   excludeIds: { type: Array, default: () => [] },
   title: { type: String, default: "Seleccionar filamento" },
   subtitle: { type: String, default: "Elige el filamento que deseas usar en tu impresión." },
+  // { owner_id: username } — solo para el observador, que ve filamentos de varios
+  // usuarios y necesita saber de quién es cada uno. Vacío = no se muestra dueño.
+  ownerNames: { type: Object, default: () => ({}) },
 });
 const emit = defineEmits(["select", "close"]);
 
 const search = ref("");
 const materialFilter = ref("");
+const ownerFilter = ref("");
+
+const showOwners = computed(() => Object.keys(props.ownerNames).length > 0);
+function ownerOf(f) {
+  return props.ownerNames[f.owner_id] || "usuario desconocido";
+}
 const selectedId = ref("");
 const { catalog, ensureFilamentCatalog } = useFilamentCatalog();
 
@@ -46,8 +55,11 @@ const filtered = computed(() => {
   const q = search.value.trim().toLowerCase();
   return pickableFilaments.value.filter((f) => {
     if (materialFilter.value && f.type !== materialFilter.value) return false;
+    if (ownerFilter.value && f.owner_id !== ownerFilter.value) return false;
     if (!q) return true;
-    return [f.brand, f.type, f.color, f.sku].filter(Boolean).some((v) => String(v).toLowerCase().includes(q));
+    const fields = [f.brand, f.type, f.color, f.sku];
+    if (showOwners.value) fields.push(ownerOf(f));
+    return fields.filter(Boolean).some((v) => String(v).toLowerCase().includes(q));
   });
 });
 
@@ -65,9 +77,21 @@ function confirm() {
       </div>
     </template>
 
-    <div class="flex gap-2">
+    <div class="flex gap-2 picker-toolbar">
       <div class="field" style="flex: 1; margin: 0">
-        <input v-model="search" type="text" placeholder="Buscar por nombre o SKU..." autofocus />
+        <input
+          v-model="search"
+          type="text"
+          :placeholder="showOwners ? 'Buscar por nombre, SKU o dueño...' : 'Buscar por nombre o SKU...'"
+          autofocus
+        />
+      </div>
+      <div v-if="showOwners" class="picker-filter">
+        <Icon name="users" :size="14" />
+        <select v-model="ownerFilter" aria-label="Filtrar por dueño">
+          <option value="">Todos los dueños</option>
+          <option v-for="(name, id) in ownerNames" :key="id" :value="id">{{ name }}</option>
+        </select>
       </div>
       <div class="picker-filter">
         <Icon name="filter" :size="14" />
@@ -97,6 +121,7 @@ function confirm() {
           <FilamentSpoolIcon :color="swatchColor(f.color)" :size="90" />
           <span v-if="selectedId === f.id" class="picker-check"><Icon name="check" :size="12" /></span>
         </div>
+        <span v-if="showOwners" class="picker-card-owner">De {{ ownerOf(f) }}</span>
         <strong class="picker-card-title">{{ f.brand }} · {{ f.type }}</strong>
         <span v-if="f.sku" class="text-muted text-sm">SKU: {{ f.sku }}</span>
         <span class="picker-card-color">
@@ -210,6 +235,23 @@ function confirm() {
 
 .picker-card-title {
   font-size: 0.92rem;
+}
+
+.picker-card-owner {
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-toolbar {
+  flex-wrap: wrap;
 }
 
 .picker-card-color {

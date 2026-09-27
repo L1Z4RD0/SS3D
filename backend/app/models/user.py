@@ -23,5 +23,8 @@ class User(UUIDMixin, TimestampMixin, Base):
     # Contador propio de cotizaciones: solo sube, así el número nunca se reutiliza
     # aunque se borren cotizaciones viejas.
     last_quote_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # Beta: el IVA viene apagado y el administrador lo activa por usuario. Apagado, todos
+    # los cálculos usan 0% (la lógica de IVA se conserva intacta para la versión final).
+    iva_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     role: Mapped["Role"] = relationship(back_populates="users")

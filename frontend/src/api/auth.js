@@ -12,6 +12,10 @@ export function fetchMe() {
   return client.get("/api/auth/me").then((r) => r.data);
 }
 
+export function fetchObservedUsers() {
+  return client.get("/api/auth/me/observed-users").then((r) => r.data);
+}
+
 export function refresh() {
   return client.post("/api/auth/refresh").then((r) => r.data);
 }

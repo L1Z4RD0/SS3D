@@ -21,6 +21,8 @@ class PrinterUpdateRequest(BaseModel):
 
 class PrinterResponse(BaseModel):
     id: uuid.UUID
+    # Dueño de la impresora: un watcher recibe las de varios usuarios y necesita saber de quién es.
+    owner_id: uuid.UUID
     name: str
     purchase_value: Decimal
     lifetime_hours: Decimal

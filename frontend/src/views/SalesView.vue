@@ -1,6 +1,7 @@
 <script setup>
-import { ref, reactive, onMounted, computed } from "vue";
+import { ref, reactive, onMounted, computed, watch } from "vue";
 import * as salesApi from "../api/sales";
+import * as calculatorApi from "../api/calculator";
 import * as printersApi from "../api/printers";
 import * as inventoryApi from "../api/inventory";
 import { PAYMENT_METHODS } from "../api/sales";
@@ -8,9 +9,12 @@ import { formatCurrency, formatPercent, formatDate, todayISO } from "../utils/fo
 import { GRAMS_MAX, isValidGrams, isValidNumber, gramsErrorMessage, extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
 import { promptExhaustedFilaments } from "../utils/exhaustedFilaments";
+import { useIva, IVA_PERCENT } from "../composables/useIva";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
 import FilamentPickerModal from "../components/FilamentPickerModal.vue";
+
+const { ivaEnabled, ivaRate } = useIva();
 
 const sales = ref([]);
 const total = ref(0);
@@ -98,12 +102,116 @@ const emptyForm = () => ({
   printer_id: "",
   print_hours: 0,
   postprocess_hours: 0,
-  base_price: null,
   shipping_cost: 0,
   payment_method: "efectivo",
   notes: "",
 });
 const form = reactive(emptyForm());
+
+/* -------- Precio: el sistema sugiere, el usuario decide --------
+   Con los datos del trabajo se calculan en vivo los mismos escenarios de la
+   Calculadora; el usuario elige uno o marca la casilla y escribe su propio precio
+   final (IVA incluido si está activo), p. ej. para redondear. */
+const suggestion = ref(null); // respuesta de /api/calculator/quote
+const suggesting = ref(false);
+const suggestError = ref("");
+const selectedMargin = ref(null);
+const useManualPrice = ref(false);
+const manualPrice = ref(null);
+// Al editar: precio con que se guardó la venta. Si el usuario deja el total tal cual,
+// no se manda precio y el backend conserva exactamente lo cobrado (y su IVA original).
+const originalPrice = ref(null); // { total, ivaRate }
+let suggestSeq = 0;
+let suggestTimer = null;
+
+const selectedScenario = computed(
+  () => suggestion.value?.scenarios.find((s) => s.margin_percent === selectedMargin.value) || null
+);
+
+const manualPriceBreakdown = computed(() => {
+  if (!useManualPrice.value || !isValidNumber(manualPrice.value, { min: 0, allowZero: false })) return null;
+  const total = Number(manualPrice.value);
+  const rate = isOriginalPrice(total) ? originalPrice.value.ivaRate : ivaRate.value;
+  const base = total / (1 + rate);
+  const cost = suggestion.value ? Number(suggestion.value.breakdown.total_cost) : null;
+  return { total, base, iva: total - base, profit: cost === null ? null : base - cost };
+});
+
+function buildJobPayload() {
+  return {
+    printer_id: form.printer_id,
+    filaments: filamentRows.value.map((r) => ({ filament_id: r.filament_id, grams_used: r.grams_used })),
+    print_hours: Number(form.print_hours) || 0,
+    postprocess_hours: Number(form.postprocess_hours) || 0,
+    shipping_cost: Number(form.shipping_cost) || 0,
+    supplies: supplyRows.value.map((r) => ({ supply_id: r.supply_id, quantity: r.quantity })),
+  };
+}
+
+async function refreshSuggestion() {
+  clearTimeout(suggestTimer);
+  const seq = ++suggestSeq;
+  if (!form.printer_id || validateJobInputs()) {
+    suggestion.value = null;
+    suggestError.value = "";
+    suggesting.value = false;
+    return;
+  }
+  suggesting.value = true;
+  try {
+    const result = await calculatorApi.computeQuote(buildJobPayload());
+    if (seq !== suggestSeq) return; // llegó tarde, ya hay un cálculo más nuevo en curso
+    suggestion.value = result;
+    suggestError.value = "";
+    if (!result.scenarios.some((s) => s.margin_percent === selectedMargin.value)) {
+      // Por defecto "Precio Normal" (el del medio).
+      selectedMargin.value = (result.scenarios[1] || result.scenarios[0])?.margin_percent ?? null;
+    }
+  } catch (err) {
+    if (seq !== suggestSeq) return;
+    suggestion.value = null;
+    suggestError.value = extractApiError(err, "No se pudo calcular el precio sugerido.");
+  } finally {
+    if (seq === suggestSeq) suggesting.value = false;
+  }
+}
+
+watch(
+  () => (showModal.value ? JSON.stringify(buildJobPayload()) : null),
+  (key) => {
+    if (key === null) return;
+    clearTimeout(suggestTimer);
+    suggestTimer = setTimeout(refreshSuggestion, 400);
+  }
+);
+
+watch(useManualPrice, (on) => {
+  if (!on || manualPrice.value) return;
+  // Parte del escenario elegido redondeado como guía; el usuario lo ajusta.
+  manualPrice.value = selectedScenario.value ? Math.round(Number(selectedScenario.value.total_price)) : null;
+});
+
+function resetPricing() {
+  suggestion.value = null;
+  suggestError.value = "";
+  selectedMargin.value = null;
+  useManualPrice.value = false;
+  manualPrice.value = null;
+  originalPrice.value = null;
+}
+
+function isOriginalPrice(total) {
+  return !!originalPrice.value && total === originalPrice.value.total;
+}
+
+function buildPricingPayload() {
+  if (useManualPrice.value) {
+    const total = Number(manualPrice.value);
+    if (isOriginalPrice(total)) return {};
+    return { base_price: null, manual_total_price: total };
+  }
+  return { base_price: Number(selectedScenario.value.base_price), manual_total_price: null };
+}
 
 function addFilamentRow() {
   filamentRowError.value = "";
@@ -198,6 +306,7 @@ function openCreate() {
   Object.assign(form, emptyForm());
   supplyRows.value = [];
   filamentRows.value = [];
+  resetPricing();
   formError.value = "";
   showModal.value = true;
 }
@@ -211,7 +320,6 @@ function openEdit(sale) {
     printer_id: sale.printer_id,
     print_hours: Number(sale.print_hours),
     postprocess_hours: Number(sale.postprocess_hours),
-    base_price: Number(sale.base_price),
     shipping_cost: Number(sale.shipping_cost),
     payment_method: sale.payment_method,
     notes: sale.notes || "",
@@ -222,6 +330,12 @@ function openEdit(sale) {
     filament_id: f.filament_id,
     grams_used: Number(f.grams_used),
   }));
+  resetPricing();
+  // La venta ya tiene un precio acordado: se abre con ese precio fijado a mano para
+  // no cambiarlo sin querer. Desmarcando la casilla se puede elegir un escenario.
+  originalPrice.value = { total: Number(sale.total_price), ivaRate: Number(sale.iva_percent) / 100 };
+  useManualPrice.value = true;
+  manualPrice.value = Number(sale.total_price);
   formError.value = "";
   showModal.value = true;
 }
@@ -231,13 +345,8 @@ function buildPayload() {
     sale_date: form.sale_date,
     client_name: form.client_name,
     buyer_name: form.buyer_name || null,
-    printer_id: form.printer_id,
-    filaments: filamentRows.value.map((r) => ({ filament_id: r.filament_id, grams_used: r.grams_used })),
-    print_hours: Number(form.print_hours) || 0,
-    postprocess_hours: Number(form.postprocess_hours) || 0,
-    base_price: Number(form.base_price) || 0,
-    shipping_cost: Number(form.shipping_cost) || 0,
-    supplies: supplyRows.value.map((r) => ({ supply_id: r.supply_id, quantity: r.quantity })),
+    ...buildJobPayload(),
+    ...buildPricingPayload(),
     payment_method: form.payment_method,
     notes: form.notes || null,
   };
@@ -248,17 +357,33 @@ function isValidOrEmpty(value, opts) {
   return isValidNumber(value, opts);
 }
 
-function validateSaleForm() {
-  if (!form.printer_id) return "Selecciona una impresora.";
+function validateJobInputs() {
   if (!isValidOrEmpty(form.print_hours, { min: 0 })) return "Las horas de impresión no pueden ser negativas.";
   if (!isValidOrEmpty(form.postprocess_hours, { min: 0 })) return "Las horas de postprocesado no pueden ser negativas.";
   if (!isValidOrEmpty(form.shipping_cost, { min: 0 })) return "El envío/embalaje no puede ser negativo.";
-  if (!isValidNumber(form.base_price, { min: 0 })) return "El precio de venta no puede ser negativo.";
+  return "";
+}
+
+function validateSaleForm() {
+  if (!form.printer_id) return "Selecciona una impresora.";
+  const jobError = validateJobInputs();
+  if (jobError) return jobError;
+  if (useManualPrice.value) {
+    if (!isValidNumber(manualPrice.value, { min: 0, allowZero: false })) return "Ingresa un precio final válido, mayor a 0.";
+  } else if (!selectedScenario.value) {
+    return suggestError.value || "Elige uno de los precios sugeridos o marca \"Definir yo el precio final\".";
+  }
   return "";
 }
 
 async function handleSubmit() {
-  const validationError = validateSaleForm();
+  let validationError = validateSaleForm();
+  if (!validationError && !useManualPrice.value) {
+    // Recalcular antes de guardar: si el usuario cambió un dato hace un instante, el
+    // escenario en pantalla podría ser del cálculo anterior (el recálculo va con retardo).
+    await refreshSuggestion();
+    validationError = validateSaleForm();
+  }
   if (validationError) {
     formError.value = validationError;
     return;
@@ -364,7 +489,7 @@ onMounted(async () => {
                 <th>Fecha</th>
                 <th>Cliente</th>
                 <th>Impresora</th>
-                <th class="text-right">Precio c/IVA</th>
+                <th class="text-right">{{ ivaEnabled ? "Precio c/IVA" : "Precio" }}</th>
                 <th class="text-right">Ganancia</th>
                 <th class="text-right">Margen</th>
                 <th>Pago</th>
@@ -439,14 +564,9 @@ onMounted(async () => {
             <label>Horas de postprocesado</label>
             <input v-model.number="form.postprocess_hours" type="number" min="0" step="0.1" />
           </div>
-          <div class="field">
+          <div class="field" style="grid-column: span 2">
             <label>Envío / embalaje (CLP)</label>
             <input v-model.number="form.shipping_cost" type="number" min="0" step="1" />
-          </div>
-          <div class="field">
-            <label>Precio de venta sin IVA (CLP)</label>
-            <input v-model.number="form.base_price" type="number" min="0" step="1" required />
-            <span class="field-hint">El IVA (19%) se calcula automáticamente.</span>
           </div>
         </div>
 
@@ -504,6 +624,68 @@ onMounted(async () => {
         </div>
 
         <div class="field mt-2">
+          <label>Precio de venta</label>
+          <span v-if="!form.printer_id" class="field-hint">
+            Selecciona una impresora y completa los datos del trabajo para ver el precio sugerido.
+          </span>
+          <span v-else-if="suggesting && !suggestion" class="field-hint">Calculando precio sugerido...</span>
+          <div v-else-if="suggestError" class="alert alert-danger">{{ suggestError }}</div>
+
+          <template v-if="suggestion">
+            <div class="price-options" :class="{ 'is-disabled': useManualPrice }">
+              <label
+                v-for="s in suggestion.scenarios"
+                :key="s.margin_percent"
+                class="price-option"
+                :class="{ 'is-selected': !useManualPrice && selectedMargin === s.margin_percent }"
+              >
+                <input v-model="selectedMargin" type="radio" :value="s.margin_percent" :disabled="useManualPrice" />
+                <span class="price-option-title">{{ s.label }} <span class="text-muted">+{{ s.margin_percent }}%</span></span>
+                <strong class="mono price-option-total">{{ formatCurrency(s.total_price) }}</strong>
+                <span class="price-option-meta">
+                  <template v-if="ivaEnabled">Neto {{ formatCurrency(s.base_price) }} · </template>Ganancia {{ formatCurrency(s.profit) }}
+                </span>
+              </label>
+            </div>
+            <span class="field-hint">
+              Costo del trabajo: {{ formatCurrency(suggestion.breakdown.total_cost) }}<template v-if="ivaEnabled">
+                · precios con IVA ({{ IVA_PERCENT }}%) incluido</template>.
+              <template v-if="suggesting">Actualizando...</template>
+            </span>
+          </template>
+
+          <label class="manual-price-toggle flex items-center gap-2 mt-2">
+            <input v-model="useManualPrice" type="checkbox" style="width: auto" />
+            Definir yo el precio final{{ ivaEnabled ? " (IVA incluido)" : "" }}
+          </label>
+          <template v-if="useManualPrice">
+            <input
+              v-model.number="manualPrice"
+              type="number"
+              min="0"
+              step="1"
+              placeholder="Ej: 15000"
+              :aria-label="ivaEnabled ? 'Precio final con IVA' : 'Precio final'"
+              style="max-width: 200px"
+            />
+            <div v-if="manualPriceBreakdown" class="alert alert-info">
+              <template v-if="ivaEnabled">
+                Neto {{ formatCurrency(manualPriceBreakdown.base) }} + IVA {{ formatCurrency(manualPriceBreakdown.iva) }} =
+              </template>
+              <template v-else>Precio:</template>
+              <strong>{{ formatCurrency(manualPriceBreakdown.total) }}</strong>
+              <template v-if="manualPriceBreakdown.profit !== null">
+                · Ganancia:
+                <span :style="{ color: manualPriceBreakdown.profit < 0 ? 'var(--danger)' : undefined }">
+                  {{ formatCurrency(manualPriceBreakdown.profit) }}
+                </span>
+              </template>
+            </div>
+            <div v-else class="alert alert-danger">Ingresa un precio final válido, mayor a 0.</div>
+          </template>
+        </div>
+
+        <div class="field mt-2">
           <label>Notas</label>
           <textarea v-model="form.notes" rows="2" />
         </div>
@@ -529,3 +711,68 @@ onMounted(async () => {
     />
   </div>
 </template>
+
+<style scoped>
+.price-options {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.price-options.is-disabled {
+  opacity: 0.5;
+}
+
+.field .price-option {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.price-options.is-disabled .price-option {
+  cursor: not-allowed;
+}
+
+.field .price-option.is-selected {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.price-option:focus-within {
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.price-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.price-option-total {
+  font-size: 1rem;
+}
+
+.price-option-meta {
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.field .manual-price-toggle {
+  cursor: pointer;
+  color: var(--text);
+}
+
+@media (max-width: 600px) {
+  .price-options {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

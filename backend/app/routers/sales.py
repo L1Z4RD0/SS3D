@@ -1,10 +1,11 @@
 import uuid
 from datetime import date
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session, joinedload
 
-from app.constants import ELECTRICITY_RATE, IVA_PERCENT, LABOR_RATE_PER_HOUR
+from app.constants import ELECTRICITY_RATE, LABOR_RATE_PER_HOUR
 from app.database import get_db
 from app.dependencies import get_current_user, require_not_watcher
 from app.models.sale import Sale
@@ -13,7 +14,7 @@ from app.models.sale_supply import SaleSupply
 from app.models.user import User
 from app.schemas.sale import SaleCreateRequest, SalePage, SaleResponse, SaleUpdateRequest
 from app.services.audit import log_event
-from app.services.calculator import calculate_margin_percent, money
+from app.services.calculator import build_manual_price_scenario, calculate_margin_percent, iva_percent_for, money
 from app.services.inventory import consume_supply, restore_filament, restore_supply
 from app.services.sale_builder import (
     apply_filaments_to_sale,
@@ -45,6 +46,20 @@ def _get_owned_sale(db: Session, sale_id: uuid.UUID, user: User) -> Sale:
     if sale is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Venta no encontrada")
     return sale
+
+
+def _resolve_pricing(
+    base_price: Decimal | None, manual_total_price: Decimal | None, total_cost: Decimal, iva_percent: Decimal
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    """Devuelve (base, iva, total, ganancia). Con precio manual el total con IVA es
+    exactamente el que escribió el usuario y la base se deriva hacia atrás; si no,
+    el IVA se suma sobre la base como siempre."""
+    if manual_total_price is not None:
+        scenario = build_manual_price_scenario(total_cost, manual_total_price, iva_percent=iva_percent)
+        return scenario.base_price, scenario.iva_amount, scenario.total_price, scenario.profit
+    base = money(base_price)
+    iva_amount = money(base * iva_percent / 100)
+    return base, iva_amount, money(base + iva_amount), money(base - total_cost)
 
 
 @router.get("", response_model=SalePage)
@@ -110,10 +125,10 @@ def create_sale(
         labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
 
-    base_price = money(payload.base_price)
-    iva_amount = money(base_price * IVA_PERCENT / 100)
-    total_price = money(base_price + iva_amount)
-    profit = money(base_price - breakdown.total_cost)
+    iva_percent = iva_percent_for(current_user)
+    base_price, iva_amount, total_price, profit = _resolve_pricing(
+        payload.base_price, payload.manual_total_price, breakdown.total_cost, iva_percent
+    )
     margin_percent = calculate_margin_percent(base_price, breakdown.total_cost)
 
     printer.hours_used += payload.print_hours
@@ -127,7 +142,7 @@ def create_sale(
         print_hours=payload.print_hours,
         postprocess_hours=payload.postprocess_hours,
         base_price=base_price,
-        iva_percent=IVA_PERCENT,
+        iva_percent=iva_percent,
         iva_amount=iva_amount,
         total_price=total_price,
         material_cost=breakdown.material_cost,
@@ -194,7 +209,9 @@ def update_sale(
     new_print_hours = changes.get("print_hours", sale.print_hours)
     new_postprocess_hours = changes.get("postprocess_hours", sale.postprocess_hours)
     new_shipping_cost = changes.get("shipping_cost", sale.shipping_cost)
-    new_base_price = changes.get("base_price", sale.base_price)
+    new_base_price = changes.get("base_price")
+    new_manual_total_price = changes.get("manual_total_price")
+    price_changed = new_base_price is not None or new_manual_total_price is not None
     # payload.filaments/supplies are typed Pydantic objects; model_dump() would
     # have flattened them into plain dicts, so read them straight off the payload.
     new_filaments = payload.filaments if "filaments" in payload.model_fields_set else None
@@ -223,16 +240,24 @@ def update_sale(
         labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
 
-    base_price = money(new_base_price)
-    iva_amount = money(base_price * IVA_PERCENT / 100)
-    total_price = money(base_price + iva_amount)
-    profit = money(base_price - breakdown.total_cost)
+    if price_changed:
+        # Un precio nuevo sigue la configuración de IVA actual del usuario.
+        iva_percent = iva_percent_for(current_user)
+        base_price, iva_amount, total_price, profit = _resolve_pricing(
+            new_base_price, new_manual_total_price, breakdown.total_cost, iva_percent
+        )
+    else:
+        # Precio sin tocar: la venta conserva exactamente lo que se cobró y con qué IVA
+        # (una venta registrada con IVA no lo pierde por editarla con el IVA apagado).
+        iva_percent = sale.iva_percent
+        base_price, iva_amount, total_price = sale.base_price, sale.iva_amount, sale.total_price
+        profit = money(base_price - breakdown.total_cost)
     margin_percent = calculate_margin_percent(base_price, breakdown.total_cost)
 
     printer.hours_used += new_print_hours
 
     for field, value in changes.items():
-        if field in ("supplies", "filaments"):
+        if field in ("supplies", "filaments", "manual_total_price", "base_price"):
             continue
         setattr(sale, field, value)
 
@@ -241,7 +266,7 @@ def update_sale(
     sale.postprocess_hours = new_postprocess_hours
     sale.shipping_cost = new_shipping_cost
     sale.base_price = base_price
-    sale.iva_percent = IVA_PERCENT
+    sale.iva_percent = iva_percent
     sale.iva_amount = iva_amount
     sale.total_price = total_price
     sale.material_cost = breakdown.material_cost

@@ -21,11 +21,16 @@ class WatcherAssignmentsResponse(BaseModel):
     observed_user_ids: list[uuid.UUID]
 
 
+class UserIvaRequest(BaseModel):
+    enabled: bool
+
+
 class UserResponse(BaseModel):
     id: uuid.UUID
     username: str
     role: str
     is_active: bool
+    iva_enabled: bool
     failed_login_attempts: int
     locked_until: datetime | None
     created_at: datetime

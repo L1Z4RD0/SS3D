@@ -13,6 +13,7 @@ from app.models.watcher_assignment import WatcherAssignment
 from app.schemas.audit_log import AuditLogPage, AuditLogResponse
 from app.schemas.user import (
     UserCreateRequest,
+    UserIvaRequest,
     UserResponse,
     WatcherAssignmentsRequest,
     WatcherAssignmentsResponse,
@@ -29,6 +30,7 @@ def _to_user_response(user: User) -> UserResponse:
         username=user.username,
         role=user.role.name,
         is_active=user.is_active,
+        iva_enabled=user.iva_enabled,
         failed_login_attempts=user.failed_login_attempts,
         locked_until=user.locked_until,
         created_at=user.created_at,
@@ -120,6 +122,34 @@ def reactivate_user(
         db,
         user_id=current_user.id,
         event_type="USER_REACTIVATED",
+        entity_type="user",
+        entity_id=user.id,
+        details={"username": user.username},
+        ip_address=request.client.host if request.client else None,
+    )
+    db.commit()
+    return _to_user_response(user)
+
+
+@router.patch("/users/{user_id}/iva", response_model=UserResponse)
+def set_user_iva(
+    user_id: uuid.UUID,
+    payload: UserIvaRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Activa/desactiva el IVA en los cálculos de un usuario. Solo afecta ventas y
+    cotizaciones nuevas; lo ya guardado conserva el IVA con que se registró."""
+    user = db.query(User).options(joinedload(User.role)).get(user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Usuario no encontrado")
+
+    user.iva_enabled = payload.enabled
+    log_event(
+        db,
+        user_id=current_user.id,
+        event_type="USER_IVA_ENABLED" if payload.enabled else "USER_IVA_DISABLED",
         entity_type="user",
         entity_id=user.id,
         details={"username": user.username},

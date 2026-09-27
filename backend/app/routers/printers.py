@@ -25,6 +25,7 @@ def _to_response(printer: Printer) -> PrinterResponse:
     life_remaining = max(printer.lifetime_hours - printer.hours_used, Decimal(0))
     return PrinterResponse(
         id=printer.id,
+        owner_id=printer.user_id,
         name=printer.name,
         purchase_value=printer.purchase_value,
         lifetime_hours=printer.lifetime_hours,

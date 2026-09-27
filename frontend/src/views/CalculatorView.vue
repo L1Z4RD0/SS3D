@@ -10,13 +10,24 @@ import { formatCurrency, todayISO } from "../utils/format";
 import { GRAMS_MAX, isValidGrams, isValidNumber, gramsErrorMessage, extractApiError } from "../utils/validation";
 import { promptExhaustedFilaments } from "../utils/exhaustedFilaments";
 import { useAuthStore } from "../stores/auth";
+import { useIva, IVA_PERCENT } from "../composables/useIva";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
 import DoughnutChart from "../components/DoughnutChart.vue";
 import QuoteDocument from "../components/QuoteDocument.vue";
 import FilamentPickerModal from "../components/FilamentPickerModal.vue";
+import { useObservedUsers } from "../composables/useObservedUsers";
 
 const auth = useAuthStore();
+const { ivaEnabled, ivaRate } = useIva();
+// Observador: cotiza con recursos de varios usuarios (puede mezclarlos), así que cada
+// impresora/filamento/insumo muestra de quién es. Para los demás roles no aparece nada.
+const { namesById, loadObservedUsers, ownerName } = useObservedUsers();
+
+function withOwner(label, ownerId, sep = " — ") {
+  const owner = ownerName(ownerId);
+  return owner ? `${label}${sep}de ${owner}` : label;
+}
 
 const printers = ref([]);
 const filaments = ref([]);
@@ -104,6 +115,16 @@ function filamentName(id) {
   return f ? filamentLabel(f) : "";
 }
 
+// Dueño del filamento elegido (solo observador), para mostrarlo junto al botón.
+function filamentOwner(id) {
+  const f = filaments.value.find((x) => x.id === id);
+  return f ? ownerName(f.owner_id) : "";
+}
+
+function printerLabel(p) {
+  return withOwner(p.name, p.owner_id);
+}
+
 // Compacto a propósito: el picker ya mostró marca, material, color, SKU y gramos
 // disponibles antes de elegir, así que acá alcanza con lo mínimo para no desbordar
 // el botón (que comparte fila con el input de gramos y "Agregar").
@@ -161,6 +182,34 @@ function supplyName(id) {
   return supplies.value.find((s) => s.id === id)?.name || "";
 }
 
+function supplyOwner(id) {
+  const s = supplies.value.find((x) => x.id === id);
+  return s ? ownerName(s.owner_id) : "";
+}
+
+// Texto de <option>: un <select> nativo no admite etiquetas, así que el dueño va en el texto.
+function supplyLabel(s) {
+  return withOwner(s.name, s.owner_id);
+}
+
+/* Resumen de a quién pertenece cada recurso usado en el cálculo (solo observador):
+   puede combinar filamentos de distintos dueños, y tiene que saber de quién es cada uno. */
+const resourceOwners = computed(() => {
+  if (!auth.isWatcher) return [];
+  const lines = [];
+  const printer = printers.value.find((p) => p.id === form.printer_id);
+  if (printer) lines.push({ kind: "Impresora", label: printer.name, owner: ownerName(printer.owner_id) });
+  for (const usage of buildFilamentsPayload()) {
+    const f = filaments.value.find((x) => x.id === usage.filament_id);
+    if (f) lines.push({ kind: "Filamento", label: `${filamentLabel(f)} (${usage.grams_used}g)`, owner: ownerName(f.owner_id) });
+  }
+  for (const row of supplyRows.value) {
+    const s = supplies.value.find((x) => x.id === row.supply_id);
+    if (s) lines.push({ kind: "Insumo", label: `${s.name} × ${row.quantity}`, owner: ownerName(s.owner_id) });
+  }
+  return lines;
+});
+
 /* -------- Compute quote -------- */
 const quote = ref(null);
 const calculating = ref(false);
@@ -205,6 +254,45 @@ function validateJobInputs() {
   return "";
 }
 
+/* -------- Precio manual en la tabla de escenarios --------
+   El sistema sugiere los escenarios, pero el usuario decide el precio final (IVA
+   incluido) que se usa tanto para guardar la venta como para la cotización. */
+const useCustomPrice = ref(false);
+const customPrice = ref(null);
+
+function round2(n) {
+  return Math.round(n * 100) / 100;
+}
+
+// Escenario "virtual" con la misma forma que los del backend, para reutilizar
+// openSaveModal/addToCart tal cual. El margen se muestra igual que en los otros
+// escenarios: recargo sobre el costo de producción (el envío pasa a costo).
+const customScenario = computed(() => {
+  if (!quote.value || !useCustomPrice.value) return null;
+  if (!isValidNumber(customPrice.value, { min: 0, allowZero: false })) return null;
+  const total = Number(customPrice.value);
+  const base = round2(total / (1 + ivaRate.value));
+  const shipping = Number(quote.value.breakdown.shipping_cost);
+  const totalCost = Number(quote.value.breakdown.total_cost);
+  const production = totalCost - shipping;
+  return {
+    manual: true,
+    label: "Precio manual",
+    margin_percent: production > 0 ? Math.round(((base - shipping) / production - 1) * 100) : 0,
+    base_price: base,
+    iva_amount: round2(total - base),
+    total_price: total,
+    profit: round2(base - totalCost),
+  };
+});
+
+watch(useCustomPrice, (on) => {
+  if (!on || customPrice.value || !quote.value) return;
+  // Parte del "Precio Normal" redondeado como guía; el usuario lo ajusta a su gusto.
+  const reference = quote.value.scenarios[1] || quote.value.scenarios[0];
+  customPrice.value = reference ? Math.round(Number(reference.total_price)) : null;
+});
+
 async function handleCalculate() {
   const validationError = validateJobInputs();
   if (validationError) {
@@ -238,15 +326,19 @@ const manualPrice = ref(null);
 const manualPriceBreakdown = computed(() => {
   if (!useManualPrice.value || !isValidNumber(manualPrice.value, { min: 0, allowZero: false })) return null;
   const total = Number(manualPrice.value);
-  const base = total / 1.19;
+  const base = total / (1 + ivaRate.value);
   const cost = quote.value ? Number(quote.value.breakdown.total_cost) : 0;
   return { total, base, iva: total - base, profit: base - cost };
 });
 
 function openSaveModal(scenario) {
   selectedScenario.value = scenario;
-  useManualPrice.value = false;
-  manualPrice.value = scenario ? Math.round(Number(scenario.total_price)) : null;
+  useManualPrice.value = !!scenario?.manual;
+  manualPrice.value = scenario?.manual
+    ? Number(scenario.total_price)
+    : scenario
+      ? Math.round(Number(scenario.total_price))
+      : null;
   saveError.value = "";
   saveSuccess.value = "";
   showSaveModal.value = true;
@@ -302,7 +394,7 @@ function removeFromCart(id) {
 const cartSubtotal = computed(() =>
   cartItems.value.reduce((sum, i) => sum + (Number(i.quantity) || 0) * (Number(i.unit_price) || 0), 0)
 );
-const cartIvaAmount = computed(() => cartSubtotal.value * 0.19);
+const cartIvaAmount = computed(() => cartSubtotal.value * ivaRate.value);
 const cartTotal = computed(() => cartSubtotal.value + cartIvaAmount.value);
 
 /* -------- Generate quote (Cotización) -------- */
@@ -336,13 +428,17 @@ function buildQuoteSnapshot(clientName, quoteDate, items) {
       `- ${i.description} | ${i.quantity} x ${formatCurrency(i.unit_price)} = ${formatCurrency(lineTotal)}`
     );
   }
-  const iva = subtotal * 0.19;
-  lines.push(
-    "",
-    `Neto: ${formatCurrency(subtotal)}`,
-    `IVA (19%): ${formatCurrency(iva)}`,
-    `TOTAL: ${formatCurrency(subtotal + iva)}`
-  );
+  if (ivaEnabled.value) {
+    const iva = subtotal * ivaRate.value;
+    lines.push(
+      "",
+      `Neto: ${formatCurrency(subtotal)}`,
+      `IVA (${IVA_PERCENT}%): ${formatCurrency(iva)}`,
+      `TOTAL: ${formatCurrency(subtotal + iva)}`
+    );
+  } else {
+    lines.push("", `TOTAL: ${formatCurrency(subtotal)}`);
+  }
   return lines.join("\n");
 }
 
@@ -484,6 +580,8 @@ function resetForm() {
   supplyRowError.value = "";
   quote.value = null;
   calcError.value = "";
+  useCustomPrice.value = false;
+  customPrice.value = null;
   clearDraft();
 }
 
@@ -508,6 +606,7 @@ watch(
 );
 
 onMounted(() => {
+  loadObservedUsers();
   restoreDraft();
   loadCatalog();
 });
@@ -516,7 +615,10 @@ onMounted(() => {
 <template>
   <div>
     <div class="page-header">
-      <p class="page-subtitle">Calcula el costo real de un trabajo, guárdalo como venta o agrégalo a una cotización</p>
+      <p v-if="auth.isWatcher" class="page-subtitle">
+        Calcula el costo real de un trabajo con los recursos de los usuarios que observas y agrégalo a una cotización
+      </p>
+      <p v-else class="page-subtitle">Calcula el costo real de un trabajo, guárdalo como venta o agrégalo a una cotización</p>
     </div>
 
     <div v-if="loadingCatalog" class="empty-state">Cargando...</div>
@@ -532,7 +634,7 @@ onMounted(() => {
             <label>Impresora</label>
             <select v-model="form.printer_id">
               <option value="" disabled>Selecciona una impresora</option>
-              <option v-for="p in printers" :key="p.id" :value="p.id">{{ p.name }}</option>
+              <option v-for="p in printers" :key="p.id" :value="p.id">{{ printerLabel(p) }}</option>
             </select>
           </div>
 
@@ -551,6 +653,7 @@ onMounted(() => {
                   style="flex: 1; justify-content: flex-start; overflow: hidden"
                   @click="openFilamentPicker('single')"
                 >
+                  <span v-if="singleFilamentId && filamentOwner(singleFilamentId)" class="owner-tag">de {{ filamentOwner(singleFilamentId) }}</span>
                   <span v-if="singleFilamentId" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ filamentSummary(singleFilamentId) }}</span>
                   <span v-else class="text-muted" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Sin filamento / no descontar stock</span>
                 </button>
@@ -580,6 +683,7 @@ onMounted(() => {
                 style="flex: 1; justify-content: flex-start; overflow: hidden"
                 @click="openFilamentPicker('row')"
               >
+                <span v-if="newFilamentRowId && filamentOwner(newFilamentRowId)" class="owner-tag">de {{ filamentOwner(newFilamentRowId) }}</span>
                 <span v-if="newFilamentRowId" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ filamentSummary(newFilamentRowId) }}</span>
                 <span v-else class="text-muted" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Selecciona un filamento</span>
               </button>
@@ -595,7 +699,10 @@ onMounted(() => {
             <div v-if="filamentRowError" class="alert alert-danger mt-2">{{ filamentRowError }}</div>
             <div v-if="filamentRows.length" class="flex flex-col gap-2 mt-2">
               <div v-for="row in filamentRows" :key="row.id" class="flex items-center justify-between text-sm" style="background: var(--surface-alt); padding: 6px 10px; border-radius: 8px">
-                <span>{{ filamentName(row.filament_id) }} — {{ row.grams_used }}g</span>
+                <span class="flex items-center gap-2">
+                  <span v-if="filamentOwner(row.filament_id)" class="owner-tag">de {{ filamentOwner(row.filament_id) }}</span>
+                  <span>{{ filamentName(row.filament_id) }} — {{ row.grams_used }}g</span>
+                </span>
                 <button type="button" class="btn btn-icon btn-ghost btn-sm" @click="removeFilamentRow(row.id)">
                   <Icon name="close" :size="13" />
                 </button>
@@ -624,7 +731,7 @@ onMounted(() => {
             <div class="flex gap-2">
               <select v-model="newSupplyId" style="flex: 1">
                 <option value="" disabled>Selecciona un insumo</option>
-                <option v-for="s in supplies" :key="s.id" :value="s.id">{{ s.name }}</option>
+                <option v-for="s in supplies" :key="s.id" :value="s.id">{{ supplyLabel(s) }}</option>
               </select>
               <input v-model.number="newSupplyQty" type="number" min="0" step="1" placeholder="Cant." style="width: 70px" />
               <button type="button" class="btn btn-secondary btn-sm" @click="addSupplyRow">Agregar</button>
@@ -632,7 +739,10 @@ onMounted(() => {
             <div v-if="supplyRowError" class="alert alert-danger mt-2">{{ supplyRowError }}</div>
             <div v-if="supplyRows.length" class="flex flex-col gap-2 mt-2">
               <div v-for="row in supplyRows" :key="row.supply_id" class="flex items-center justify-between text-sm" style="background: var(--surface-alt); padding: 6px 10px; border-radius: 8px">
-                <span>{{ supplyName(row.supply_id) }} × {{ row.quantity }}</span>
+                <span class="flex items-center gap-2">
+                  <span v-if="supplyOwner(row.supply_id)" class="owner-tag">de {{ supplyOwner(row.supply_id) }}</span>
+                  <span>{{ supplyName(row.supply_id) }} × {{ row.quantity }}</span>
+                </span>
                 <button type="button" class="btn btn-icon btn-ghost btn-sm" @click="removeSupplyRow(row.supply_id)">
                   <Icon name="close" :size="13" />
                 </button>
@@ -662,6 +772,15 @@ onMounted(() => {
               <h3>Desglose de costos</h3>
               <span class="badge badge-info">Costo base: {{ formatCurrency(quote.breakdown.total_cost) }}</span>
             </div>
+            <div v-if="resourceOwners.length" class="resource-owners">
+              <span class="resource-owners-title">Recursos usados en esta cotización</span>
+              <ul>
+                <li v-for="(r, i) in resourceOwners" :key="i">
+                  <span class="text-muted">{{ r.kind }}:</span> {{ r.label }}
+                  <span class="owner-tag">de {{ r.owner }}</span>
+                </li>
+              </ul>
+            </div>
             <div class="grid grid-cols-2" style="align-items: center">
               <DoughnutChart :labels="breakdownLabels" :values="breakdownValues" />
               <table style="min-width: unset">
@@ -680,6 +799,10 @@ onMounted(() => {
           <div class="card">
             <div class="card-header">
               <h3>Escenarios de precio</h3>
+              <label class="flex items-center gap-2 text-sm" style="cursor: pointer; font-weight: 600">
+                <input v-model="useCustomPrice" type="checkbox" style="width: auto" />
+                Definir yo el precio final
+              </label>
             </div>
             <div class="table-wrap">
               <table>
@@ -687,9 +810,12 @@ onMounted(() => {
                   <tr>
                     <th>Escenario</th>
                     <th>Margen</th>
-                    <th class="text-right">Precio sin IVA</th>
-                    <th class="text-right">IVA</th>
-                    <th class="text-right">Precio con IVA</th>
+                    <template v-if="ivaEnabled">
+                      <th class="text-right">Precio sin IVA</th>
+                      <th class="text-right">IVA</th>
+                      <th class="text-right">Precio con IVA</th>
+                    </template>
+                    <th v-else class="text-right">Precio</th>
                     <th class="text-right">Ganancia</th>
                     <th></th>
                   </tr>
@@ -698,20 +824,65 @@ onMounted(() => {
                   <tr v-for="s in quote.scenarios" :key="s.margin_percent">
                     <td><strong>{{ s.label }}</strong></td>
                     <td><span class="badge badge-neutral">+{{ s.margin_percent }}%</span></td>
-                    <td class="text-right mono">{{ formatCurrency(s.base_price) }}</td>
-                    <td class="text-right mono">{{ formatCurrency(s.iva_amount) }}</td>
+                    <template v-if="ivaEnabled">
+                      <td class="text-right mono">{{ formatCurrency(s.base_price) }}</td>
+                      <td class="text-right mono">{{ formatCurrency(s.iva_amount) }}</td>
+                    </template>
                     <td class="text-right mono"><strong>{{ formatCurrency(s.total_price) }}</strong></td>
                     <td class="text-right mono" style="color: var(--success)">{{ formatCurrency(s.profit) }}</td>
                     <td class="text-right">
                       <div class="flex flex-col gap-2" style="align-items: flex-end">
-                        <button class="btn btn-primary btn-sm" style="width: 100%" @click="openSaveModal(s)">Guardar como venta</button>
+                        <button v-if="!auth.isWatcher" class="btn btn-primary btn-sm" style="width: 100%" @click="openSaveModal(s)">Guardar como venta</button>
                         <button class="btn btn-secondary btn-sm" style="width: 100%" @click="addToCart(s)">Agregar a cotización</button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr v-if="useCustomPrice" class="custom-price-row">
+                    <td><strong>Precio manual</strong></td>
+                    <td>
+                      <span v-if="customScenario" class="badge badge-neutral">+{{ customScenario.margin_percent }}%</span>
+                    </td>
+                    <template v-if="ivaEnabled">
+                      <td class="text-right mono">{{ customScenario ? formatCurrency(customScenario.base_price) : "—" }}</td>
+                      <td class="text-right mono">{{ customScenario ? formatCurrency(customScenario.iva_amount) : "—" }}</td>
+                    </template>
+                    <td class="text-right">
+                      <input
+                        v-model.number="customPrice"
+                        type="number"
+                        min="0"
+                        step="1"
+                        placeholder="Ej: 15000"
+                        :aria-label="ivaEnabled ? 'Precio final con IVA' : 'Precio final'"
+                        style="width: 120px; text-align: right"
+                      />
+                    </td>
+                    <td
+                      class="text-right mono"
+                      :style="{ color: customScenario && customScenario.profit < 0 ? 'var(--danger)' : 'var(--success)' }"
+                    >
+                      {{ customScenario ? formatCurrency(customScenario.profit) : "—" }}
+                    </td>
+                    <td class="text-right">
+                      <div class="flex flex-col gap-2" style="align-items: flex-end">
+                        <button v-if="!auth.isWatcher" class="btn btn-primary btn-sm" style="width: 100%" :disabled="!customScenario" @click="openSaveModal(customScenario)">Guardar como venta</button>
+                        <button class="btn btn-secondary btn-sm" style="width: 100%" :disabled="!customScenario" @click="addToCart(customScenario)">Agregar a cotización</button>
                       </div>
                     </td>
                   </tr>
                 </tbody>
               </table>
             </div>
+            <p v-if="useCustomPrice" class="field-hint mt-2">
+              <template v-if="ivaEnabled">
+                Escribe el precio final con IVA incluido; el neto y el IVA se calculan hacia atrás.
+              </template>
+              <template v-else>Escribe el precio final que quieres cobrar.</template>
+              Ese es el precio que se guarda en la venta y el que aparece en la cotización.
+              <span v-if="customScenario && customScenario.profit < 0" style="color: var(--danger)">
+                Ojo: con este precio vendes bajo el costo.
+              </span>
+            </p>
           </div>
 
           <div class="card">
@@ -748,8 +919,10 @@ onMounted(() => {
                 </table>
               </div>
               <div class="flex flex-col gap-1 mt-4" style="align-items: flex-end">
-                <span class="text-sm text-muted">Subtotal: {{ formatCurrency(cartSubtotal) }}</span>
-                <span class="text-sm text-muted">IVA (19%): {{ formatCurrency(cartIvaAmount) }}</span>
+                <template v-if="ivaEnabled">
+                  <span class="text-sm text-muted">Subtotal: {{ formatCurrency(cartSubtotal) }}</span>
+                  <span class="text-sm text-muted">IVA ({{ IVA_PERCENT }}%): {{ formatCurrency(cartIvaAmount) }}</span>
+                </template>
                 <span style="font-weight: 700">Total: {{ formatCurrency(cartTotal) }}</span>
                 <button class="btn btn-primary mt-2" @click="openQuoteForm">Generar cotización</button>
               </div>
@@ -762,7 +935,9 @@ onMounted(() => {
     <Modal v-if="showSaveModal" title="Guardar cotización como venta" @close="showSaveModal = false">
       <form @submit.prevent="confirmSaveAsSale">
         <div class="alert alert-info mt-2" style="margin-bottom: 14px">
-          {{ selectedScenario.label }} (+{{ selectedScenario.margin_percent }}%) · Total con IVA:
+          <template v-if="selectedScenario.manual">Precio manual</template>
+          <template v-else>{{ selectedScenario.label }} (+{{ selectedScenario.margin_percent }}%)</template>
+          · {{ ivaEnabled ? "Total con IVA" : "Total" }}:
           <strong>{{ formatCurrency(selectedScenario.total_price) }}</strong>
         </div>
         <div class="form-grid">
@@ -788,10 +963,11 @@ onMounted(() => {
         <div class="field mt-2">
           <label class="flex items-center gap-2" style="cursor: pointer; font-weight: 600">
             <input v-model="useManualPrice" type="checkbox" style="width: auto" />
-            Definir yo el precio final (IVA incluido)
+            Definir yo el precio final{{ ivaEnabled ? " (IVA incluido)" : "" }}
           </label>
           <span class="field-hint">
-            Para publicar un número redondo. El IVA se recalcula hacia atrás desde ese precio.
+            Para publicar un número redondo.
+            <template v-if="ivaEnabled">El IVA se recalcula hacia atrás desde ese precio.</template>
           </span>
           <input
             v-if="useManualPrice"
@@ -804,8 +980,11 @@ onMounted(() => {
             style="max-width: 200px"
           />
           <div v-if="manualPriceBreakdown" class="alert alert-info mt-2">
-            Neto {{ formatCurrency(manualPriceBreakdown.base) }} + IVA
-            {{ formatCurrency(manualPriceBreakdown.iva) }} =
+            <template v-if="ivaEnabled">
+              Neto {{ formatCurrency(manualPriceBreakdown.base) }} + IVA
+              {{ formatCurrency(manualPriceBreakdown.iva) }} =
+            </template>
+            <template v-else>Precio:</template>
             <strong>{{ formatCurrency(manualPriceBreakdown.total) }}</strong>
             · Ganancia: {{ formatCurrency(manualPriceBreakdown.profit) }}
           </div>
@@ -844,7 +1023,7 @@ onMounted(() => {
         </div>
 
         <div class="alert alert-info mt-4">
-          {{ cartItems.length }} ítem(s) · Total con IVA: <strong>{{ formatCurrency(cartTotal) }}</strong>
+          {{ cartItems.length }} ítem(s) · {{ ivaEnabled ? "Total con IVA" : "Total" }}: <strong>{{ formatCurrency(cartTotal) }}</strong>
         </div>
 
         <div v-if="quoteFormError" class="alert alert-danger mt-4">{{ quoteFormError }}</div>
@@ -880,6 +1059,7 @@ onMounted(() => {
     <FilamentPickerModal
       v-if="showFilamentPicker"
       :filaments="filaments"
+      :owner-names="namesById"
       :exclude-ids="filamentPickerTarget === 'row' ? filamentRows.map((r) => r.filament_id) : []"
       title="Seleccionar filamento"
       @select="onFilamentPicked"
@@ -891,6 +1071,47 @@ onMounted(() => {
 <style scoped>
 .calculator-grid {
   grid-template-columns: 460px 1fr;
+}
+
+.custom-price-row td {
+  background: var(--primary-soft);
+}
+
+/* Dueño de un recurso (solo lo ve el observador). */
+.owner-tag {
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.resource-owners {
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-alt);
+  font-size: 0.84rem;
+}
+
+.resource-owners-title {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.resource-owners ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 /* Below this width, a side-by-side 460px form + results column leaves the pricing

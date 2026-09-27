@@ -47,6 +47,8 @@ class ScenarioItem(BaseModel):
 class QuoteResponse(BaseModel):
     breakdown: CostBreakdown
     scenarios: list[ScenarioItem]
+    # IVA efectivo con que se calcularon los escenarios (0 si el usuario no lo tiene activo).
+    iva_percent: Decimal
 
 
 class SaveQuoteAsSaleRequest(QuoteRequest):

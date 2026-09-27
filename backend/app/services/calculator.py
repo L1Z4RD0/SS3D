@@ -10,6 +10,12 @@ def money(value: Decimal) -> Decimal:
     return Decimal(value).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
 
 
+def iva_percent_for(user) -> Decimal:
+    """IVA efectivo del usuario: el 19% solo si el administrador se lo activó; si no, 0%.
+    Todos los cálculos pasan por acá, así que el IVA se enciende sin tocar la lógica."""
+    return IVA_PERCENT if getattr(user, "iva_enabled", False) else Decimal(0)
+
+
 @dataclass
 class SupplyUsage:
     supply_id: object
@@ -103,7 +109,7 @@ def calculate_costs(
 
 
 def _build_scenario(
-    production_cost: Decimal, shipping_cost: Decimal, margin_percent: int, label: str
+    production_cost: Decimal, shipping_cost: Decimal, margin_percent: int, label: str, iva_percent: Decimal
 ) -> ScenarioResult:
     # El margen se aplica solo sobre el costo de producción; el envío se suma después
     # a precio de costo. Antes el envío entraba al margen y un envío de $3.000 subía
@@ -111,7 +117,7 @@ def _build_scenario(
     base_price = money(
         production_cost * (Decimal(1) + Decimal(margin_percent) / Decimal(100)) + shipping_cost
     )
-    iva_amount = money(base_price * IVA_PERCENT / Decimal(100))
+    iva_amount = money(base_price * iva_percent / Decimal(100))
     total_price = money(base_price + iva_amount)
     profit = money(base_price - (production_cost + shipping_cost))
     return ScenarioResult(
@@ -124,27 +130,35 @@ def _build_scenario(
     )
 
 
-def calculate_scenarios(production_cost: Decimal, shipping_cost: Decimal = Decimal(0)) -> list[ScenarioResult]:
+def calculate_scenarios(
+    production_cost: Decimal, shipping_cost: Decimal = Decimal(0), *, iva_percent: Decimal
+) -> list[ScenarioResult]:
     return [
-        _build_scenario(production_cost, shipping_cost, s["margin_percent"], s["label"])
+        _build_scenario(production_cost, shipping_cost, s["margin_percent"], s["label"], iva_percent)
         for s in MARGIN_SCENARIOS
     ]
 
 
 def get_scenario_by_margin(
-    production_cost: Decimal, margin_percent: int, shipping_cost: Decimal = Decimal(0)
+    production_cost: Decimal,
+    margin_percent: int,
+    shipping_cost: Decimal = Decimal(0),
+    *,
+    iva_percent: Decimal,
 ) -> ScenarioResult | None:
     for s in MARGIN_SCENARIOS:
         if s["margin_percent"] == margin_percent:
-            return _build_scenario(production_cost, shipping_cost, margin_percent, s["label"])
+            return _build_scenario(production_cost, shipping_cost, margin_percent, s["label"], iva_percent)
     return None
 
 
-def build_manual_price_scenario(total_cost: Decimal, total_price_with_iva: Decimal) -> ScenarioResult:
-    """El usuario fija el precio final que ve el cliente (IVA incluido) y de ahí se
-    deriva hacia atrás la base y el IVA, para que el número publicado sea redondo."""
+def build_manual_price_scenario(
+    total_cost: Decimal, total_price_with_iva: Decimal, *, iva_percent: Decimal
+) -> ScenarioResult:
+    """El usuario fija el precio final que ve el cliente (IVA incluido, si aplica) y de
+    ahí se deriva hacia atrás la base y el IVA, para que el número publicado sea redondo."""
     total_price = money(total_price_with_iva)
-    base_price = money(total_price / (Decimal(1) + IVA_PERCENT / Decimal(100)))
+    base_price = money(total_price / (Decimal(1) + iva_percent / Decimal(100)))
     iva_amount = money(total_price - base_price)
     profit = money(base_price - total_cost)
     return ScenarioResult(
