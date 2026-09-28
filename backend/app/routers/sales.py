@@ -13,6 +13,8 @@ from app.models.sale_filament import SaleFilament
 from app.models.sale_supply import SaleSupply
 from app.models.user import User
 from app.schemas.sale import (
+    CalendarOrder,
+    DeliveryDateChangeRequest,
     SaleCreateRequest,
     SalePage,
     SaleResponse,
@@ -33,6 +35,7 @@ from app.services.order_status import (
 from app.services.sale_builder import (
     apply_filaments_to_sale,
     build_cost_breakdown,
+    can_edit_sale,
     resolve_filaments,
     resolve_printer,
     resolve_sale_owner,
@@ -166,6 +169,87 @@ def list_sales(
     total = query.count()
     rows = query.order_by(Sale.sale_date.desc(), Sale.created_at.desc()).offset(offset).limit(limit).all()
     return SalePage(items=[to_sale_response(s, viewer=current_user) for s in rows], total=total)
+
+
+@router.get("/calendar", response_model=list[CalendarOrder])
+def calendar_orders(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    status_filter: str | None = Query(default=None, alias="status"),
+    include_cancelled: bool = Query(default=False),
+):
+    """Pedidos ubicados en su fecha de entrega comprometida, en un rango de fechas.
+    El observador ve los que registró y los de sus usuarios asignados."""
+    if date_from is not None and date_to is not None and (date_to - date_from).days > 120:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "El rango del calendario no puede superar 120 días.")
+    query = (
+        db.query(Sale)
+        .options(joinedload(Sale.printer), joinedload(Sale.owner), joinedload(Sale.created_by))
+        .filter(sales_listed_for(db, current_user))
+    )
+    if date_from is not None:
+        query = query.filter(Sale.promised_delivery_date >= date_from)
+    if date_to is not None:
+        query = query.filter(Sale.promised_delivery_date <= date_to)
+    statuses = _parse_status_filter(status_filter)
+    if statuses is not None:
+        query = query.filter(Sale.status.in_(statuses))
+    elif not include_cancelled:
+        query = query.filter(Sale.status != STATUS_CANCELLED)
+    rows = query.order_by(Sale.promised_delivery_date, Sale.created_at).limit(2000).all()
+    return [
+        CalendarOrder(
+            id=s.id,
+            client_name=s.client_name,
+            buyer_name=s.buyer_name,
+            status=s.status,
+            sale_date=s.sale_date,
+            promised_delivery_date=s.promised_delivery_date,
+            delivered_date=s.delivered_date,
+            price=s.total_price,
+            payment_method=s.payment_method,
+            printer_name=s.printer.name,
+            owner_id=s.user_id,
+            owner_username=s.owner.username,
+            created_by_username=s.created_by.username if s.created_by is not None else None,
+            can_edit=can_edit_sale(s, current_user),
+        )
+        for s in rows
+    ]
+
+
+@router.patch("/{sale_id}/delivery-date", response_model=SaleResponse)
+def change_delivery_date(
+    sale_id: uuid.UUID,
+    payload: DeliveryDateChangeRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Mueve solo la fecha de entrega comprometida (ej. desde el Calendario), sin tocar
+    materiales ni recalcular costos. Solo mientras el pedido no esté Entregado ni Cancelado."""
+    sale = _get_editable_sale(db, sale_id, current_user)
+    if sale.status not in OPEN_STATUSES:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"El pedido está {STATUS_LABELS[sale.status]}: ya no tiene fecha de entrega comprometida editable.",
+        )
+    previous = sale.promised_delivery_date
+    if payload.promised_delivery_date != previous:
+        sale.promised_delivery_date = payload.promised_delivery_date
+        log_event(
+            db,
+            user_id=current_user.id,
+            event_type="SALE_DELIVERY_DATE_CHANGED",
+            entity_type="sale",
+            entity_id=sale.id,
+            details={"promised_delivery_date": {"from": str(previous), "to": str(payload.promised_delivery_date)}},
+            ip_address=request.client.host if request.client else None,
+        )
+        db.commit()
+    return to_sale_response(_get_listed_sale(db, sale.id, current_user), viewer=current_user, include_history=True)
 
 
 @router.get("/{sale_id}", response_model=SaleResponse)

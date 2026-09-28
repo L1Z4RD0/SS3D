@@ -16,6 +16,8 @@ const titles = {
   dashboard: "Dashboard",
   calculator: "Calculadora de precios",
   sales: "Registro de ventas",
+  calendar: "Calendario de entregas",
+  quotes: "Cotizaciones",
   inventory: "Inventario",
   printers: "Impresoras",
   history: "Historial",

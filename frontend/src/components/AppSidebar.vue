@@ -14,6 +14,7 @@ const allLinks = [
   { to: "/calculadora", label: "Calculadora", icon: "calculator" },
   { to: "/cotizaciones", label: "Cotizaciones", icon: "sales" },
   { to: "/ventas", label: "Ventas", icon: "sales" },
+  { to: "/calendario", label: "Calendario", icon: "calendar" },
   { to: "/inventario", label: "Inventario", icon: "inventory" },
   { to: "/impresoras", label: "Impresoras", icon: "printer", hideForWatcher: true },
   { to: "/historial", label: "Historial", icon: "history" },

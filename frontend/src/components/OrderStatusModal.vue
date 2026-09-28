@@ -4,7 +4,7 @@ import * as salesApi from "../api/sales";
 import { formatCurrency, formatDate, formatDateTime, todayISO } from "../utils/format";
 import { extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
-import { STATUS_LABELS, statusClass, statusOptions, isOverdue } from "../utils/orderStatus";
+import { STATUS_LABELS, OPEN_STATUSES, statusClass, statusOptions, isOverdue } from "../utils/orderStatus";
 import Modal from "./Modal.vue";
 
 /* Detalle de un pedido: datos clave, línea de tiempo de estados (cuándo se creó, cómo
@@ -72,6 +72,31 @@ async function applyStatus(opt) {
   }
 }
 
+/* -------- Cambiar la fecha de entrega comprometida (solo pedidos abiertos) -------- */
+const canMoveDate = computed(() => sale.value?.can_edit && OPEN_STATUSES.includes(sale.value.status));
+const editingDate = ref(false);
+const newDate = ref("");
+
+function startDateEdit() {
+  newDate.value = sale.value.promised_delivery_date;
+  editingDate.value = true;
+}
+
+async function saveDate() {
+  if (!newDate.value) return;
+  busy.value = true;
+  error.value = "";
+  try {
+    sale.value = await salesApi.changeDeliveryDate(sale.value.id, newDate.value);
+    editingDate.value = false;
+    emit("changed", sale.value);
+  } catch (err) {
+    error.value = extractApiError(err, "No se pudo cambiar la fecha.");
+  } finally {
+    busy.value = false;
+  }
+}
+
 onMounted(load);
 </script>
 
@@ -89,7 +114,17 @@ onMounted(load);
           <dt>Pedido</dt>
           <dd>{{ formatDate(sale.sale_date) }}</dd>
           <dt>Entrega comprometida</dt>
-          <dd :class="{ 'text-danger': overdue }">{{ formatDate(sale.promised_delivery_date) }}</dd>
+          <dd>
+            <div v-if="editingDate" class="date-edit">
+              <input v-model="newDate" type="date" aria-label="Nueva fecha de entrega" />
+              <button type="button" class="btn btn-primary btn-sm" :disabled="busy || !newDate" @click="saveDate">Guardar</button>
+              <button type="button" class="btn btn-ghost btn-sm" :disabled="busy" @click="editingDate = false">Cancelar</button>
+            </div>
+            <template v-else>
+              <span :class="{ 'text-danger': overdue }">{{ formatDate(sale.promised_delivery_date) }}</span>
+              <button v-if="canMoveDate" type="button" class="link-btn" @click="startDateEdit">Cambiar</button>
+            </template>
+          </dd>
           <template v-if="sale.delivered_date">
             <dt>Entregado</dt>
             <dd>{{ formatDate(sale.delivered_date) }}</dd>
@@ -169,6 +204,34 @@ onMounted(load);
 
 .order-summary dd {
   margin: 0;
+}
+
+.date-edit {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.date-edit input {
+  width: auto;
+  padding: 5px 8px;
+}
+
+.link-btn {
+  margin-left: 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--primary);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
 }
 
 .text-danger {

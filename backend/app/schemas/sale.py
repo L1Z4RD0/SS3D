@@ -60,6 +60,29 @@ class SaleStatusChangeRequest(BaseModel):
     today: date | None = None
 
 
+class DeliveryDateChangeRequest(BaseModel):
+    promised_delivery_date: date
+
+
+class CalendarOrder(BaseModel):
+    """Versión liviana de un pedido para el Calendario."""
+
+    id: uuid.UUID
+    client_name: str
+    buyer_name: str | None
+    status: str
+    sale_date: date
+    promised_delivery_date: date
+    delivered_date: date | None
+    price: Decimal
+    payment_method: str
+    printer_name: str
+    owner_id: uuid.UUID
+    owner_username: str
+    created_by_username: str | None
+    can_edit: bool
+
+
 class SaleStatusHistoryResponse(BaseModel):
     status: str
     changed_at: datetime

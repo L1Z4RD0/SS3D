@@ -10,6 +10,12 @@ export const deleteSale = (id) => client.delete(`/api/sales/${id}`);
 
 export const getSale = (id) => client.get(`/api/sales/${id}`).then((r) => r.data);
 
+export const calendarOrders = (params = {}) =>
+  client.get("/api/sales/calendar", { params }).then((r) => r.data);
+
+export const changeDeliveryDate = (id, promisedDeliveryDate) =>
+  client.patch(`/api/sales/${id}/delivery-date`, { promised_delivery_date: promisedDeliveryDate }).then((r) => r.data);
+
 export const changeSaleStatus = (id, payload) =>
   client.post(`/api/sales/${id}/status`, payload).then((r) => r.data);
 
