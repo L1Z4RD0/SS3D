@@ -138,7 +138,11 @@ const editingSale = ref(null);
    horas ni envío; solo precio, fecha de entrega, trabajo, comprador, pago y notas.
    Entregada: todo como siempre, más la fecha real de entrega. */
 const editingStatus = computed(() => editingSale.value?.status || "pendiente");
-const productionLocked = computed(() => ["en_produccion", "lista"].includes(editingStatus.value));
+// Pedido de una pieza del Almacén: la pieza ya existe, nunca se editan materiales ni horas.
+const fromWarehouse = computed(() => !!editingSale.value?.warehouse_item_id);
+const productionLocked = computed(
+  () => fromWarehouse.value || ["en_produccion", "lista"].includes(editingStatus.value)
+);
 
 /* -------- Inventario disponible para la venta --------
    Usuario normal: todo lo suyo. Observador: solo lo del usuario elegido en "Venta para". */
@@ -402,7 +406,11 @@ function buildPayload() {
     notes: form.notes || null,
   };
   // En producción / Lista solo viajan los datos del pedido (no materiales ni horas).
-  if (productionLocked.value) return { ...orderData, promised_delivery_date: form.promised_delivery_date };
+  if (productionLocked.value) {
+    return editingStatus.value === "entregada"
+      ? { ...orderData, delivered_date: form.delivered_date }
+      : { ...orderData, promised_delivery_date: form.promised_delivery_date };
+  }
   const payload = {
     ...orderData,
     sale_date: form.sale_date,
@@ -649,6 +657,7 @@ onMounted(async () => {
                 </td>
                 <td>
                   <strong>{{ s.client_name }}</strong>
+                  <span v-if="s.warehouse_item_id" class="badge piece-en_almacen" style="margin-left: 6px">Pieza del Almacén</span>
                   <div v-if="s.buyer_name" class="text-muted text-sm">{{ s.buyer_name }}</div>
                 </td>
                 <td v-if="auth.isWatcher">{{ s.owner_username }}</td>
@@ -713,7 +722,11 @@ onMounted(async () => {
             indicando que la hiciste tú ({{ auth.user?.username }}).
           </span>
         </div>
-        <div v-if="productionLocked" class="alert alert-warning" style="margin-bottom: 14px">
+        <div v-if="fromWarehouse" class="alert alert-warning" style="margin-bottom: 14px">
+          Pedido de una <strong>pieza del Almacén</strong>: la pieza ya existe, así que no se cambian materiales, horas
+          ni envío. Puedes editar precio, fecha de entrega, trabajo, comprador, método de pago y notas.
+        </div>
+        <div v-else-if="productionLocked" class="alert alert-warning" style="margin-bottom: 14px">
           Pedido <strong>{{ STATUS_LABELS[editingStatus] }}</strong>: la pieza ya se está fabricando, así que no se
           cambian materiales, horas ni envío. Puedes editar precio, fecha de entrega, trabajo, comprador, método de pago
           y notas.

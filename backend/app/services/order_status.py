@@ -15,6 +15,7 @@ from app.models.sale import (
 )
 from app.models.sale_status_history import SaleStatusHistory
 from app.models.user import User
+from app.models.warehouse_item import ITEM_SOLD, WarehouseItem
 
 STATUS_LABELS = {
     STATUS_PENDING: "Pendiente",
@@ -102,4 +103,9 @@ def change_status(
     sale.status = target
     if target == STATUS_DELIVERED:
         sale.delivered_date = today
+        if sale.warehouse_item_id is not None:
+            # La pieza del Almacén se entregó: pasa de Reservada a Vendida.
+            item = db.get(WarehouseItem, sale.warehouse_item_id)
+            if item is not None:
+                item.status = ITEM_SOLD
     return path

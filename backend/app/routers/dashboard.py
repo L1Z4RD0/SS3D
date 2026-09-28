@@ -2,11 +2,13 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func
+from sqlalchemy import Date, cast, func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, is_watcher, readable_user_ids
+from app.models.warehouse_item import ITEM_DISCARDED, ITEM_IN_STOCK, ITEM_RESERVED, WarehouseItem
+from app.services.order_status import OPEN_STATUSES
 from app.models.filament import Filament
 from app.models.printer import Printer
 from app.models.sale import Sale
@@ -18,10 +20,12 @@ from app.schemas.dashboard import (
     StockAlertItem,
 )
 from app.services.inventory import filament_stock_status
-from app.models.sale import STATUS_DELIVERED
+from app.models.sale import STATUS_CANCELLED, STATUS_DELIVERED
 from app.services.sale_builder import sales_counted_for
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+
+LOCAL_TZ = "America/Santiago"
 
 
 def _dated_sales_query(db: Session, user: User, date_from: date | None, date_to: date | None):
@@ -34,6 +38,52 @@ def _dated_sales_query(db: Session, user: User, date_from: date | None, date_to:
     if date_to is not None:
         query = query.filter(Sale.delivered_date <= date_to)
     return query
+
+
+def _local_date(column):
+    """Fecha en hora de Chile de una marca de tiempo (se guardan en UTC)."""
+    return cast(func.timezone(LOCAL_TZ, column), Date)
+
+
+def _orders_losses_and_warehouse(db: Session, user: User, date_from: date | None, date_to: date | None) -> dict:
+    # Pedidos abiertos hoy (no dependen del período).
+    open_orders = (
+        db.query(func.count(Sale.id)).filter(sales_counted_for(user), Sale.status.in_(OPEN_STATUSES)).scalar() or 0
+    )
+
+    # Pérdidas del período. Una cancelación solo deja pérdida si la pieza no fue al
+    # Almacén (loss_amount); las piezas descartadas cuentan su costo en la fecha del descarte.
+    cancel_q = db.query(func.coalesce(func.sum(Sale.loss_amount), 0)).filter(
+        sales_counted_for(user), Sale.status == STATUS_CANCELLED
+    )
+    discard_q = (
+        db.query(func.coalesce(func.sum(WarehouseItem.cost), 0))
+        .join(Sale, Sale.id == WarehouseItem.origin_sale_id)
+        .filter(WarehouseItem.status == ITEM_DISCARDED)
+    )
+    if is_watcher(user):
+        discard_q = discard_q.filter(Sale.created_by_user_id == user.id)
+    else:
+        discard_q = discard_q.filter(WarehouseItem.user_id == user.id)
+    if date_from is not None:
+        cancel_q = cancel_q.filter(_local_date(Sale.cancelled_at) >= date_from)
+        discard_q = discard_q.filter(_local_date(WarehouseItem.discarded_at) >= date_from)
+    if date_to is not None:
+        cancel_q = cancel_q.filter(_local_date(Sale.cancelled_at) <= date_to)
+        discard_q = discard_q.filter(_local_date(WarehouseItem.discarded_at) <= date_to)
+    losses = Decimal(cancel_q.scalar() or 0) + Decimal(discard_q.scalar() or 0)
+
+    # Valor en Almacén hoy: costo de piezas En almacén y Reservadas. El observador ve el
+    # de sus usuarios asignados.
+    value = (
+        db.query(func.coalesce(func.sum(WarehouseItem.cost), 0))
+        .filter(
+            WarehouseItem.user_id.in_(readable_user_ids(db, user)),
+            WarehouseItem.status.in_((ITEM_IN_STOCK, ITEM_RESERVED)),
+        )
+        .scalar()
+    )
+    return {"open_orders": open_orders, "total_losses": losses, "warehouse_value": value or 0}
 
 
 @router.get("/summary", response_model=DashboardSummary)
@@ -63,7 +113,10 @@ def get_summary(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
 
+    extra = _orders_losses_and_warehouse(db, current_user, date_from, date_to)
+
     return DashboardSummary(
+        **extra,
         total_jobs=total_jobs,
         total_revenue=total_revenue,
         total_profit=total_profit,

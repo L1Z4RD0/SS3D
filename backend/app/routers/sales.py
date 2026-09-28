@@ -377,15 +377,18 @@ def update_sale(
     if new_delivered is not None and new_delivered != sale.delivered_date:
         date_changes["delivered_date"] = (sale.delivered_date, new_delivered)
 
-    if sale.status in LOCKED_PRODUCTION_STATUSES:
-        # En producción / Lista: la pieza ya se está fabricando. No se tocan materiales,
+    from_warehouse = sale.warehouse_item_id is not None
+    if sale.status in LOCKED_PRODUCTION_STATUSES or from_warehouse:
+        # En producción / Lista: la pieza ya se está fabricando. Pedido de una pieza del
+        # Almacén (en cualquier estado): la pieza ya existe. No se tocan materiales,
         # horas ni costos; solo datos del pedido y el precio.
         locked = _locked_changes(sale, payload, changes)
         if locked:
             names = ", ".join(LOCKED_FIELD_LABELS[f] for f in locked)
+            why = "es de una pieza del Almacén" if from_warehouse else f"está {STATUS_LABELS[sale.status]}"
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
-                f"El pedido está {STATUS_LABELS[sale.status]}: no se pueden cambiar {names}. "
+                f"El pedido {why}: no se pueden cambiar {names}. "
                 "Solo precio, fecha de entrega, trabajo, comprador, método de pago y notas.",
             )
         for field in EDITABLE_WHILE_IN_PRODUCTION:
@@ -395,6 +398,8 @@ def update_sale(
             if changes[field] is None and field not in ("buyer_name", "notes"):
                 continue
             setattr(sale, field, changes[field])
+        if sale.status == STATUS_DELIVERED and new_delivered is not None:
+            sale.delivered_date = new_delivered
         if changes.get("price") is not None:
             _set_price(sale, changes["price"])
             sale.profit = money(sale.base_price - sale.total_cost)

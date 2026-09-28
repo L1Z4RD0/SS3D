@@ -16,6 +16,7 @@ const allLinks = [
   { to: "/ventas", label: "Ventas", icon: "sales" },
   { to: "/calendario", label: "Calendario", icon: "calendar" },
   { to: "/inventario", label: "Inventario", icon: "inventory" },
+  { to: "/almacen", label: "Almacén", icon: "box" },
   { to: "/impresoras", label: "Impresoras", icon: "printer", hideForWatcher: true },
   { to: "/historial", label: "Historial", icon: "history" },
 ];

@@ -431,6 +431,12 @@ tbody tr:hover {
 .status-cancelado { --status-color: var(--text-faint); background: var(--surface-alt); color: var(--text-faint); border: 1px solid var(--border); }
 .badge-overdue { background: var(--danger-soft); color: var(--danger); }
 
+/* Estados de las piezas del Almacén. */
+.piece-en_almacen { background: var(--accent-soft); color: var(--accent); }
+.piece-reservada { background: var(--info-soft); color: var(--info); }
+.piece-vendida { background: var(--success-soft); color: var(--success); }
+.piece-descartada { background: var(--surface-alt); color: var(--text-faint); border: 1px solid var(--border); }
+
 /* ---------- Stat cards ---------- */
 
 .stat-card {

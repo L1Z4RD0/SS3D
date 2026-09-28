@@ -14,6 +14,12 @@ class DashboardSummary(BaseModel):
     total_filament_used_g: Decimal
     total_depreciation: Decimal
     total_energy: Decimal
+    # Pedidos todavía sin entregar (Pendiente + En producción + Lista), hoy.
+    open_orders: int = 0
+    # Pérdidas del período: cancelaciones sin pieza al Almacén + piezas descartadas.
+    total_losses: Decimal = Decimal(0)
+    # Costo de las piezas En almacén y Reservadas, hoy.
+    warehouse_value: Decimal = Decimal(0)
 
 
 class PrinterBreakdownItem(BaseModel):

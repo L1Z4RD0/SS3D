@@ -16,6 +16,7 @@ from app.routers import (
     quotes,
     sales,
     supplies,
+    warehouse,
 )
 from app.services.inventory import InsufficientStockError
 
@@ -47,6 +48,7 @@ app.include_router(quotes.router)
 app.include_router(business_profile.router)
 app.include_router(filament_catalog.router)
 app.include_router(history.router)
+app.include_router(warehouse.router)
 
 
 @app.get("/api/health")

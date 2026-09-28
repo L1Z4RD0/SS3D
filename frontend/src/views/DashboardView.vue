@@ -125,6 +125,12 @@ onMounted(loadAll);
         <StatCard label="Horas impresas" :value="formatNumber(summary.total_print_hours, 1)" />
         <StatCard label="Filamento usado" :value="`${formatNumber(summary.total_filament_used_g, 0)} g`" />
         <StatCard label="Luz gastada" :value="formatCurrency(summary.total_energy)" />
+        <!-- Pedidos todavía sin entregar (hoy, no dependen del período). -->
+        <StatCard label="Pedidos abiertos" :value="formatNumber(summary.open_orders, 0)" />
+        <!-- Cancelaciones sin pieza al Almacén + piezas descartadas, en el período. -->
+        <StatCard label="Pérdidas (cancelaciones y descartes)" :value="formatCurrency(summary.total_losses)" />
+        <!-- Costo de las piezas En almacén y Reservadas (hoy). -->
+        <StatCard label="Valor en Almacén" :value="formatCurrency(summary.warehouse_value)" />
       </div>
 
       <div class="grid grid-cols-2" style="margin-bottom: 20px; align-items: start">

@@ -17,6 +17,7 @@ const titles = {
   calculator: "Calculadora de precios",
   sales: "Registro de ventas",
   calendar: "Calendario de entregas",
+  warehouse: "Almacén",
   quotes: "Cotizaciones",
   inventory: "Inventario",
   printers: "Impresoras",
