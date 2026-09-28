@@ -6,6 +6,7 @@ import { extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
 import { STATUS_LABELS, OPEN_STATUSES, statusClass, statusOptions, isOverdue } from "../utils/orderStatus";
 import Modal from "./Modal.vue";
+import CancelOrderModal from "./CancelOrderModal.vue";
 
 /* Detalle de un pedido: datos clave, línea de tiempo de estados (cuándo se creó, cómo
    avanzó y quién lo movió) y botones para cambiar de estado. Se usa en Ventas y en el
@@ -97,6 +98,16 @@ async function saveDate() {
   }
 }
 
+/* -------- Cancelación -------- */
+const showCancel = ref(false);
+const PIECE_STATUS = { en_almacen: "En almacén", reservada: "Reservada", vendida: "Vendida", descartada: "Descartada" };
+
+function onCancelled(updated) {
+  sale.value = updated;
+  showCancel.value = false;
+  emit("changed", updated);
+}
+
 onMounted(load);
 </script>
 
@@ -142,6 +153,15 @@ onMounted(load);
         </dl>
       </div>
 
+      <div v-if="sale.status === 'cancelado'" class="cancel-box">
+        <strong>Pedido cancelado</strong>
+        <span v-if="sale.cancel_reason">Motivo: {{ sale.cancel_reason }}</span>
+        <span v-if="sale.warehouse_piece">
+          Pieza: {{ PIECE_STATUS[sale.warehouse_piece.status] }} · costo {{ formatCurrency(sale.warehouse_piece.cost) }}
+        </span>
+        <span v-if="Number(sale.loss_amount) > 0">Pérdida: {{ formatCurrency(sale.loss_amount) }}</span>
+      </div>
+
       <div v-if="options.length" class="status-actions">
         <button
           v-for="opt in options"
@@ -153,6 +173,9 @@ onMounted(load);
           @click="applyStatus(opt)"
         >
           {{ opt.label }}
+        </button>
+        <button type="button" class="btn btn-sm btn-ghost cancel-btn" :disabled="busy" @click="showCancel = true">
+          Cancelar pedido
         </button>
       </div>
       <p v-else-if="!sale.can_edit" class="field-hint">
@@ -180,6 +203,7 @@ onMounted(load);
       </div>
     </template>
   </Modal>
+  <CancelOrderModal v-if="showCancel && sale" :sale="sale" @close="showCancel = false" @cancelled="onCancelled" />
 </template>
 
 <style scoped>
@@ -237,6 +261,23 @@ onMounted(load);
 .text-danger {
   color: var(--danger);
   font-weight: 700;
+}
+
+.cancel-box {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  font-size: 0.86rem;
+}
+
+.cancel-btn {
+  margin-left: auto;
+  color: var(--danger);
 }
 
 .status-actions {

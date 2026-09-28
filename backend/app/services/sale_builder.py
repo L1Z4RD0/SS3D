@@ -19,6 +19,7 @@ from app.schemas.sale import (
     SaleResponse,
     SaleStatusHistoryResponse,
     SaleSupplyResponse,
+    WarehousePieceInfo,
 )
 from app.services.calculator import CostBreakdown, FilamentUsage, SupplyUsage, calculate_costs, money
 from app.services.inventory import consume_filament
@@ -231,7 +232,14 @@ def to_sale_response(
             # Los pasos de una entrega directa tienen la misma hora: desempata el orden natural.
             for h in sorted(sale.status_history, key=lambda h: (h.changed_at, ORDER_STATUSES.index(h.status)))
         ]
+    piece = None
+    if include_history and sale.origin_pieces:
+        p = sale.origin_pieces[0]
+        piece = WarehousePieceInfo(id=p.id, status=p.status, cost=p.cost, price=p.price)
     return SaleResponse(
+        cancel_reason=sale.cancel_reason,
+        loss_amount=sale.loss_amount,
+        warehouse_piece=piece,
         status=sale.status,
         promised_delivery_date=sale.promised_delivery_date,
         delivered_date=sale.delivered_date,

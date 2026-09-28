@@ -16,6 +16,8 @@ export const calendarOrders = (params = {}) =>
 export const changeDeliveryDate = (id, promisedDeliveryDate) =>
   client.patch(`/api/sales/${id}/delivery-date`, { promised_delivery_date: promisedDeliveryDate }).then((r) => r.data);
 
+export const cancelSale = (id, payload) => client.post(`/api/sales/${id}/cancel`, payload).then((r) => r.data);
+
 export const changeSaleStatus = (id, payload) =>
   client.post(`/api/sales/${id}/status`, payload).then((r) => r.data);
 

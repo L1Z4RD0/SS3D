@@ -107,3 +107,7 @@ class Sale(UUIDMixin, TimestampMixin, Base):
     status_history: Mapped[list["SaleStatusHistory"]] = relationship(
         back_populates="sale", cascade="all, delete-orphan", order_by="SaleStatusHistory.changed_at"
     )
+    # Pieza(s) que este pedido dejó en el Almacén al cancelarse (solo lectura).
+    origin_pieces: Mapped[list["WarehouseItem"]] = relationship(
+        primaryjoin="Sale.id == WarehouseItem.origin_sale_id", viewonly=True
+    )

@@ -478,12 +478,23 @@ async function handleSubmit() {
 async function handleDelete(sale) {
   const ok = await confirmAction({
     title: "Eliminar venta",
-    message: `¿Eliminar la venta de "${sale.client_name}"? Esto restaurará el stock e impresora consumidos.`,
+    message:
+      sale.status === "cancelado"
+        ? `¿Eliminar el pedido cancelado "${sale.client_name}"? Se borra del registro como si nunca hubiera existido y se devuelve lo que seguía consumido (lo que ya se devolvió al cancelar no se devuelve dos veces). Si su pieza está en el Almacén, también se elimina.`
+        : `¿Eliminar la venta de "${sale.client_name}"? Se borra como si nunca hubiera existido y se restaura el stock y las horas de impresora consumidos. Si el pedido no se va a hacer, usa mejor "Cancelar pedido" (desde el ícono de estado) para que quede registrado.`,
     confirmLabel: "Eliminar",
     danger: true,
   });
   if (!ok) return;
-  await salesApi.deleteSale(sale.id);
+  try {
+    await salesApi.deleteSale(sale.id);
+  } catch (err) {
+    await confirmAction({
+      title: "No se pudo eliminar",
+      message: extractApiError(err, "Intenta de nuevo."),
+      confirmLabel: "Entendido",
+    });
+  }
   await loadSales();
 }
 
@@ -648,8 +659,15 @@ onMounted(async () => {
                 </td>
                 <td>{{ s.printer_name }}</td>
                 <td class="text-right mono">{{ formatCurrency(s.price) }}</td>
-                <td class="text-right mono" style="color: var(--success)">{{ formatCurrency(s.profit) }}</td>
-                <td class="text-right">{{ formatPercent(s.margin_percent) }}</td>
+                <!-- Un cancelado no dejó ganancia: se muestra su pérdida (si la hubo). -->
+                <td v-if="s.status === 'cancelado'" class="text-right mono">
+                  <span v-if="Number(s.loss_amount) > 0" style="color: var(--danger)" title="Pérdida por la cancelación">
+                    −{{ formatCurrency(s.loss_amount) }}
+                  </span>
+                  <span v-else class="text-muted">—</span>
+                </td>
+                <td v-else class="text-right mono" style="color: var(--success)">{{ formatCurrency(s.profit) }}</td>
+                <td class="text-right">{{ s.status === "cancelado" ? "—" : formatPercent(s.margin_percent) }}</td>
                 <td><span class="badge badge-neutral">{{ paymentLabel(s.payment_method) }}</span></td>
                 <td class="text-right">
                   <div class="flex gap-2" style="justify-content: flex-end">

@@ -12,8 +12,10 @@ from app.models.sale import ORDER_STATUSES, STATUS_CANCELLED, STATUS_DELIVERED, 
 from app.models.sale_filament import SaleFilament
 from app.models.sale_supply import SaleSupply
 from app.models.user import User
+from app.models.warehouse_item import WarehouseItem
 from app.schemas.sale import (
     CalendarOrder,
+    CancelOrderRequest,
     DeliveryDateChangeRequest,
     SaleCreateRequest,
     SalePage,
@@ -23,6 +25,7 @@ from app.schemas.sale import (
 )
 from app.services.audit import log_event
 from app.services.calculator import calculate_margin_percent, money
+from app.services.cancellation import cancel_order, check_can_delete, undo_remaining_consumption
 from app.services.inventory import consume_supply, restore_filament, restore_supply
 from app.services.order_status import (
     LOCKED_PRODUCTION_STATUSES,
@@ -540,6 +543,62 @@ def change_sale_status(
     return to_sale_response(_get_listed_sale(db, sale.id, current_user), viewer=current_user, include_history=True)
 
 
+@router.post("/{sale_id}/cancel", response_model=SaleResponse)
+def cancel_sale(
+    sale_id: uuid.UUID,
+    payload: CancelOrderRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Cancelar es un hecho del negocio y queda registrado (a diferencia de Eliminar, que
+    borra el pedido como si nunca hubiera existido). Los cancelados nunca son ingreso."""
+    sale = _get_editable_sale(db, sale_id, current_user)
+    previous = sale.status
+    piece = cancel_order(
+        db,
+        sale,
+        current_user,
+        keep_hours=payload.keep_hours,
+        piece_outcome=payload.piece_outcome,
+        discard_reason=payload.discard_reason,
+        reason=payload.reason,
+        today=payload.today or date.today(),
+    )
+    db.flush()
+    ip = request.client.host if request.client else None
+    log_event(
+        db,
+        user_id=current_user.id,
+        event_type="SALE_CANCELLED",
+        entity_type="sale",
+        entity_id=sale.id,
+        details={
+            "from": previous,
+            "reason": sale.cancel_reason,
+            "keep_hours": not sale.hours_returned,
+            "piece_outcome": payload.piece_outcome,
+            "loss_amount": str(sale.loss_amount),
+            "owner_id": str(sale.user_id),
+        },
+        ip_address=ip,
+    )
+    if piece is not None:
+        log_event(
+            db,
+            user_id=current_user.id,
+            event_type="WAREHOUSE_ITEM_DISCARDED" if piece.status == "descartada" else "WAREHOUSE_ITEM_CREATED",
+            entity_type="warehouse_item",
+            entity_id=piece.id,
+            details={"name": piece.name, "cost": str(piece.cost), "origin_sale_id": str(sale.id),
+                     "discard_reason": piece.discard_reason},
+            ip_address=ip,
+        )
+    db.commit()
+    db.expire_all()
+    return to_sale_response(_get_listed_sale(db, sale.id, current_user), viewer=current_user, include_history=True)
+
+
 @router.delete("/{sale_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_sale(
     sale_id: uuid.UUID,
@@ -547,13 +606,20 @@ def delete_sale(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """Eliminar deshace todo, como siempre (para corregir errores). En un pedido
+    cancelado solo se devuelve lo que seguía consumido tras la cancelación."""
     sale = _get_editable_sale(db, sale_id, current_user)
+    pieces = check_can_delete(db, sale)
 
-    sale.printer.hours_used -= sale.print_hours
-    for sf in sale.filaments_used:
-        restore_filament(sf.filament, sf.grams_used)
-    for ss in sale.supplies_used:
-        restore_supply(ss.supply, ss.quantity_used)
+    undo_remaining_consumption(sale)
+    for piece in pieces:
+        db.delete(piece)
+    if sale.warehouse_item_id is not None:
+        # Borrar la venta de una pieza del Almacén: la pieza vuelve a estar disponible.
+        item = db.get(WarehouseItem, sale.warehouse_item_id)
+        if item is not None and item.status in ("reservada", "vendida"):
+            item.status = "en_almacen"
+    db.flush()
 
     log_event(
         db,

@@ -60,6 +60,25 @@ class SaleStatusChangeRequest(BaseModel):
     today: date | None = None
 
 
+class CancelOrderRequest(BaseModel):
+    # ¿Dejar registradas las horas de impresión en la impresora? (En producción y Lista.)
+    keep_hours: bool = True
+    # En producción: "almacen" (la pieza sirve) o "inutilizable".
+    # Lista: "almacen" o "descartar".
+    piece_outcome: str | None = Field(default=None, pattern="^(almacen|inutilizable|descartar)$")
+    # Si se descarta: regalada, danada, desechada u otro.
+    discard_reason: str | None = Field(default=None, pattern="^(regalada|danada|desechada|otro)$")
+    reason: str | None = Field(default=None, max_length=500)
+    today: date | None = None
+
+
+class WarehousePieceInfo(BaseModel):
+    id: uuid.UUID
+    status: str
+    cost: Decimal
+    price: Decimal
+
+
 class DeliveryDateChangeRequest(BaseModel):
     promised_delivery_date: date
 
@@ -160,6 +179,11 @@ class SaleResponse(BaseModel):
     exhausted_filaments: list[ExhaustedFilamentInfo] = Field(default_factory=list)
     # Solo se incluye al pedir un pedido puntual o al cambiarle el estado.
     status_history: list[SaleStatusHistoryResponse] = Field(default_factory=list)
+    # Cancelación
+    cancel_reason: str | None = None
+    loss_amount: Decimal = Decimal(0)
+    # Pieza que este pedido dejó en el Almacén al cancelarse (si hay).
+    warehouse_piece: WarehousePieceInfo | None = None
 
     model_config = {"from_attributes": True}
 
