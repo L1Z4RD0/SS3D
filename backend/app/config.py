@@ -16,12 +16,19 @@ class Settings(BaseSettings):
     # domains (e.g. Vercel + Render): cross-site cookies require SameSite=None, which
     # browsers only honor when Secure is also set.
     cookie_secure: bool = False
+    # Aviso en Discord cuando uno de estos usuarios agenda un pedido. Sin URL no se envía nada.
+    discord_webhook_url: str | None = None
+    discord_notify_users: str = "Olzer,Diego,Sntg"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def discord_notify_users_set(self) -> set[str]:
+        return {u.strip().lower() for u in self.discord_notify_users.split(",") if u.strip()}
 
     @property
     def refresh_cookie_samesite(self) -> str:

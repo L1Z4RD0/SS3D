@@ -1,7 +1,7 @@
 from datetime import date as date_type
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.constants import ELECTRICITY_RATE, LABOR_RATE_PER_HOUR, MARGIN_SCENARIO_PERCENTS
@@ -25,6 +25,7 @@ from app.services.calculator import (
     calculate_scenarios,
     get_scenario_by_margin,
 )
+from app.services.discord import notify_order_scheduled
 from app.services.inventory import consume_supply
 from app.services.order_status import record_status, start_as_pending
 from app.services.sale_builder import (
@@ -86,6 +87,7 @@ def compute_quote(
 def save_quote_as_sale(
     payload: SaveQuoteAsSaleRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -193,4 +195,6 @@ def save_quote_as_sale(
     db.commit()
     db.refresh(sale)
 
-    return to_sale_response(sale, exhausted_filaments, viewer=current_user)
+    response = to_sale_response(sale, exhausted_filaments, viewer=current_user)
+    background_tasks.add_task(notify_order_scheduled, response)
+    return response

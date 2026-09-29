@@ -2,7 +2,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.constants import ELECTRICITY_RATE, LABOR_RATE_PER_HOUR
@@ -26,6 +26,7 @@ from app.schemas.sale import (
 from app.services.audit import log_event
 from app.services.calculator import calculate_margin_percent, money
 from app.services.cancellation import cancel_order, check_can_delete, undo_remaining_consumption
+from app.services.discord import notify_order_scheduled
 from app.services.inventory import consume_supply, restore_filament, restore_supply
 from app.services.order_status import (
     LOCKED_PRODUCTION_STATUSES,
@@ -264,6 +265,7 @@ def get_sale(sale_id: uuid.UUID, db: Session = Depends(get_db), current_user: Us
 def create_sale(
     payload: SaleCreateRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -345,7 +347,9 @@ def create_sale(
         ip_address=request.client.host if request.client else None,
     )
     db.commit()
-    return to_sale_response(_get_listed_sale(db, sale.id, current_user), exhausted_filaments, viewer=current_user)
+    response = to_sale_response(_get_listed_sale(db, sale.id, current_user), exhausted_filaments, viewer=current_user)
+    background_tasks.add_task(notify_order_scheduled, response)
+    return response
 
 
 @router.put("/{sale_id}", response_model=SaleResponse)

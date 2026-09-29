@@ -33,6 +33,8 @@ if not (_url.database or "").endswith("_test") or _url.host not in ("127.0.0.1",
 # La app lee la configuración al importarse: fijarla ANTES de importar nada de app.
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ.setdefault("SECRET_KEY", "tests-only-secret-key")
+# Los tests nunca deben publicar en el canal real de Discord.
+os.environ["DISCORD_WEBHOOK_URL"] = ""
 os.chdir(BACKEND_DIR)
 
 from alembic import command  # noqa: E402
