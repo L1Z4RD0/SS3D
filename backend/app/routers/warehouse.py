@@ -8,7 +8,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -32,6 +32,7 @@ from app.schemas.warehouse import (
 )
 from app.services.audit import log_event
 from app.services.calculator import calculate_margin_percent, money
+from app.services.discord import announce_order
 from app.services.order_status import record_status
 from app.services.sale_builder import resolve_sale_owner, to_sale_response
 
@@ -204,6 +205,7 @@ def sell_item(
     item_id: uuid.UUID,
     payload: WarehouseSellRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -276,4 +278,5 @@ def sell_item(
     )
     db.commit()
     db.refresh(sale)
+    background_tasks.add_task(announce_order, sale.id)
     return to_sale_response(sale, viewer=current_user, include_history=True)

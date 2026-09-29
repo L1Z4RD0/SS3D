@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     # Aviso en Discord cuando uno de estos usuarios agenda un pedido. Sin URL no se envía nada.
     discord_webhook_url: str | None = None
     discord_notify_users: str = "Olzer,Diego,Sntg"
+    # URL pública del frontend (ej. https://tu-app.vercel.app). Opcional: si está, el aviso
+    # enlaza al Calendario y muestra el logo de la app.
+    app_url: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

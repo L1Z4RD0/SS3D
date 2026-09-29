@@ -26,7 +26,7 @@ from app.schemas.sale import (
 from app.services.audit import log_event
 from app.services.calculator import calculate_margin_percent, money
 from app.services.cancellation import cancel_order, check_can_delete, undo_remaining_consumption
-from app.services.discord import notify_order_scheduled
+from app.services.discord import announce_order, mark_order_deleted, snapshot_before_delete, sync_order
 from app.services.inventory import consume_supply, restore_filament, restore_supply
 from app.services.order_status import (
     LOCKED_PRODUCTION_STATUSES,
@@ -229,6 +229,7 @@ def change_delivery_date(
     sale_id: uuid.UUID,
     payload: DeliveryDateChangeRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -253,6 +254,7 @@ def change_delivery_date(
             ip_address=request.client.host if request.client else None,
         )
         db.commit()
+        background_tasks.add_task(sync_order, sale.id)
     return to_sale_response(_get_listed_sale(db, sale.id, current_user), viewer=current_user, include_history=True)
 
 
@@ -348,7 +350,7 @@ def create_sale(
     )
     db.commit()
     response = to_sale_response(_get_listed_sale(db, sale.id, current_user), exhausted_filaments, viewer=current_user)
-    background_tasks.add_task(notify_order_scheduled, response)
+    background_tasks.add_task(announce_order, sale.id)
     return response
 
 
@@ -357,6 +359,7 @@ def update_sale(
     sale_id: uuid.UUID,
     payload: SaleUpdateRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -432,6 +435,7 @@ def update_sale(
             ip_address=ip,
         )
     db.commit()
+    background_tasks.add_task(sync_order, sale.id)
     return to_sale_response(_get_listed_sale(db, sale.id, current_user), exhausted_filaments, viewer=current_user)
 
 
@@ -530,6 +534,7 @@ def change_sale_status(
     sale_id: uuid.UUID,
     payload: SaleStatusChangeRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -549,6 +554,7 @@ def change_sale_status(
     )
     db.commit()
     db.expire_all()
+    background_tasks.add_task(sync_order, sale.id)
     return to_sale_response(_get_listed_sale(db, sale.id, current_user), viewer=current_user, include_history=True)
 
 
@@ -557,6 +563,7 @@ def cancel_sale(
     sale_id: uuid.UUID,
     payload: CancelOrderRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -605,6 +612,7 @@ def cancel_sale(
         )
     db.commit()
     db.expire_all()
+    background_tasks.add_task(sync_order, sale.id)
     return to_sale_response(_get_listed_sale(db, sale.id, current_user), viewer=current_user, include_history=True)
 
 
@@ -612,6 +620,7 @@ def cancel_sale(
 def delete_sale(
     sale_id: uuid.UUID,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -619,6 +628,8 @@ def delete_sale(
     cancelado solo se devuelve lo que seguía consumido tras la cancelación."""
     sale = _get_editable_sale(db, sale_id, current_user)
     pieces = check_can_delete(db, sale)
+    # Foto del pedido antes de borrarlo, para dejar su aviso de Discord como "eliminado".
+    snapshot = snapshot_before_delete(sale)
 
     undo_remaining_consumption(sale)
     for piece in pieces:
@@ -647,3 +658,4 @@ def delete_sale(
     )
     db.delete(sale)
     db.commit()
+    background_tasks.add_task(mark_order_deleted, sale_id, snapshot)

@@ -25,7 +25,7 @@ from app.services.calculator import (
     calculate_scenarios,
     get_scenario_by_margin,
 )
-from app.services.discord import notify_order_scheduled
+from app.services.discord import announce_order
 from app.services.inventory import consume_supply
 from app.services.order_status import record_status, start_as_pending
 from app.services.sale_builder import (
@@ -196,5 +196,5 @@ def save_quote_as_sale(
     db.refresh(sale)
 
     response = to_sale_response(sale, exhausted_filaments, viewer=current_user)
-    background_tasks.add_task(notify_order_scheduled, response)
+    background_tasks.add_task(announce_order, sale.id)
     return response
