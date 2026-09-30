@@ -513,7 +513,7 @@ async function deleteSupply(s) {
       </div>
     </div>
 
-    <Modal v-if="showFilamentModal" :title="editingFilamentId ? 'Editar filamento' : 'Nuevo filamento'" @close="showFilamentModal = false">
+    <Modal persistent v-if="showFilamentModal" :title="editingFilamentId ? 'Editar filamento' : 'Nuevo filamento'" @close="showFilamentModal = false">
       <form @submit.prevent="submitFilament">
         <div class="form-grid">
           <div class="field">
@@ -613,7 +613,7 @@ async function deleteSupply(s) {
       </form>
     </Modal>
 
-    <Modal v-if="showSupplyModal" :title="editingSupplyId ? 'Editar insumo' : 'Nuevo insumo'" @close="showSupplyModal = false">
+    <Modal persistent v-if="showSupplyModal" :title="editingSupplyId ? 'Editar insumo' : 'Nuevo insumo'" @close="showSupplyModal = false">
       <form @submit.prevent="submitSupply">
         <div class="form-grid">
           <div class="field">

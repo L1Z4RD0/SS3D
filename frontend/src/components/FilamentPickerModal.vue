@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, nextTick } from "vue";
 import { formatNumber } from "../utils/format";
 import { useFilamentCatalog } from "../composables/useFilamentCatalog";
 import Modal from "./Modal.vue";
@@ -28,7 +28,13 @@ function ownerOf(f) {
 const selectedId = ref("");
 const { catalog, ensureFilamentCatalog } = useFilamentCatalog();
 
+const searchInput = ref(null);
+
 onMounted(() => {
+  // Se puede escribir apenas se abre, sin tener que hacer clic en el buscador. El atributo
+  // autofocus no sirve en ventanas que aparecen después de cargar la página. En pantallas
+  // táctiles no se enfoca, para que el teclado no tape la lista de filamentos.
+  if (window.matchMedia("(pointer: fine)").matches) nextTick(() => searchInput.value?.focus());
   // Swatches just fall back to a neutral dot if this fails; not worth blocking the picker over it.
   ensureFilamentCatalog().catch(() => {});
 });
@@ -80,10 +86,10 @@ function confirm() {
     <div class="flex gap-2 picker-toolbar">
       <div class="field" style="flex: 1; margin: 0">
         <input
+          ref="searchInput"
           v-model="search"
           type="text"
           :placeholder="showOwners ? 'Buscar por nombre, SKU o dueño...' : 'Buscar por nombre o SKU...'"
-          autofocus
         />
       </div>
       <div v-if="showOwners" class="picker-filter">

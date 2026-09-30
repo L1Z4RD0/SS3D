@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useAuthStore } from "../stores/auth";
 import { extractApiError } from "../utils/validation";
+import PasswordInput from "../components/PasswordInput.vue";
 
 const username = ref("");
 const password = ref("");
@@ -50,7 +51,7 @@ async function handleSubmit() {
         </div>
         <div class="field">
           <label for="password">Contraseña</label>
-          <input id="password" v-model="password" type="password" autocomplete="current-password" required />
+          <PasswordInput id="password" v-model="password" autocomplete="current-password" required />
         </div>
 
         <div v-if="errorMessage" class="alert alert-danger">{{ errorMessage }}</div>

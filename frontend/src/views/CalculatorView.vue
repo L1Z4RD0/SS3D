@@ -928,7 +928,7 @@ onMounted(() => {
       </div>
     </div>
 
-    <Modal v-if="showSaveModal" title="Guardar cotización como venta" @close="showSaveModal = false">
+    <Modal persistent v-if="showSaveModal" title="Guardar cotización como venta" @close="showSaveModal = false">
       <form @submit.prevent="confirmSaveAsSale">
         <div class="alert alert-info mt-2" style="margin-bottom: 14px">
           <template v-if="selectedScenario.manual">Precio manual</template>
@@ -1014,7 +1014,7 @@ onMounted(() => {
       </form>
     </Modal>
 
-    <Modal v-if="showQuoteFormModal" title="Generar cotización" width="620px" @close="showQuoteFormModal = false">
+    <Modal persistent v-if="showQuoteFormModal" title="Generar cotización" width="620px" @close="showQuoteFormModal = false">
       <form @submit.prevent="confirmGenerateQuote">
         <div class="form-grid">
           <div class="field">

@@ -48,6 +48,28 @@ const filters = reactive({ date_from: "", date_to: "", client: "", printer_id: "
 
 const paymentLabel = (v) => PAYMENT_METHODS.find((p) => p.value === v)?.label || v;
 
+// Desglose de costos de una venta (se despliega bajo su fila).
+const expandedCostId = ref(null);
+function toggleCost(id) {
+  expandedCostId.value = expandedCostId.value === id ? null : id;
+}
+function costLines(sale) {
+  const filamentDetail = (sale.filaments_used || [])
+    .map((f) => `${f.filament_label} (${Number(f.grams_used).toLocaleString("es-CL")} g)`)
+    .join(" · ");
+  const supplyDetail = (sale.supplies_used || []).map((u) => `${u.supply_name} × ${Number(u.quantity_used)}`).join(" · ");
+  const lines = [
+    { label: "Material", value: sale.material_cost, detail: filamentDetail || sale.filament_label || "" },
+    { label: "Depreciación impresora", value: sale.depreciation_cost, detail: `${Number(sale.print_hours)} h de impresión` },
+    { label: "Energía", value: sale.energy_cost },
+    { label: "Postproceso", value: sale.postprocess_cost, detail: Number(sale.postprocess_hours) ? `${Number(sale.postprocess_hours)} h` : "" },
+    { label: "Insumos", value: sale.supplies_cost, detail: supplyDetail },
+    { label: "Envío", value: sale.shipping_cost },
+  ];
+  // Las líneas en $0 sin detalle solo agregan ruido.
+  return lines.filter((l) => Number(l.value) !== 0 || l.detail);
+}
+
 async function loadCatalog() {
   const [p, f, s] = await Promise.all([
     printersApi.listPrinters(),
@@ -628,6 +650,7 @@ onMounted(async () => {
                 <th>Registrada por</th>
                 <th>Impresora</th>
                 <th class="text-right">Precio</th>
+                <th class="text-right">Costo</th>
                 <th class="text-right">Ganancia</th>
                 <th class="text-right">Margen</th>
                 <th>Pago</th>
@@ -635,7 +658,8 @@ onMounted(async () => {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="s in sales" :key="s.id">
+              <template v-for="s in sales" :key="s.id">
+              <tr :class="{ 'row-expanded': expandedCostId === s.id }">
                 <td>
                   {{ formatDate(s.sale_date) }}
                   <div class="text-sm" :class="isOverdue(s, today) ? 'overdue-text' : 'text-muted'">{{ deliveryLabel(s) }}</div>
@@ -668,6 +692,18 @@ onMounted(async () => {
                 </td>
                 <td>{{ s.printer_name }}</td>
                 <td class="text-right mono">{{ formatCurrency(s.price) }}</td>
+                <td class="text-right">
+                  <button
+                    type="button"
+                    class="cost-toggle mono"
+                    :aria-expanded="expandedCostId === s.id"
+                    title="Ver el desglose de costos"
+                    @click="toggleCost(s.id)"
+                  >
+                    {{ formatCurrency(s.total_cost) }}
+                    <Icon name="chevronDown" :size="16" :class="{ 'is-open': expandedCostId === s.id }" />
+                  </button>
+                </td>
                 <!-- Un cancelado no dejó ganancia: se muestra su pérdida (si la hubo). -->
                 <td v-if="s.status === 'cancelado'" class="text-right mono">
                   <span v-if="Number(s.loss_amount) > 0" style="color: var(--danger)" title="Pérdida por la cancelación">
@@ -692,6 +728,30 @@ onMounted(async () => {
                   </div>
                 </td>
               </tr>
+              <tr v-if="expandedCostId === s.id" class="cost-detail-row">
+                <td :colspan="auth.isWatcher ? 12 : 11">
+                  <div class="cost-detail">
+                    <div class="cost-lines">
+                      <div v-for="line in costLines(s)" :key="line.label" class="cost-line">
+                        <span class="cost-line-label">{{ line.label }}</span>
+                        <span v-if="line.detail" class="text-muted text-sm">{{ line.detail }}</span>
+                        <span class="cost-line-value mono">{{ formatCurrency(line.value) }}</span>
+                      </div>
+                    </div>
+                    <div class="cost-summary">
+                      <div class="cost-line"><span>Precio cobrado</span><span class="mono">{{ formatCurrency(s.price) }}</span></div>
+                      <div class="cost-line"><span>Costo total</span><span class="mono">−{{ formatCurrency(s.total_cost) }}</span></div>
+                      <div class="cost-line cost-line-total">
+                        <span>Ganancia</span>
+                        <span class="mono" :style="{ color: Number(s.profit) < 0 ? 'var(--danger)' : 'var(--success)' }">
+                          {{ formatCurrency(s.profit) }}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+              </template>
             </tbody>
           </table>
         </div>
@@ -705,7 +765,7 @@ onMounted(async () => {
       </template>
     </div>
 
-    <Modal v-if="showModal" :title="editingId ? 'Editar venta' : 'Nueva venta'" width="680px" @close="showModal = false">
+    <Modal persistent v-if="showModal" :title="editingId ? 'Editar venta' : 'Nueva venta'" width="680px" @close="showModal = false">
       <form @submit.prevent="handleSubmit">
         <div v-if="editingSale" class="alert alert-info" style="margin-bottom: 14px">
           Inventario de <strong>{{ editingSale.owner_username }}</strong> · Registrada por
@@ -1004,6 +1064,80 @@ onMounted(async () => {
 @media (max-width: 600px) {
   .price-options {
     grid-template-columns: 1fr;
+  }
+}
+
+.cost-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.cost-toggle:hover {
+  background: var(--surface-alt);
+  color: var(--primary);
+}
+.cost-toggle svg {
+  transition: transform 0.15s ease;
+}
+.cost-toggle svg.is-open {
+  transform: rotate(180deg);
+}
+tr.row-expanded td {
+  border-bottom-color: transparent;
+}
+.cost-detail-row td {
+  background: var(--surface-alt);
+}
+/* Ancho acotado: si el panel tomara todo el ancho de la fila, estiraría la tabla. */
+.cost-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 520px) 240px;
+  gap: 24px;
+  max-width: 800px;
+  padding: 4px 4px 8px;
+}
+.cost-lines,
+.cost-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cost-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.cost-line > :last-child {
+  margin-left: auto;
+  white-space: nowrap;
+}
+.cost-line-label {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.cost-summary {
+  padding-left: 24px;
+  border-left: 1px solid var(--border);
+}
+.cost-line-total {
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  font-weight: 700;
+}
+@media (max-width: 720px) {
+  .cost-detail {
+    grid-template-columns: 1fr;
+  }
+  .cost-summary {
+    padding-left: 0;
+    border-left: none;
   }
 }
 </style>

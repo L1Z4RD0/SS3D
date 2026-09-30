@@ -81,7 +81,7 @@ async function submit() {
 </script>
 
 <template>
-  <Modal title="Cancelar pedido" :subtitle="`${sale.client_name} · ${STATUS_LABELS[sale.status]}`" width="560px" @close="emit('close')">
+  <Modal persistent title="Cancelar pedido" :subtitle="`${sale.client_name} · ${STATUS_LABELS[sale.status]}`" width="560px" @close="emit('close')">
     <form @submit.prevent="submit">
       <!-- Pedido de una pieza del Almacén -->
       <div v-if="fromAlmacen" class="alert alert-info cancel-info">

@@ -159,7 +159,7 @@ onMounted(load);
       </div>
     </div>
 
-    <Modal v-if="showModal" :title="editingId ? 'Editar impresora' : 'Nueva impresora'" @close="showModal = false">
+    <Modal persistent v-if="showModal" :title="editingId ? 'Editar impresora' : 'Nueva impresora'" @close="showModal = false">
       <form @submit.prevent="handleSubmit">
         <div class="flex flex-col gap-3">
           <div class="field">

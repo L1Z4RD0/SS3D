@@ -6,6 +6,7 @@ import { extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
+import PasswordInput from "../components/PasswordInput.vue";
 
 const tab = ref("users");
 
@@ -313,7 +314,7 @@ onMounted(() => {
       </template>
     </div>
 
-    <Modal v-if="showUserModal" title="Nuevo usuario" @close="showUserModal = false">
+    <Modal persistent v-if="showUserModal" title="Nuevo usuario" @close="showUserModal = false">
       <form @submit.prevent="submitUser">
         <div class="flex flex-col gap-3">
           <div class="field">
@@ -322,7 +323,7 @@ onMounted(() => {
           </div>
           <div class="field">
             <label>Contraseña inicial</label>
-            <input v-model="userForm.password" type="password" required minlength="8" />
+            <PasswordInput v-model="userForm.password" required minlength="8" autocomplete="new-password" />
             <span class="field-hint">Mínimo 8 caracteres. El usuario podrá cambiarla luego.</span>
           </div>
           <div class="field">
@@ -347,6 +348,7 @@ onMounted(() => {
     </Modal>
 
     <Modal
+      persistent
       v-if="showWatcherModal && watcherTarget"
       :title="`Usuarios que observa ${watcherTarget.username}`"
       subtitle="Podrá ver el inventario de los usuarios marcados, cotizar y registrar ventas con él (cada venta indica que la hizo el observador). No puede modificar inventario ni impresoras."

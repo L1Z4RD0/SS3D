@@ -317,7 +317,7 @@ const ownerLabel = computed(() => observedUsers.value.find((u) => u.id === owner
     </div>
 
     <!-- Vender -->
-    <Modal v-if="sellTarget" title="Vender pieza del Almacén" :subtitle="sellTarget.name" width="560px" @close="sellTarget = null">
+    <Modal persistent v-if="sellTarget" title="Vender pieza del Almacén" :subtitle="sellTarget.name" width="560px" @close="sellTarget = null">
       <form @submit.prevent="confirmSell">
         <div class="alert alert-info piece-info">
           Se crea un pedido en estado <strong>Lista</strong>. No descuenta material ni suma horas (ya se usaron en el
@@ -364,7 +364,7 @@ const ownerLabel = computed(() => observedUsers.value.find((u) => u.id === owner
     </Modal>
 
     <!-- Editar -->
-    <Modal v-if="editTarget" title="Editar pieza" :subtitle="`Costo ${formatCurrency(editTarget.cost)}`" width="480px" @close="editTarget = null">
+    <Modal persistent v-if="editTarget" title="Editar pieza" :subtitle="`Costo ${formatCurrency(editTarget.cost)}`" width="480px" @close="editTarget = null">
       <form @submit.prevent="confirmEdit">
         <div class="field">
           <label>Nombre</label>
@@ -390,7 +390,7 @@ const ownerLabel = computed(() => observedUsers.value.find((u) => u.id === owner
     </Modal>
 
     <!-- Descartar -->
-    <Modal v-if="discardTarget" title="Descartar pieza" :subtitle="discardTarget.name" width="480px" @close="discardTarget = null">
+    <Modal persistent v-if="discardTarget" title="Descartar pieza" :subtitle="discardTarget.name" width="480px" @close="discardTarget = null">
       <form @submit.prevent="confirmDiscard">
         <div class="alert alert-warning piece-info">
           La pieza sale del Almacén y su costo, <strong>{{ formatCurrency(discardTarget.cost) }}</strong>, pasa a contar
