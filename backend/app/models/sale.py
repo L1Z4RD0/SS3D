@@ -107,6 +107,11 @@ class Sale(UUIDMixin, TimestampMixin, Base):
     status_history: Mapped[list["SaleStatusHistory"]] = relationship(
         back_populates="sale", cascade="all, delete-orphan", order_by="SaleStatusHistory.changed_at"
     )
+    # Planchas adicionales y reimpresiones (la principal es la impresora/horas/filamentos
+    # de la venta).
+    plates: Mapped[list["SalePlate"]] = relationship(
+        back_populates="sale", cascade="all, delete-orphan", order_by="SalePlate.created_at"
+    )
     # Pieza(s) que este pedido dejó en el Almacén al cancelarse (solo lectura).
     origin_pieces: Mapped[list["WarehouseItem"]] = relationship(
         primaryjoin="Sale.id == WarehouseItem.origin_sale_id", viewonly=True

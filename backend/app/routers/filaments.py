@@ -9,6 +9,7 @@ from app.dependencies import get_current_user, readable_user_ids, require_not_wa
 from app.models.filament import Filament
 from app.models.sale import Sale
 from app.models.sale_filament import SaleFilament
+from app.models.sale_plate import SalePlateFilament
 from app.models.user import User
 from app.schemas.filament import FilamentCreateRequest, FilamentResponse, FilamentUpdateRequest
 from app.services.audit import log_event
@@ -185,6 +186,7 @@ def delete_filament(
     has_sales = (
         db.query(Sale.id).filter(Sale.filament_id == filament.id).first() is not None
         or db.query(SaleFilament.id).filter(SaleFilament.filament_id == filament.id).first() is not None
+        or db.query(SalePlateFilament.id).filter(SalePlateFilament.filament_id == filament.id).first() is not None
     )
 
     if has_sales:

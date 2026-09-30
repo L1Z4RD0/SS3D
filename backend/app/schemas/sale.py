@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
-from app.schemas.calculator import FilamentUsageInput, SupplyUsageInput
+from app.schemas.calculator import FilamentUsageInput, PlateInput, SupplyUsageInput
 
 PAYMENT_METHODS = ("efectivo", "transferencia", "debito", "credito", "por_cobrar", "cortesia")
 # Pagar "por cortesía" es regalar: el pedido se registra con precio $0 y sus costos
@@ -33,6 +33,9 @@ class SaleCreateRequest(BaseModel):
     supplies: list[SupplyUsageInput] = Field(default_factory=list)
     payment_method: str = Field(pattern="^(" + "|".join(PAYMENT_METHODS) + ")$")
     notes: str | None = None
+    # Planchas adicionales del mismo producto (la impresora/horas/filamentos de arriba son
+    # la plancha principal).
+    extra_plates: list[PlateInput] = Field(default_factory=list, max_length=20)
 
 
 class SaleUpdateRequest(BaseModel):
@@ -124,6 +127,31 @@ class SaleSupplyResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AddPlateRequest(PlateInput):
+    # Reimpresión por fallo: suma costo sin cambiar el precio (la pérdida se ve en la ganancia).
+    is_reprint: bool = False
+
+
+class SalePlateFilamentResponse(BaseModel):
+    filament_id: uuid.UUID
+    filament_label: str
+    grams_used: Decimal
+
+
+class SalePlateResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    printer_id: uuid.UUID
+    printer_name: str
+    print_hours: Decimal
+    is_reprint: bool
+    material_cost: Decimal
+    depreciation_cost: Decimal
+    energy_cost: Decimal
+    total_cost: Decimal
+    filaments: list[SalePlateFilamentResponse]
+
+
 class SaleFilamentResponse(BaseModel):
     filament_id: uuid.UUID
     filament_label: str
@@ -182,6 +210,10 @@ class SaleResponse(BaseModel):
     supplies_used: list[SaleSupplyResponse]
     # Algún insumo se usó sin stock: su costo (y la ganancia) es provisional hasta reponerlo.
     has_provisional_costs: bool = False
+    # Planchas adicionales y reimpresiones (ya incluidas en los costos de arriba).
+    plates: list[SalePlateResponse] = Field(default_factory=list)
+    # Cuánto costaron las reimpresiones por fallo (parte del costo total).
+    reprint_cost: Decimal = Decimal(0)
     filaments_used: list[SaleFilamentResponse]
     exhausted_filaments: list[ExhaustedFilamentInfo] = Field(default_factory=list)
     # Solo se incluye al pedir un pedido puntual o al cambiarle el estado.

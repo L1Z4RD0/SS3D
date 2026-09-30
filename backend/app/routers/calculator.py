@@ -28,6 +28,7 @@ from app.services.calculator import (
 from app.services.discord import announce_order
 from app.services.inventory import consume_supply
 from app.services.order_status import record_status, start_as_pending
+from app.services.sale_plates import apply_plates, resolve_plates, with_new_plates
 from app.services.sale_builder import (
     apply_filaments_to_sale,
     build_cost_breakdown,
@@ -52,6 +53,7 @@ def compute_quote(
     printer = resolve_printer(db, current_user, payload.printer_id)
     resolved_filaments = resolve_filaments(db, current_user, payload.filaments)
     resolved_supplies = resolve_supplies(db, current_user, payload.supplies)
+    resolved_plates = resolve_plates(db, current_user, payload.extra_plates)
 
     breakdown = build_cost_breakdown(
         printer=printer,
@@ -63,6 +65,7 @@ def compute_quote(
         electricity_rate=ELECTRICITY_RATE,
         labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
+    breakdown = with_new_plates(breakdown, resolved_plates)
 
     return QuoteResponse(
         breakdown=CostBreakdownSchema(
@@ -108,9 +111,13 @@ def save_quote_as_sale(
     owner_id = resolve_sale_owner(db, current_user, printer.user_id)
     resolved_filaments = resolve_filaments(db, current_user, payload.filaments)
     resolved_supplies = resolve_supplies(db, current_user, payload.supplies)
-    foreign = [f for f, _ in resolved_filaments if f.user_id != owner_id] + [
-        s for s, _ in resolved_supplies if s.user_id != owner_id
-    ]
+    resolved_plates = resolve_plates(db, current_user, payload.extra_plates)
+    foreign = (
+        [f for f, _ in resolved_filaments if f.user_id != owner_id]
+        + [s for s, _ in resolved_supplies if s.user_id != owner_id]
+        + [p.printer for p in resolved_plates if p.printer.user_id != owner_id]
+        + [f for p in resolved_plates for f, _ in p.filaments if f.user_id != owner_id]
+    )
     if foreign:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -127,6 +134,7 @@ def save_quote_as_sale(
         electricity_rate=ELECTRICITY_RATE,
         labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
+    breakdown = with_new_plates(breakdown, resolved_plates)
 
     if manual_price is not None:
         scenario = build_manual_price_scenario(breakdown.total_cost, manual_price)
@@ -168,6 +176,7 @@ def save_quote_as_sale(
     record_status(db, sale, sale.status, current_user, "Pedido creado desde la Calculadora")
 
     exhausted_filaments = apply_filaments_to_sale(db, sale, resolved_filaments)
+    exhausted_filaments += [f for f in apply_plates(db, sale, resolved_plates) if f not in exhausted_filaments]
 
     for supply, qty in resolved_supplies:
         owed = consume_supply(supply, qty)

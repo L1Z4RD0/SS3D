@@ -15,6 +15,8 @@ import Icon from "../components/Icon.vue";
 import DoughnutChart from "../components/DoughnutChart.vue";
 import QuoteDocument from "../components/QuoteDocument.vue";
 import FilamentPickerModal from "../components/FilamentPickerModal.vue";
+import ExtraPlatesEditor from "../components/ExtraPlatesEditor.vue";
+import { platesPayload, platesError } from "../utils/plates";
 import { useObservedUsers } from "../composables/useObservedUsers";
 
 const auth = useAuthStore();
@@ -236,8 +238,12 @@ const breakdownValues = computed(() => {
   return [b.material_cost, b.depreciation_cost, b.energy_cost, b.postprocess_cost, b.supplies_cost, b.shipping_cost].map(Number);
 });
 
+// Planchas adicionales del mismo producto (entran en el costo y en el precio sugerido).
+const extraPlates = ref([]);
+
 function buildQuotePayload() {
   return {
+    extra_plates: platesPayload(extraPlates.value),
     printer_id: form.printer_id,
     filaments: buildFilamentsPayload(),
     print_hours: Number(form.print_hours) || 0,
@@ -265,7 +271,7 @@ function validateJobInputs() {
   if (!isValidOrEmpty(form.print_hours, { min: 0 })) return "Las horas de impresión no pueden ser negativas.";
   if (!isValidOrEmpty(form.postprocess_hours, { min: 0 })) return "Las horas de postprocesado no pueden ser negativas.";
   if (!isValidOrEmpty(form.shipping_cost, { min: 0 })) return "El envío/embalaje no puede ser negativo.";
-  return "";
+  return platesError(extraPlates.value);
 }
 
 /* -------- Precio manual en la tabla de escenarios --------
@@ -551,6 +557,7 @@ function saveDraft() {
         supplyRows: supplyRows.value,
         newSupplyId: newSupplyId.value,
         newSupplyQty: newSupplyQty.value,
+        extraPlates: extraPlates.value,
       })
     );
   } catch {
@@ -588,6 +595,7 @@ async function restoreDraft() {
   supplyRows.value = Array.isArray(draft.supplyRows) ? draft.supplyRows : [];
   newSupplyId.value = draft.newSupplyId || "";
   newSupplyQty.value = draft.newSupplyQty ?? null;
+  extraPlates.value = Array.isArray(draft.extraPlates) ? draft.extraPlates : [];
   // Wait for the watcher below to flush before lifting the guard, otherwise it would
   // immediately re-save the exact same draft it just restored (harmless, but wasteful).
   await nextTick();
@@ -610,6 +618,7 @@ function resetForm() {
   newSupplyId.value = "";
   newSupplyQty.value = null;
   supplyRowError.value = "";
+  extraPlates.value = [];
   quote.value = null;
   calcError.value = "";
   useCustomPrice.value = false;
@@ -629,6 +638,7 @@ watch(
     supplyRows: supplyRows.value,
     newSupplyId: newSupplyId.value,
     newSupplyQty: newSupplyQty.value,
+    extraPlates: extraPlates.value,
   }),
   () => {
     if (restoringDraft) return;
@@ -758,6 +768,13 @@ onMounted(() => {
               <input v-model.number="form.shipping_cost" type="number" min="0" step="1" />
             </div>
           </div>
+
+          <ExtraPlatesEditor
+            v-model="extraPlates"
+            :printers="printers"
+            :filaments="selectableFilaments"
+            :default-printer-id="form.printer_id"
+          />
 
           <div class="field">
             <label>Consumibles usados</label>

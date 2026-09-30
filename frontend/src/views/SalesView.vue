@@ -14,8 +14,11 @@ import { useObservedUsers } from "../composables/useObservedUsers";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
 import FilamentPickerModal from "../components/FilamentPickerModal.vue";
+import ExtraPlatesEditor from "../components/ExtraPlatesEditor.vue";
+import AddPlateModal from "../components/AddPlateModal.vue";
+import { platesPayload, platesError } from "../utils/plates";
 import OrderStatusModal from "../components/OrderStatusModal.vue";
-import { STATUS_LABELS, NEXT_ACTION, statusClass, isOverdue } from "../utils/orderStatus";
+import { STATUS_LABELS, NEXT_ACTION, OPEN_STATUSES, statusClass, isOverdue } from "../utils/orderStatus";
 
 const auth = useAuthStore();
 const today = todayISO();
@@ -48,19 +51,64 @@ const filters = reactive({ date_from: "", date_to: "", client: "", printer_id: "
 
 const paymentLabel = (v) => PAYMENT_METHODS.find((p) => p.value === v)?.label || v;
 
+// Planchas de un pedido ya registrado (desde el detalle de costos).
+const plateSale = ref(null);
+const saleOwnerPrinters = (sale) => printers.value.filter((p) => !auth.isWatcher || p.owner_id === sale.owner_id);
+const saleOwnerFilaments = (sale) =>
+  filaments.value.filter((f) => Number(f.available_g) > 0 && (!auth.isWatcher || f.owner_id === sale.owner_id));
+const canManagePlates = (sale) => sale.can_edit && OPEN_STATUSES.includes(sale.status) && !sale.warehouse_item_id;
+
+function replaceSale(updated) {
+  const i = sales.value.findIndex((x) => x.id === updated.id);
+  if (i !== -1) sales.value[i] = updated;
+}
+async function onPlateSaved(updated) {
+  plateSale.value = null;
+  replaceSale(updated);
+  await promptExhaustedFilaments(updated.exhausted_filaments);
+  loadCatalog();
+}
+async function removePlate(sale, plate) {
+  const ok = await confirmAction({
+    title: "Quitar plancha",
+    message: `¿Quitar "${plate.name}"? Se devuelven su filamento y sus horas, y su costo sale del pedido.`,
+    confirmLabel: "Quitar",
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    replaceSale(await salesApi.deleteSalePlate(sale.id, plate.id));
+    loadCatalog();
+  } catch (err) {
+    await confirmAction({
+      title: "No se pudo quitar la plancha",
+      message: extractApiError(err, "Intenta de nuevo."),
+      confirmLabel: "Entendido",
+    });
+  }
+}
+
 // Desglose de costos de una venta (se despliega bajo su fila).
 const expandedCostId = ref(null);
 function toggleCost(id) {
   expandedCostId.value = expandedCostId.value === id ? null : id;
 }
 function costLines(sale) {
-  const filamentDetail = (sale.filaments_used || [])
-    .map((f) => `${f.filament_label} (${Number(f.grams_used).toLocaleString("es-CL")} g)`)
+  // Material y horas de todas las planchas (la principal + las adicionales), porque los
+  // montos de abajo ya las incluyen.
+  const gramsByLabel = new Map();
+  const addGrams = (label, grams) => gramsByLabel.set(label, (gramsByLabel.get(label) || 0) + Number(grams));
+  (sale.filaments_used || []).forEach((f) => addGrams(f.filament_label, f.grams_used));
+  (sale.plates || []).forEach((p) => p.filaments.forEach((f) => addGrams(f.filament_label, f.grams_used)));
+  const filamentDetail = [...gramsByLabel]
+    .map(([label, grams]) => `${label} (${grams.toLocaleString("es-CL")} g)`)
     .join(" · ");
+  const hours = Number(sale.print_hours) + (sale.plates || []).reduce((sum, p) => sum + Number(p.print_hours), 0);
+  const inPlates = sale.plates?.length ? `, en ${sale.plates.length + 1} planchas` : "";
   const supplyDetail = (sale.supplies_used || []).map((u) => `${u.supply_name} × ${Number(u.quantity_used)}`).join(" · ");
   const lines = [
     { label: "Material", value: sale.material_cost, detail: filamentDetail || sale.filament_label || "" },
-    { label: "Depreciación impresora", value: sale.depreciation_cost, detail: `${Number(sale.print_hours)} h de impresión` },
+    { label: "Depreciación impresora", value: sale.depreciation_cost, detail: `${Number(hours.toFixed(2))} h de impresión${inPlates}` },
     { label: "Energía", value: sale.energy_cost },
     { label: "Postproceso", value: sale.postprocess_cost, detail: Number(sale.postprocess_hours) ? `${Number(sale.postprocess_hours)} h` : "" },
     {
@@ -217,8 +265,21 @@ const manualPriceBreakdown = computed(() => {
   return { price, profit: cost === null ? null : price - cost };
 });
 
+// Planchas adicionales de un pedido nuevo. En un pedido ya registrado se gestionan desde
+// el detalle de costos (Agregar plancha), pero entran igual en el precio sugerido.
+const extraPlates = ref([]);
+function storedPlatesAsInput(sale) {
+  return (sale?.plates || []).map((p) => ({
+    name: p.name,
+    printer_id: p.printer_id,
+    print_hours: Number(p.print_hours),
+    filaments: p.filaments.map((f) => ({ filament_id: f.filament_id, grams_used: Number(f.grams_used) })),
+  }));
+}
+
 function buildJobPayload() {
   return {
+    extra_plates: editingId.value ? storedPlatesAsInput(editingSale.value) : platesPayload(extraPlates.value),
     printer_id: form.printer_id,
     filaments: filamentRows.value.map((r) => ({ filament_id: r.filament_id, grams_used: r.grams_used })),
     print_hours: Number(form.print_hours) || 0,
@@ -407,6 +468,7 @@ function openCreate() {
   if (auth.isWatcher && observedUsers.value.length === 1) form.owner_id = observedUsers.value[0].id;
   supplyRows.value = [];
   filamentRows.value = [];
+  extraPlates.value = [];
   resetPricing();
   formError.value = "";
   showModal.value = true;
@@ -467,6 +529,8 @@ function buildPayload() {
     ...(auth.isWatcher && !editingId.value ? { owner_id: form.owner_id } : {}),
     ...buildJobPayload(),
   };
+  // Al editar, las planchas no viajan: se agregan o quitan desde el detalle de costos.
+  if (editingId.value) delete payload.extra_plates;
   if (editingStatus.value === "entregada") payload.delivered_date = form.delivered_date;
   else payload.promised_delivery_date = form.promised_delivery_date;
   return payload;
@@ -494,6 +558,10 @@ function validateSaleForm() {
   }
   const jobError = validateJobInputs();
   if (jobError) return jobError;
+  if (!editingId.value) {
+    const plateError = platesError(extraPlates.value);
+    if (plateError) return plateError;
+  }
   if (isGift.value) return "";
   if (useManualPrice.value) {
     if (!isValidNumber(manualPrice.value, { min: 0, allowZero: false })) return "Ingresa un precio válido, mayor a 0.";
@@ -769,6 +837,38 @@ onMounted(async () => {
                         <span v-if="line.detail" class="text-muted text-sm">{{ line.detail }}</span>
                         <span class="cost-line-value mono">{{ formatCurrency(line.value) }}</span>
                       </div>
+                      <div v-if="s.plates?.length || canManagePlates(s)" class="plates-block">
+                        <div class="plates-block-head">
+                          <span class="cost-line-label">Planchas</span>
+                          <span class="text-muted text-sm">
+                            Plancha 1: {{ s.printer_name }} · {{ Number(s.print_hours) }} h
+                            <template v-if="s.plates?.length"> · las adicionales ya están sumadas arriba</template>
+                          </span>
+                          <button v-if="canManagePlates(s)" type="button" class="btn btn-secondary btn-sm" @click="plateSale = s">
+                            <Icon name="plus" :size="14" /> Plancha / reimpresión
+                          </button>
+                        </div>
+                        <div v-for="p in s.plates" :key="p.id" class="cost-line plate-line" :class="{ 'is-reprint': p.is_reprint }">
+                          <span class="cost-line-label">
+                            <span v-if="p.is_reprint" class="badge badge-danger">Reimpresión</span>
+                            {{ p.name }}
+                          </span>
+                          <span class="text-muted text-sm">
+                            {{ p.printer_name }} · {{ Number(p.print_hours) }} h<template v-if="p.filaments.length">
+                              · {{ p.filaments.map((f) => `${f.filament_label} (${Number(f.grams_used)} g)`).join(" · ") }}</template>
+                          </span>
+                          <span class="cost-line-value mono">{{ formatCurrency(p.total_cost) }}</span>
+                          <button
+                            v-if="canManagePlates(s)"
+                            type="button"
+                            class="btn btn-icon btn-ghost btn-sm"
+                            title="Quitar plancha"
+                            @click="removePlate(s, p)"
+                          >
+                            <Icon name="close" :size="13" />
+                          </button>
+                        </div>
+                      </div>
                     </div>
                     <div class="cost-summary">
                       <div v-if="s.has_provisional_costs" class="provisional-note">
@@ -776,6 +876,9 @@ onMounted(async () => {
                       </div>
                       <div class="cost-line"><span>Precio cobrado</span><span class="mono">{{ formatCurrency(s.price) }}</span></div>
                       <div class="cost-line"><span>Costo total</span><span class="mono">−{{ formatCurrency(s.total_cost) }}</span></div>
+                      <div v-if="Number(s.reprint_cost) > 0" class="cost-line text-sm reprint-note">
+                        <span>incluye reimpresiones</span><span class="mono">{{ formatCurrency(s.reprint_cost) }}</span>
+                      </div>
                       <div class="cost-line cost-line-total">
                         <span>Ganancia</span>
                         <span class="mono" :style="{ color: Number(s.profit) < 0 ? 'var(--danger)' : 'var(--success)' }">
@@ -933,6 +1036,20 @@ onMounted(async () => {
           </div>
         </div>
 
+        <ExtraPlatesEditor
+          v-if="!editingId"
+          v-model="extraPlates"
+          class="mt-2"
+          :printers="ownerPrinters"
+          :filaments="selectableFilaments"
+          :default-printer-id="form.printer_id"
+          :disabled="auth.isWatcher && !form.owner_id"
+        />
+        <div v-else-if="editingSale?.plates?.length" class="alert alert-info mt-2">
+          Este pedido tiene {{ editingSale.plates.length }} plancha(s) adicional(es) (ya incluidas en el costo). Se agregan
+          o quitan desde el detalle de costos en la lista de ventas.
+        </div>
+
         <div class="field mt-2">
           <label>Precio de venta</label>
           <span v-if="!form.printer_id" class="field-hint">
@@ -1017,6 +1134,15 @@ onMounted(async () => {
       :sale-id="statusModalSaleId"
       @close="statusModalSaleId = null"
       @changed="loadSales"
+    />
+
+    <AddPlateModal
+      v-if="plateSale"
+      :sale="plateSale"
+      :printers="saleOwnerPrinters(plateSale)"
+      :filaments="saleOwnerFilaments(plateSale)"
+      @close="plateSale = null"
+      @saved="onPlateSaved"
     />
 
     <FilamentPickerModal
@@ -1207,5 +1333,39 @@ tr.row-expanded td {
 .provisional-note {
   font-size: 0.8rem;
   margin-bottom: 4px;
+}
+
+.plates-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+.plates-block-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.plates-block-head > :last-child {
+  margin-left: auto;
+}
+.plate-line .cost-line-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+.plate-line .cost-line-value {
+  margin-left: auto;
+}
+.cost-line.plate-line > button {
+  margin-left: 0;
+}
+.plate-line.is-reprint .cost-line-value,
+.reprint-note {
+  color: var(--danger);
 }
 </style>

@@ -16,6 +16,8 @@ from app.schemas.calculator import FilamentUsageInput, SupplyUsageInput
 from app.schemas.sale import (
     ExhaustedFilamentInfo,
     SaleFilamentResponse,
+    SalePlateFilamentResponse,
+    SalePlateResponse,
     SaleResponse,
     SaleStatusHistoryResponse,
     SaleSupplyResponse,
@@ -246,6 +248,28 @@ def to_sale_response(
         warehouse_item_id=sale.warehouse_item_id,
         can_edit=can_edit_sale(sale, viewer),
         has_provisional_costs=any(ss.pending_qty > 0 for ss in sale.supplies_used),
+        plates=[
+            SalePlateResponse(
+                id=p.id,
+                name=p.name,
+                printer_id=p.printer_id,
+                printer_name=p.printer.name,
+                print_hours=p.print_hours,
+                is_reprint=p.is_reprint,
+                material_cost=p.material_cost,
+                depreciation_cost=p.depreciation_cost,
+                energy_cost=p.energy_cost,
+                total_cost=p.total_cost,
+                filaments=[
+                    SalePlateFilamentResponse(
+                        filament_id=pf.filament_id, filament_label=_filament_label(pf.filament), grams_used=pf.grams_used
+                    )
+                    for pf in p.filaments_used
+                ],
+            )
+            for p in sale.plates
+        ],
+        reprint_cost=sum((p.total_cost for p in sale.plates if p.is_reprint), Decimal(0)),
         status_history=history,
         id=sale.id,
         sale_date=sale.sale_date,

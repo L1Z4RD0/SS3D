@@ -17,6 +17,15 @@ class FilamentUsageInput(BaseModel):
     grams_used: Decimal = Field(gt=0, le=GRAMS_MAX)
 
 
+class PlateInput(BaseModel):
+    """Plancha adicional: otra parte del mismo producto, con su impresora, horas y filamentos."""
+
+    name: str = Field(min_length=1, max_length=80)
+    printer_id: uuid.UUID
+    print_hours: Decimal = Field(ge=0, default=0)
+    filaments: list[FilamentUsageInput] = Field(default_factory=list)
+
+
 class QuoteRequest(BaseModel):
     printer_id: uuid.UUID
     filaments: list[FilamentUsageInput] = Field(default_factory=list)
@@ -24,6 +33,8 @@ class QuoteRequest(BaseModel):
     postprocess_hours: Decimal = Field(ge=0, default=0)
     supplies: list[SupplyUsageInput] = Field(default_factory=list)
     shipping_cost: Decimal = Field(ge=0, default=0)
+    # Planchas adicionales del mismo producto (la de arriba es la principal).
+    extra_plates: list[PlateInput] = Field(default_factory=list, max_length=20)
 
 
 class CostBreakdown(BaseModel):

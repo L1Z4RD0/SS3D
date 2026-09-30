@@ -33,3 +33,8 @@ export const PAYMENT_METHODS = [
 // Pagar "por cortesía" es regalar: precio $0, los costos se registran igual (el servidor
 // fuerza el $0).
 export const GIFT_PAYMENT_METHOD = "cortesia";
+
+// Planchas de un pedido ya registrado: otra parte del producto o una reimpresión por fallo
+// (suma costo, no cambia el precio). Devuelven el pedido actualizado.
+export const addSalePlate = (id, payload) => client.post(`/api/sales/${id}/plates`, payload).then((r) => r.data);
+export const deleteSalePlate = (id, plateId) => client.delete(`/api/sales/${id}/plates/${plateId}`).then((r) => r.data);

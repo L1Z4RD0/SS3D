@@ -13,8 +13,10 @@ from app.models.sale_filament import SaleFilament
 from app.models.sale_supply import SaleSupply
 from app.models.user import User
 from app.models.warehouse_item import WarehouseItem
+from app.models.sale_plate import SalePlate
 from app.schemas.sale import (
     GIFT_PAYMENT_METHOD,
+    AddPlateRequest,
     CalendarOrder,
     CancelOrderRequest,
     DeliveryDateChangeRequest,
@@ -29,6 +31,15 @@ from app.services.calculator import calculate_margin_percent, money
 from app.services.cancellation import cancel_order, check_can_delete, undo_remaining_consumption
 from app.services.discord import announce_order, mark_order_deleted, snapshot_before_delete, sync_order
 from app.services.inventory import consume_supply, restore_filament, restore_supply
+from app.services.sale_plates import (
+    add_plate,
+    apply_plates,
+    plates_grams,
+    remove_plate,
+    resolve_plates,
+    with_new_plates,
+    with_stored_plates,
+)
 from app.services.order_status import (
     LOCKED_PRODUCTION_STATUSES,
     OPEN_STATUSES,
@@ -278,6 +289,7 @@ def create_sale(
     printer = resolve_printer(db, current_user, payload.printer_id, [owner_id])
     resolved_filaments = resolve_filaments(db, current_user, payload.filaments, [owner_id])
     resolved_supplies = resolve_supplies(db, current_user, payload.supplies, [owner_id])
+    resolved_plates = resolve_plates(db, current_user, payload.extra_plates, [owner_id])
 
     breakdown = build_cost_breakdown(
         printer=printer,
@@ -289,6 +301,7 @@ def create_sale(
         electricity_rate=ELECTRICITY_RATE,
         labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
+    breakdown = with_new_plates(breakdown, resolved_plates)
 
     price = Decimal(0) if payload.payment_method == GIFT_PAYMENT_METHOD else money(payload.price)
     printer.hours_used += payload.print_hours
@@ -328,6 +341,7 @@ def create_sale(
     record_status(db, sale, sale.status, current_user, "Pedido creado")
 
     exhausted_filaments = apply_filaments_to_sale(db, sale, resolved_filaments)
+    exhausted_filaments += [f for f in apply_plates(db, sale, resolved_plates) if f not in exhausted_filaments]
 
     for supply, qty in resolved_supplies:
         owed = consume_supply(supply, qty)
@@ -499,6 +513,8 @@ def _update_full(db: Session, sale: Sale, payload: SaleUpdateRequest, changes: d
         electricity_rate=ELECTRICITY_RATE,
         labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
+    # Las planchas adicionales no se editan aquí: se conservan y siguen sumando su costo.
+    breakdown = with_stored_plates(breakdown, sale.plates)
 
     if new_price is not None:
         _set_price(sale, new_price)
@@ -530,6 +546,7 @@ def _update_full(db: Session, sale: Sale, payload: SaleUpdateRequest, changes: d
     sale.margin_percent = margin_percent
 
     exhausted_filaments = apply_filaments_to_sale(db, sale, resolved_filaments)
+    sale.grams_used = money(sale.grams_used + plates_grams(sale.plates))
 
     for supply, qty in resolved_supplies:
         owed = consume_supply(supply, qty)
@@ -619,6 +636,87 @@ def cancel_sale(
                      "discard_reason": piece.discard_reason},
             ip_address=ip,
         )
+    db.commit()
+    db.expire_all()
+    background_tasks.add_task(sync_order, sale.id)
+    return to_sale_response(_get_listed_sale(db, sale.id, current_user), viewer=current_user, include_history=True)
+
+
+def _check_plates_editable(sale: Sale) -> None:
+    if sale.status not in OPEN_STATUSES:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"El pedido está {STATUS_LABELS[sale.status]}: ya no se le pueden agregar ni quitar planchas.",
+        )
+    if sale.warehouse_item_id is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Un pedido de una pieza del Almacén no tiene planchas: la pieza ya existe."
+        )
+
+
+@router.post("/{sale_id}/plates", response_model=SaleResponse, status_code=status.HTTP_201_CREATED)
+def add_sale_plate(
+    sale_id: uuid.UUID,
+    payload: AddPlateRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Agrega una plancha a un pedido abierto (Pendiente, En producción o Lista): otra parte
+    del producto o una reimpresión por fallo. Descuenta su filamento, suma sus horas a la
+    impresora y su costo al pedido; el precio no cambia."""
+    sale = _get_editable_sale(db, sale_id, current_user)
+    _check_plates_editable(sale)
+    [plate] = resolve_plates(db, current_user, [payload], [sale.user_id], is_reprint=payload.is_reprint)
+    exhausted = add_plate(db, sale, plate)
+    log_event(
+        db,
+        user_id=current_user.id,
+        event_type="SALE_PLATE_ADDED",
+        entity_type="sale",
+        entity_id=sale.id,
+        details={
+            "name": plate.name,
+            "is_reprint": plate.is_reprint,
+            "printer_id": str(plate.printer.id),
+            "print_hours": str(plate.print_hours),
+            "cost": str(plate.costs.total_cost),
+        },
+        ip_address=request.client.host if request.client else None,
+    )
+    db.commit()
+    db.expire_all()
+    background_tasks.add_task(sync_order, sale.id)
+    return to_sale_response(_get_listed_sale(db, sale.id, current_user), exhausted, viewer=current_user, include_history=True)
+
+
+@router.delete("/{sale_id}/plates/{plate_id}", response_model=SaleResponse)
+def delete_sale_plate(
+    sale_id: uuid.UUID,
+    plate_id: uuid.UUID,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Quita una plancha agregada por error: devuelve su filamento y horas y su costo."""
+    sale = _get_editable_sale(db, sale_id, current_user)
+    _check_plates_editable(sale)
+    plate = db.query(SalePlate).filter(SalePlate.id == plate_id, SalePlate.sale_id == sale.id).first()
+    if plate is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Plancha no encontrada")
+    details = {"name": plate.name, "is_reprint": plate.is_reprint, "cost": str(plate.total_cost)}
+    remove_plate(db, sale, plate)
+    log_event(
+        db,
+        user_id=current_user.id,
+        event_type="SALE_PLATE_REMOVED",
+        entity_type="sale",
+        entity_id=sale.id,
+        details=details,
+        ip_address=request.client.host if request.client else None,
+    )
     db.commit()
     db.expire_all()
     background_tasks.add_task(sync_order, sale.id)

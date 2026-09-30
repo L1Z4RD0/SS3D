@@ -8,6 +8,7 @@ from app.database import get_db
 from app.dependencies import get_current_user, readable_user_ids, require_not_watcher
 from app.models.printer import Printer
 from app.models.sale import Sale
+from app.models.sale_plate import SalePlate
 from app.models.user import User
 from app.schemas.printer import PrinterCreateRequest, PrinterResponse, PrinterUpdateRequest
 from app.services.audit import log_event
@@ -129,7 +130,10 @@ def delete_printer(
     current_user: User = Depends(require_not_watcher),
 ):
     printer = _get_owned_printer(db, printer_id, current_user)
-    has_sales = db.query(Sale.id).filter(Sale.printer_id == printer.id).first() is not None
+    has_sales = (
+        db.query(Sale.id).filter(Sale.printer_id == printer.id).first() is not None
+        or db.query(SalePlate.id).filter(SalePlate.printer_id == printer.id).first() is not None
+    )
 
     if has_sales:
         printer.is_active = False

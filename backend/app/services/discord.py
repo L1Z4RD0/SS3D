@@ -249,6 +249,12 @@ def _details(s: SaleResponse) -> str:
         lines.append(f"🧵 **Filamento:** {filaments}")
     elif s.filament_label:
         lines.append(f"🧵 **Filamento:** {_esc(s.filament_label, 80)}")
+    extra = [p for p in s.plates if not p.is_reprint]
+    reprints = [p for p in s.plates if p.is_reprint]
+    if extra:
+        lines.append(f"🧩 **Planchas:** {1 + len(extra)}  ·  " + "  ·  ".join(_esc(p.name, 40) for p in extra[:5]))
+    if reprints:
+        lines.append(f"♻️ **Reimpresiones:** {len(reprints)}  ·  costo {_money(s.reprint_cost)}")
     if s.buyer_name:
         lines.append(f"👤 **Comprador:** {_esc(s.buyer_name, 80)}")
     if s.status == STATUS_CANCELLED and s.cancel_reason:

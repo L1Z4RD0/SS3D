@@ -37,6 +37,7 @@ from app.models.warehouse_item import (
 )
 from app.services.calculator import money
 from app.services.inventory import restore_filament, restore_supply
+from app.services.sale_plates import return_plates_hours, return_plates_materials
 from app.services.order_status import STATUS_LABELS, record_status
 
 OUTCOME_WAREHOUSE = "almacen"
@@ -48,6 +49,7 @@ def _return_materials(sale: Sale) -> None:
     if not sale.materials_returned:
         for sf in sale.filaments_used:
             restore_filament(sf.filament, sf.grams_used)
+        return_plates_materials(sale)
         sale.materials_returned = True
 
 
@@ -62,6 +64,7 @@ def _return_supplies(sale: Sale) -> None:
 def _return_hours(sale: Sale) -> None:
     if not sale.hours_returned:
         sale.printer.hours_used -= sale.print_hours
+        return_plates_hours(sale)
         sale.hours_returned = True
 
 
