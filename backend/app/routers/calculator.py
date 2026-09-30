@@ -17,7 +17,7 @@ from app.schemas.calculator import (
     SaveQuoteAsSaleRequest,
     ScenarioItem,
 )
-from app.schemas.sale import SaleResponse
+from app.schemas.sale import GIFT_PAYMENT_METHOD, SaleResponse
 from app.services.audit import log_event
 from app.services.calculator import (
     build_manual_price_scenario,
@@ -97,6 +97,8 @@ def save_quote_as_sale(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Fecha inválida, use formato YYYY-MM-DD")
 
     manual_price = payload.manual_price
+    if payload.payment_method == GIFT_PAYMENT_METHOD:
+        manual_price = Decimal(0)  # regalo: sin cobro, los costos quedan igual
     if manual_price is None and payload.chosen_margin_percent not in MARGIN_SCENARIO_PERCENTS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Escenario de margen inválido")
 

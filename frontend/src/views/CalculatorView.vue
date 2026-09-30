@@ -4,7 +4,7 @@ import * as calculatorApi from "../api/calculator";
 import * as printersApi from "../api/printers";
 import * as inventoryApi from "../api/inventory";
 import * as quotesApi from "../api/quotes";
-import { PAYMENT_METHODS } from "../api/sales";
+import { PAYMENT_METHODS, GIFT_PAYMENT_METHOD } from "../api/sales";
 import { BUSINESS_NAME, BUSINESS_LOGO_URL } from "../utils/business";
 import { formatCurrency, todayISO } from "../utils/format";
 import { GRAMS_MAX, isValidGrams, isValidNumber, gramsErrorMessage, extractApiError } from "../utils/validation";
@@ -331,6 +331,8 @@ const saveSuccess = ref("");
 const useManualPrice = ref(false);
 const manualPrice = ref(null);
 
+const saveIsGift = computed(() => saveForm.payment_method === GIFT_PAYMENT_METHOD);
+
 const manualPriceBreakdown = computed(() => {
   if (!useManualPrice.value || !isValidNumber(manualPrice.value, { min: 0, allowZero: false })) return null;
   const price = Number(manualPrice.value);
@@ -367,7 +369,7 @@ async function confirmSaveAsSale() {
     saveError.value = "Para guardar como venta, la impresora, los filamentos y los insumos deben ser del mismo usuario.";
     return;
   }
-  if (useManualPrice.value && !isValidNumber(manualPrice.value, { min: 0, allowZero: false })) {
+  if (!saveIsGift.value && useManualPrice.value && !isValidNumber(manualPrice.value, { min: 0, allowZero: false })) {
     saveError.value = "Ingresa un precio válido, mayor a 0.";
     return;
   }
@@ -383,7 +385,8 @@ async function confirmSaveAsSale() {
       payment_method: saveForm.payment_method,
       notes: saveForm.notes || null,
       chosen_margin_percent: selectedScenario.value.margin_percent,
-      manual_price: useManualPrice.value ? Number(manualPrice.value) : null,
+      // Regalo: el servidor lo registra en $0 e ignora escenario y precio manual.
+      manual_price: !saveIsGift.value && useManualPrice.value ? Number(manualPrice.value) : null,
     });
     showSaveModal.value = false;
     saveSuccess.value =
@@ -930,7 +933,11 @@ onMounted(() => {
 
     <Modal persistent v-if="showSaveModal" title="Guardar cotización como venta" @close="showSaveModal = false">
       <form @submit.prevent="confirmSaveAsSale">
-        <div class="alert alert-info mt-2" style="margin-bottom: 14px">
+        <div v-if="saveIsGift" class="alert alert-info mt-2" style="margin-bottom: 14px">
+          <strong>🎁 Regalo:</strong> se registra con precio $0. El costo del trabajo
+          (<strong>{{ formatCurrency(quote?.breakdown.total_cost || 0) }}</strong>) se descuenta igual y queda como pérdida.
+        </div>
+        <div v-else class="alert alert-info mt-2" style="margin-bottom: 14px">
           <template v-if="selectedScenario.manual">Precio manual</template>
           <template v-else>{{ selectedScenario.label }} (+{{ selectedScenario.margin_percent }}%)</template>
           · Precio:
@@ -970,7 +977,7 @@ onMounted(() => {
             <input v-model="saveForm.buyer_name" />
           </div>
         </div>
-        <div class="field mt-2">
+        <div v-if="!saveIsGift" class="field mt-2">
           <label class="flex items-center gap-2" style="cursor: pointer; font-weight: 600">
             <input v-model="useManualPrice" type="checkbox" style="width: auto" />
             Definir yo el precio final

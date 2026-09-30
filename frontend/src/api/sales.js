@@ -27,5 +27,9 @@ export const PAYMENT_METHODS = [
   { value: "debito", label: "Débito" },
   { value: "credito", label: "Crédito" },
   { value: "por_cobrar", label: "Por cobrar" },
-  { value: "cortesia", label: "Cortesía" },
+  { value: "cortesia", label: "Cortesía (regalo)" },
 ];
+
+// Pagar "por cortesía" es regalar: precio $0, los costos se registran igual (el servidor
+// fuerza el $0).
+export const GIFT_PAYMENT_METHOD = "cortesia";

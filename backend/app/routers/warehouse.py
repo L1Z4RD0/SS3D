@@ -23,7 +23,7 @@ from app.models.warehouse_item import (
     WAREHOUSE_ITEM_STATUSES,
     WarehouseItem,
 )
-from app.schemas.sale import SaleResponse
+from app.schemas.sale import GIFT_PAYMENT_METHOD, SaleResponse
 from app.schemas.warehouse import (
     WarehouseDiscardRequest,
     WarehouseItemResponse,
@@ -218,7 +218,10 @@ def sell_item(
     # El pedido es del dueño de la pieza; si lo registra un observador, debe tenerlo asignado.
     owner_id = resolve_sale_owner(db, current_user, item.user_id)
     origin = item.origin_sale
-    price = money(payload.price if payload.price is not None else item.price)
+    if payload.payment_method == GIFT_PAYMENT_METHOD:
+        price = Decimal(0)  # regalo: sin cobro, el costo de la pieza queda igual
+    else:
+        price = money(payload.price if payload.price is not None else item.price)
     today = date.today()
 
     sale = Sale(

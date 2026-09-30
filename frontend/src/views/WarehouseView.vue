@@ -2,7 +2,7 @@
 import { ref, reactive, computed, onMounted, watch } from "vue";
 import * as warehouseApi from "../api/warehouse";
 import { PIECE_STATUS_LABELS, DISCARD_REASON_LABELS } from "../api/warehouse";
-import { PAYMENT_METHODS } from "../api/sales";
+import { PAYMENT_METHODS, GIFT_PAYMENT_METHOD } from "../api/sales";
 import { formatCurrency, formatDate, todayISO } from "../utils/format";
 import { extractApiError, isValidNumber } from "../utils/validation";
 import { useAuthStore } from "../stores/auth";
@@ -85,10 +85,12 @@ function openSell(p) {
   sellError.value = "";
 }
 
-const sellProfit = computed(() => (sellTarget.value ? Number(sellForm.price) - Number(sellTarget.value.cost) : 0));
+const sellIsGift = computed(() => sellForm.payment_method === GIFT_PAYMENT_METHOD);
+const sellPrice = computed(() => (sellIsGift.value ? 0 : Number(sellForm.price)));
+const sellProfit = computed(() => (sellTarget.value ? sellPrice.value - Number(sellTarget.value.cost) : 0));
 
 async function confirmSell() {
-  if (!isValidNumber(sellForm.price, { min: 0 })) {
+  if (!sellIsGift.value && !isValidNumber(sellForm.price, { min: 0 })) {
     sellError.value = "Ingresa un precio válido.";
     return;
   }
@@ -100,7 +102,7 @@ async function confirmSell() {
       buyer_name: sellForm.buyer_name || null,
       promised_delivery_date: sellForm.promised_delivery_date,
       payment_method: sellForm.payment_method,
-      price: Number(sellForm.price),
+      price: sellPrice.value,
       notes: sellForm.notes || null,
       sale_date: todayISO(),
     });
@@ -343,7 +345,14 @@ const ownerLabel = computed(() => observedUsers.value.find((u) => u.id === owner
               <option v-for="pm in PAYMENT_METHODS" :key="pm.value" :value="pm.value">{{ pm.label }}</option>
             </select>
           </div>
-          <div class="field">
+          <div v-if="sellIsGift" class="field">
+            <label>Precio</label>
+            <div class="alert alert-info" style="margin: 0">
+              <strong>🎁 Regalo:</strong> precio $0. El costo de la pieza ({{ formatCurrency(sellTarget.cost) }}) queda como
+              pérdida.
+            </div>
+          </div>
+          <div v-else class="field">
             <label>Precio</label>
             <input v-model.number="sellForm.price" type="number" min="0" step="1" required :class="{ 'input-below-cost': belowCost(sellTarget, sellForm.price) }" />
             <span class="field-hint" :class="{ 'below-cost': sellProfit < 0 }">

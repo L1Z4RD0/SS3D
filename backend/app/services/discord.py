@@ -237,7 +237,10 @@ def _details(s: SaleResponse) -> str:
         ts = _ts(s.promised_delivery_date)
         lines.append(f"🗓️ **Entrega:** <t:{ts}:D>  ·  <t:{ts}:R>")
 
-    lines.append(f"💰 **Precio:** {_money(s.price)}  ·  💳 {_esc(s.payment_method.capitalize(), 40)}")
+    if s.payment_method == "cortesia":
+        lines.append(f"🎁 **Regalo** (sin cobro)  ·  costo {_money(s.total_cost)}")
+    else:
+        lines.append(f"💰 **Precio:** {_money(s.price)}  ·  💳 {_esc(s.payment_method.capitalize(), 40)}")
     lines.append(f"🖨️ **Impresora:** {_esc(s.printer_name, 80)}")
     if s.warehouse_item_id is not None:
         lines.append("🏷️ **Pieza del Almacén** (ya fabricada)")

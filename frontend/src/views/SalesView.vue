@@ -4,7 +4,7 @@ import * as salesApi from "../api/sales";
 import * as calculatorApi from "../api/calculator";
 import * as printersApi from "../api/printers";
 import * as inventoryApi from "../api/inventory";
-import { PAYMENT_METHODS } from "../api/sales";
+import { PAYMENT_METHODS, GIFT_PAYMENT_METHOD } from "../api/sales";
 import { formatCurrency, formatPercent, formatDate, todayISO } from "../utils/format";
 import { GRAMS_MAX, isValidGrams, isValidNumber, gramsErrorMessage, extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
@@ -275,7 +275,10 @@ function resetPricing() {
   originalPrice.value = null;
 }
 
+const isGift = computed(() => form.payment_method === GIFT_PAYMENT_METHOD);
+
 function buildPricingPayload() {
+  if (isGift.value) return { price: 0 };
   if (useManualPrice.value) {
     const price = Number(manualPrice.value);
     if (originalPrice.value !== null && price === originalPrice.value) return {};
@@ -467,6 +470,7 @@ function validateSaleForm() {
   }
   const jobError = validateJobInputs();
   if (jobError) return jobError;
+  if (isGift.value) return "";
   if (useManualPrice.value) {
     if (!isValidNumber(manualPrice.value, { min: 0, allowZero: false })) return "Ingresa un precio válido, mayor a 0.";
   } else if (!selectedScenario.value) {
@@ -477,7 +481,7 @@ function validateSaleForm() {
 
 async function handleSubmit() {
   let validationError = validateSaleForm();
-  if (!validationError && !useManualPrice.value) {
+  if (!validationError && !useManualPrice.value && !isGift.value) {
     // Recalcular antes de guardar: si el usuario cambió un dato hace un instante, el
     // escenario en pantalla podría ser del cálculo anterior (el recálculo va con retardo).
     await refreshSuggestion();
@@ -682,6 +686,7 @@ onMounted(async () => {
                 <td>
                   <strong>{{ s.client_name }}</strong>
                   <span v-if="s.warehouse_item_id" class="badge piece-en_almacen" style="margin-left: 6px">Pieza del Almacén</span>
+                  <span v-if="s.payment_method === GIFT_PAYMENT_METHOD" class="badge badge-gift" style="margin-left: 6px">🎁 Regalo</span>
                   <div v-if="s.buyer_name" class="text-muted text-sm">{{ s.buyer_name }}</div>
                 </td>
                 <td v-if="auth.isWatcher">{{ s.owner_username }}</td>
@@ -711,7 +716,9 @@ onMounted(async () => {
                   </span>
                   <span v-else class="text-muted">—</span>
                 </td>
-                <td v-else class="text-right mono" style="color: var(--success)">{{ formatCurrency(s.profit) }}</td>
+                <td v-else class="text-right mono" :style="{ color: Number(s.profit) < 0 ? 'var(--danger)' : 'var(--success)' }">
+                  {{ formatCurrency(s.profit) }}
+                </td>
                 <td class="text-right">{{ s.status === "cancelado" ? "—" : formatPercent(s.margin_percent) }}</td>
                 <td><span class="badge badge-neutral">{{ paymentLabel(s.payment_method) }}</span></td>
                 <td class="text-right">
@@ -901,6 +908,12 @@ onMounted(async () => {
           <span v-else-if="suggesting && !suggestion" class="field-hint">Calculando precio sugerido...</span>
           <div v-else-if="suggestError" class="alert alert-danger">{{ suggestError }}</div>
 
+          <div v-if="isGift" class="alert alert-info gift-alert">
+            <strong>🎁 Regalo:</strong> se registra con precio $0. Los materiales, horas e insumos se descuentan igual y su
+            costo<template v-if="suggestion"> (<strong>{{ formatCurrency(suggestion.breakdown.total_cost) }}</strong>)</template>
+            queda como pérdida.
+          </div>
+          <template v-else>
           <template v-if="suggestion">
             <div class="price-options" :class="{ 'is-disabled': useManualPrice }">
               <label
@@ -946,6 +959,7 @@ onMounted(async () => {
               </template>
             </div>
             <div v-else class="alert alert-danger">Ingresa un precio final válido, mayor a 0.</div>
+          </template>
           </template>
         </div>
 
@@ -1139,5 +1153,13 @@ tr.row-expanded td {
     padding-left: 0;
     border-left: none;
   }
+}
+
+.badge-gift {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+.gift-alert {
+  margin-top: 4px;
 }
 </style>

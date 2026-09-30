@@ -7,6 +7,9 @@ from pydantic import BaseModel, Field
 from app.schemas.calculator import FilamentUsageInput, SupplyUsageInput
 
 PAYMENT_METHODS = ("efectivo", "transferencia", "debito", "credito", "por_cobrar", "cortesia")
+# Pagar "por cortesía" es regalar: el pedido se registra con precio $0 y sus costos
+# (material, horas, insumos) quedan igual, como pérdida. El servidor fuerza el $0.
+GIFT_PAYMENT_METHOD = "cortesia"
 
 
 class SaleCreateRequest(BaseModel):

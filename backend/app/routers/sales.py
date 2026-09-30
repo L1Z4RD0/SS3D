@@ -14,6 +14,7 @@ from app.models.sale_supply import SaleSupply
 from app.models.user import User
 from app.models.warehouse_item import WarehouseItem
 from app.schemas.sale import (
+    GIFT_PAYMENT_METHOD,
     CalendarOrder,
     CancelOrderRequest,
     DeliveryDateChangeRequest,
@@ -289,7 +290,7 @@ def create_sale(
         labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
 
-    price = money(payload.price)
+    price = Decimal(0) if payload.payment_method == GIFT_PAYMENT_METHOD else money(payload.price)
     printer.hours_used += payload.print_hours
 
     sale = Sale(
@@ -366,6 +367,12 @@ def update_sale(
     sale = _get_editable_sale(db, sale_id, current_user)
     changes = payload.model_dump(exclude_unset=True)
     ip = request.client.host if request.client else None
+    # Pasar a cortesía (o tocar el precio de una) la deja como regalo: precio $0. Editar
+    # otros datos de una cortesía antigua con precio no le cambia el precio.
+    if changes.get("payment_method", sale.payment_method) == GIFT_PAYMENT_METHOD and (
+        "payment_method" in changes or changes.get("price") is not None
+    ):
+        changes["price"] = Decimal(0)
 
     # ---- Reglas según el estado del pedido ----
     if sale.status == STATUS_CANCELLED:
