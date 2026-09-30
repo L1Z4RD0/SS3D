@@ -245,6 +245,7 @@ def to_sale_response(
         delivered_date=sale.delivered_date,
         warehouse_item_id=sale.warehouse_item_id,
         can_edit=can_edit_sale(sale, viewer),
+        has_provisional_costs=any(ss.pending_qty > 0 for ss in sale.supplies_used),
         status_history=history,
         id=sale.id,
         sale_date=sale.sale_date,
@@ -281,6 +282,7 @@ def to_sale_response(
                 supply_name=ss.supply.name,
                 quantity_used=ss.quantity_used,
                 unit_cost_snapshot=ss.unit_cost_snapshot,
+                pending_qty=ss.pending_qty,
             )
             for ss in sale.supplies_used
         ],

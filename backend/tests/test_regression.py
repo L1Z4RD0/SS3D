@@ -28,12 +28,12 @@ def test_sale_consumes_and_delete_restores(client, db, make):
     assert (f3.available_g, s3.quantity_available, p3.hours_used) == (Decimal(1000), Decimal(50), Decimal(0))
 
 
-def test_insufficient_stock_blocks_without_consuming(client, db, make):
+def test_insufficient_filament_blocks_without_consuming(client, db, make):
+    """El filamento sin stock sigue bloqueando la venta (y no se consume nada). Los insumos,
+    en cambio, pueden quedar en negativo: ver test_supply_debt.py."""
     u = make.user()
     p, f, s = make.printer(u), make.filament(u, grams=50), make.supply(u, qty=1)
-    r = client.post("/api/sales", headers=make.headers(u), json=sale_payload(p, f, 100))
-    assert r.status_code == 400 and "Stock insuficiente" in r.text
-    r = client.post("/api/sales", headers=make.headers(u), json=sale_payload(p, None, supply=s, qty=5))
+    r = client.post("/api/sales", headers=make.headers(u), json=sale_payload(p, f, 100, supply=s, qty=5))
     assert r.status_code == 400 and "Stock insuficiente" in r.text
     p2, f2, s2 = _refresh(db, p, f, s)
     assert (f2.available_g, s2.quantity_available, p2.hours_used) == (Decimal(50), Decimal(1), Decimal(0))

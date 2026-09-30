@@ -578,6 +578,11 @@ tbody tr:hover {
   color: var(--info);
 }
 
+.alert-success {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
 .alert-warning {
   background: var(--warning-soft);
   color: var(--warning);

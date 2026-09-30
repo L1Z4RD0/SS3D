@@ -63,7 +63,12 @@ function costLines(sale) {
     { label: "Depreciación impresora", value: sale.depreciation_cost, detail: `${Number(sale.print_hours)} h de impresión` },
     { label: "Energía", value: sale.energy_cost },
     { label: "Postproceso", value: sale.postprocess_cost, detail: Number(sale.postprocess_hours) ? `${Number(sale.postprocess_hours)} h` : "" },
-    { label: "Insumos", value: sale.supplies_cost, detail: supplyDetail },
+    {
+      label: sale.has_provisional_costs ? "Insumos (provisional)" : "Insumos",
+      value: sale.supplies_cost,
+      detail: supplyDetail,
+      provisional: sale.has_provisional_costs,
+    },
     { label: "Envío", value: sale.shipping_cost },
   ];
   // Las líneas en $0 sin detalle solo agregan ruido.
@@ -374,6 +379,25 @@ function removeSupplyRow(id) {
 function supplyName(id) {
   return supplies.value.find((s) => s.id === id)?.name || "";
 }
+// Al editar, lo que la venta ya tenía descontado vuelve antes de descontar lo nuevo.
+function alreadyConsumed(supplyId) {
+  const line = editingSale.value?.supplies_used.find((u) => u.supply_id === supplyId);
+  return line ? Number(line.quantity_used) : 0;
+}
+
+// Insumos que no alcanzan: la venta se registra igual, el insumo queda en negativo y su
+// costo es provisional hasta que se registre la compra (Reponer en Inventario).
+const supplyShortages = computed(() =>
+  supplyRows.value
+    .map((row) => {
+      const s = supplies.value.find((x) => x.id === row.supply_id);
+      if (!s) return null;
+      const available = Number(s.quantity_available) + alreadyConsumed(row.supply_id);
+      const owed = Number(row.quantity) - Math.max(available, 0);
+      return owed > 0 ? { name: s.name, owed, available: Math.max(available, 0) } : null;
+    })
+    .filter(Boolean)
+);
 
 function openCreate() {
   editingId.value = null;
@@ -705,6 +729,7 @@ onMounted(async () => {
                     title="Ver el desglose de costos"
                     @click="toggleCost(s.id)"
                   >
+                    <span v-if="s.has_provisional_costs" class="provisional-mark" title="Costo provisional: faltan insumos por comprar">≈</span>
                     {{ formatCurrency(s.total_cost) }}
                     <Icon name="chevronDown" :size="16" :class="{ 'is-open': expandedCostId === s.id }" />
                   </button>
@@ -739,13 +764,16 @@ onMounted(async () => {
                 <td :colspan="auth.isWatcher ? 12 : 11">
                   <div class="cost-detail">
                     <div class="cost-lines">
-                      <div v-for="line in costLines(s)" :key="line.label" class="cost-line">
+                      <div v-for="line in costLines(s)" :key="line.label" class="cost-line" :class="{ 'is-provisional': line.provisional }">
                         <span class="cost-line-label">{{ line.label }}</span>
                         <span v-if="line.detail" class="text-muted text-sm">{{ line.detail }}</span>
                         <span class="cost-line-value mono">{{ formatCurrency(line.value) }}</span>
                       </div>
                     </div>
                     <div class="cost-summary">
+                      <div v-if="s.has_provisional_costs" class="provisional-note">
+                        Se usaron insumos sin stock: el costo y la ganancia se ajustan al registrar la compra (Reponer).
+                      </div>
                       <div class="cost-line"><span>Precio cobrado</span><span class="mono">{{ formatCurrency(s.price) }}</span></div>
                       <div class="cost-line"><span>Costo total</span><span class="mono">−{{ formatCurrency(s.total_cost) }}</span></div>
                       <div class="cost-line cost-line-total">
@@ -897,6 +925,11 @@ onMounted(async () => {
                 <Icon name="close" :size="13" />
               </button>
             </div>
+          </div>
+          <div v-if="supplyShortages.length && !productionLocked" class="alert alert-warning mt-2">
+            <strong>No te alcanzan los insumos:</strong>
+            <span v-for="x in supplyShortages" :key="x.name"> {{ x.name }} (hay {{ x.available }}, quedarás debiendo {{ x.owed }}).</span>
+            Se descuentan igual y su costo es provisional hasta que registres la compra con <strong>Reponer</strong> en Inventario.
           </div>
         </div>
 
@@ -1161,5 +1194,18 @@ tr.row-expanded td {
 }
 .gift-alert {
   margin-top: 4px;
+}
+
+.cost-line.is-provisional,
+.provisional-mark,
+.provisional-note {
+  color: var(--danger);
+}
+.provisional-mark {
+  font-weight: 700;
+}
+.provisional-note {
+  font-size: 0.8rem;
+  margin-bottom: 4px;
 }
 </style>

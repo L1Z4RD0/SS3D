@@ -176,6 +176,22 @@ function removeSupplyRow(id) {
   supplyRows.value = supplyRows.value.filter((r) => r.supply_id !== id);
 }
 
+const alreadyConsumed = () => 0; // una cotización todavía no descontó nada
+
+// Insumos que no alcanzan: la venta se registra igual, el insumo queda en negativo y su
+// costo es provisional hasta que se registre la compra (Reponer en Inventario).
+const supplyShortages = computed(() =>
+  supplyRows.value
+    .map((row) => {
+      const s = supplies.value.find((x) => x.id === row.supply_id);
+      if (!s) return null;
+      const available = Number(s.quantity_available) + alreadyConsumed(row.supply_id);
+      const owed = Number(row.quantity) - Math.max(available, 0);
+      return owed > 0 ? { name: s.name, owed, available: Math.max(available, 0) } : null;
+    })
+    .filter(Boolean)
+);
+
 function supplyName(id) {
   return supplies.value.find((s) => s.id === id)?.name || "";
 }
@@ -764,6 +780,12 @@ onMounted(() => {
                   <Icon name="close" :size="13" />
                 </button>
               </div>
+            </div>
+            <div v-if="supplyShortages.length" class="alert alert-warning mt-2">
+              <strong>No te alcanzan los insumos:</strong>
+              <span v-for="x in supplyShortages" :key="x.name"> {{ x.name }} (hay {{ x.available }}, quedarás debiendo {{ x.owed }}).</span>
+              Si lo guardas como venta se descuentan igual, con costo provisional hasta que registres la compra con
+              <strong>Reponer</strong> en Inventario.
             </div>
           </div>
 

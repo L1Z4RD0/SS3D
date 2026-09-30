@@ -170,13 +170,14 @@ def save_quote_as_sale(
     exhausted_filaments = apply_filaments_to_sale(db, sale, resolved_filaments)
 
     for supply, qty in resolved_supplies:
-        consume_supply(supply, qty)
+        owed = consume_supply(supply, qty)
         db.add(
             SaleSupply(
                 sale_id=sale.id,
                 supply_id=supply.id,
                 quantity_used=qty,
                 unit_cost_snapshot=supply.unit_cost or Decimal(0),
+                pending_qty=owed,
             )
         )
 

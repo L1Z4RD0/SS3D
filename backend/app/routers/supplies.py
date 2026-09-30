@@ -2,6 +2,7 @@ import uuid
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -9,9 +10,16 @@ from app.dependencies import get_current_user, readable_user_ids, require_not_wa
 from app.models.sale_supply import SaleSupply
 from app.models.supply import Supply
 from app.models.user import User
-from app.schemas.supply import SupplyCreateRequest, SupplyResponse, SupplyUpdateRequest
+from app.schemas.supply import (
+    SupplyCreateRequest,
+    SupplyResponse,
+    SupplyRestockRequest,
+    SupplyRestockResponse,
+    SupplyUpdateRequest,
+)
 from app.services.audit import log_event
 from app.services.calculator import money
+from app.services.supply_restock import restock_supply
 
 router = APIRouter(prefix="/api/inventory/supplies", tags=["inventory"])
 
@@ -22,9 +30,21 @@ def _compute_unit_cost(purchase_quantity: Decimal | None, purchase_total_cost: D
     return money(purchase_total_cost / purchase_quantity)
 
 
-def _to_response(supply: Supply) -> SupplyResponse:
+def _pending_cost_qty(db: Session, supply_ids: list[uuid.UUID]) -> dict[uuid.UUID, Decimal]:
+    rows = (
+        db.query(SaleSupply.supply_id, func.sum(SaleSupply.pending_qty))
+        .filter(SaleSupply.supply_id.in_(supply_ids), SaleSupply.pending_qty > 0)
+        .group_by(SaleSupply.supply_id)
+        .all()
+    )
+    return {supply_id: qty for supply_id, qty in rows}
+
+
+def _to_response(supply: Supply, pending_cost_qty: Decimal = Decimal(0)) -> SupplyResponse:
     low_stock = supply.min_alert_qty is not None and supply.quantity_available <= supply.min_alert_qty
     return SupplyResponse(
+        owed_qty=max(-supply.quantity_available, Decimal(0)),
+        pending_cost_qty=pending_cost_qty or Decimal(0),
         id=supply.id,
         owner_id=supply.user_id,
         name=supply.name,
@@ -56,7 +76,8 @@ def list_supplies(
     if not include_inactive:
         query = query.filter(Supply.is_active.is_(True))
     supplies = query.order_by(Supply.category, Supply.name).all()
-    return [_to_response(s) for s in supplies]
+    pending = _pending_cost_qty(db, [s.id for s in supplies])
+    return [_to_response(s, pending.get(s.id)) for s in supplies]
 
 
 @router.post("", response_model=SupplyResponse, status_code=status.HTTP_201_CREATED)
@@ -122,7 +143,44 @@ def update_supply(
     )
     db.commit()
     db.refresh(supply)
-    return _to_response(supply)
+    return _to_response(supply, _pending_cost_qty(db, [supply.id]).get(supply.id))
+
+
+@router.post("/{supply_id}/restock", response_model=SupplyRestockResponse)
+def restock(
+    supply_id: uuid.UUID,
+    payload: SupplyRestockRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_not_watcher),
+):
+    """Registra una compra del insumo. Primero salda lo que se usó sin stock, al precio
+    real de esta compra, y corrige el costo de esas ventas; el resto entra como stock."""
+    supply = _get_owned_supply(db, supply_id, current_user)
+    result = restock_supply(db, supply, payload.quantity, payload.total_cost)
+    log_event(
+        db,
+        user_id=current_user.id,
+        event_type="INVENTORY_SUPPLY_RESTOCKED",
+        entity_type="supply",
+        entity_id=supply.id,
+        details={
+            "quantity": str(payload.quantity),
+            "total_cost": str(payload.total_cost),
+            "settled_qty": str(result.settled_qty),
+            "repriced_sales": [str(i) for i in result.sale_ids],
+            "cost_adjustment": str(result.cost_adjustment),
+        },
+        ip_address=request.client.host if request.client else None,
+    )
+    db.commit()
+    db.refresh(supply)
+    return SupplyRestockResponse(
+        supply=_to_response(supply, _pending_cost_qty(db, [supply.id]).get(supply.id)),
+        settled_qty=result.settled_qty,
+        repriced_sales=len(result.sale_ids),
+        cost_adjustment=result.cost_adjustment,
+    )
 
 
 @router.delete("/{supply_id}", status_code=status.HTTP_204_NO_CONTENT)

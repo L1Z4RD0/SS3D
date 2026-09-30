@@ -118,6 +118,8 @@ class SaleSupplyResponse(BaseModel):
     supply_name: str
     quantity_used: Decimal
     unit_cost_snapshot: Decimal
+    # Unidades usadas sin stock, con costo provisional hasta que se repone el insumo.
+    pending_qty: Decimal = Decimal(0)
 
     model_config = {"from_attributes": True}
 
@@ -178,6 +180,8 @@ class SaleResponse(BaseModel):
     # que lo registró). Los pedidos de sus asignados que no registró los ve solo lectura.
     can_edit: bool = True
     supplies_used: list[SaleSupplyResponse]
+    # Algún insumo se usó sin stock: su costo (y la ganancia) es provisional hasta reponerlo.
+    has_provisional_costs: bool = False
     filaments_used: list[SaleFilamentResponse]
     exhausted_filaments: list[ExhaustedFilamentInfo] = Field(default_factory=list)
     # Solo se incluye al pedir un pedido puntual o al cambiarle el estado.

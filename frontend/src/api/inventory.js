@@ -24,3 +24,8 @@ export const updateSupply = (id, payload) =>
   client.put(`/api/inventory/supplies/${id}`, payload).then((r) => r.data);
 
 export const deleteSupply = (id) => client.delete(`/api/inventory/supplies/${id}`);
+
+// Registra una compra del insumo: salda lo que se usó sin stock al precio real y corrige
+// el costo de esas ventas. Devuelve { supply, settled_qty, repriced_sales, cost_adjustment }.
+export const restockSupply = (id, payload) =>
+  client.post(`/api/inventory/supplies/${id}/restock`, payload).then((r) => r.data);

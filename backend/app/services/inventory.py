@@ -54,15 +54,16 @@ def restore_filament(filament: Filament, grams: Decimal) -> None:
     filament.available_g += grams
 
 
-def consume_supply(supply: Supply, quantity: Decimal) -> None:
+def consume_supply(supply: Supply, quantity: Decimal) -> Decimal:
+    """Descuenta el insumo aunque no alcance: el stock puede quedar en negativo (el
+    usuario queda "debiendo" ese insumo hasta comprarlo). Devuelve cuántas de estas
+    unidades se usaron sin stock, para costearlas como provisionales."""
     if quantity <= 0:
-        return
-    if supply.quantity_available < quantity:
-        raise InsufficientStockError(
-            f"Stock insuficiente de insumo '{supply.name}': "
-            f"disponible {supply.quantity_available}, solicitado {quantity}"
-        )
+        return Decimal(0)
+    in_stock = max(supply.quantity_available, Decimal(0))
+    owed = max(quantity - in_stock, Decimal(0))
     supply.quantity_available -= quantity
+    return owed
 
 
 def restore_supply(supply: Supply, quantity: Decimal) -> None:

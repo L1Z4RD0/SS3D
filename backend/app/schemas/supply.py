@@ -38,6 +38,12 @@ class SupplyUpdateRequest(BaseModel):
         return self
 
 
+class SupplyRestockRequest(BaseModel):
+    # Lo que se compró y cuánto se pagó en total por esa compra.
+    quantity: Decimal = Field(gt=0)
+    total_cost: Decimal = Field(ge=0)
+
+
 class SupplyResponse(BaseModel):
     id: uuid.UUID
     # Dueño del insumo: un watcher recibe los de varios usuarios y los separa por esto.
@@ -51,5 +57,17 @@ class SupplyResponse(BaseModel):
     unit_cost: Decimal | None
     is_active: bool
     low_stock: bool
+    # Unidades que se deben (stock en negativo): hay que comprarlas y registrarlas con Reponer.
+    owed_qty: Decimal = Decimal(0)
+    # Unidades ya usadas en ventas con costo provisional, esperando el precio real.
+    pending_cost_qty: Decimal = Decimal(0)
 
     model_config = {"from_attributes": True}
+
+
+class SupplyRestockResponse(BaseModel):
+    supply: SupplyResponse
+    # Unidades fiadas que esta compra saldó, en cuántas ventas y cuánto cambió su costo.
+    settled_qty: Decimal
+    repriced_sales: int
+    cost_adjustment: Decimal

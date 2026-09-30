@@ -55,6 +55,7 @@ def _return_supplies(sale: Sale) -> None:
     if not sale.supplies_returned:
         for ss in sale.supplies_used:
             restore_supply(ss.supply, ss.quantity_used)
+            ss.pending_qty = 0  # lo fiado se devolvió: ya no hay nada que recalcular
         sale.supplies_returned = True
 
 

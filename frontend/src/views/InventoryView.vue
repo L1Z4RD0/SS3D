@@ -6,6 +6,7 @@ import { formatCurrency, formatNumber, formatPercent, formatDate } from "../util
 import { GRAMS_MAX, isValidNumber, extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
 import { useFilamentCatalog, swatchFor, catalogHexFor, NEUTRAL_SWATCH } from "../composables/useFilamentCatalog";
+import { useSupplyDebt } from "../composables/useSupplyDebt";
 import { useAuthStore } from "../stores/auth";
 import { todayISO } from "../utils/format";
 import Modal from "../components/Modal.vue";
@@ -283,6 +284,74 @@ async function deleteFilament(f) {
   await loadFilaments();
 }
 
+/* -------- Reponer insumo -------- */
+const { refreshSupplyDebt } = useSupplyDebt();
+const restockTarget = ref(null);
+const restockForm = reactive({ quantity: null, total_cost: null });
+const restockBusy = ref(false);
+const restockError = ref("");
+const restockResult = ref("");
+
+function openRestock(s) {
+  restockTarget.value = s;
+  Object.assign(restockForm, {
+    quantity: Number(s.owed_qty) > 0 ? Number(s.owed_qty) : null,
+    total_cost: null,
+  });
+  restockError.value = "";
+}
+
+// Vista previa: cuánto de lo fiado cubre esta compra y a qué precio queda cada unidad.
+const restockPreview = computed(() => {
+  const s = restockTarget.value;
+  const qty = Number(restockForm.quantity);
+  const total = Number(restockForm.total_cost);
+  if (!s || !(qty > 0) || restockForm.total_cost === null || restockForm.total_cost === "" || total < 0) return null;
+  const unit = total / qty;
+  const pending = Number(s.pending_cost_qty);
+  const settled = Math.min(qty, pending);
+  return {
+    unit,
+    settled,
+    stockAfter: Number(s.quantity_available) + qty,
+    // Aproximado: las unidades fiadas se costearon al precio que tenía el insumo.
+    adjustment: s.unit_cost !== null ? settled * (unit - Number(s.unit_cost)) : null,
+  };
+});
+
+async function confirmRestock() {
+  if (!isValidNumber(restockForm.quantity, { min: 0, allowZero: false })) {
+    restockError.value = "Indica cuántas unidades compraste (mayor a 0).";
+    return;
+  }
+  if (!isValidNumber(restockForm.total_cost, { min: 0 })) {
+    restockError.value = "Indica cuánto pagaste en total por la compra.";
+    return;
+  }
+  restockBusy.value = true;
+  restockError.value = "";
+  try {
+    const res = await inventoryApi.restockSupply(restockTarget.value.id, {
+      quantity: Number(restockForm.quantity),
+      total_cost: Number(restockForm.total_cost),
+    });
+    const name = restockTarget.value.name;
+    restockTarget.value = null;
+    const adj = Number(res.cost_adjustment);
+    restockResult.value =
+      res.repriced_sales > 0
+        ? `${name}: se registró la compra y se corrigió el costo de ${res.repriced_sales} venta(s) ` +
+          `(${adj >= 0 ? "+" : "−"}${formatCurrency(Math.abs(adj))} en costos).`
+        : `${name}: se registró la compra.`;
+    await loadSupplies();
+    refreshSupplyDebt();
+  } catch (err) {
+    restockError.value = extractApiError(err, "No se pudo registrar la compra.");
+  } finally {
+    restockBusy.value = false;
+  }
+}
+
 /* -------- Supplies -------- */
 const showSupplyModal = ref(false);
 const editingSupplyId = ref(null);
@@ -312,8 +381,11 @@ function openCreateSupply() {
   showSupplyModal.value = true;
 }
 
+const editingSupplyQty = ref(null);
+
 function openEditSupply(s) {
   editingSupplyId.value = s.id;
+  editingSupplyQty.value = Number(s.quantity_available);
   Object.assign(supplyForm, {
     name: s.name,
     category: s.category,
@@ -326,8 +398,11 @@ function openEditSupply(s) {
   showSupplyModal.value = true;
 }
 
+const supplyQtyChanged = () =>
+  !editingSupplyId.value || Number(supplyForm.quantity_available) !== editingSupplyQty.value;
+
 function validateSupplyForm() {
-  if (!isValidNumber(supplyForm.quantity_available, { min: 0 })) {
+  if (supplyQtyChanged() && !isValidNumber(supplyForm.quantity_available, { min: 0 })) {
     return "La cantidad disponible no puede ser negativa.";
   }
   if (supplyForm.min_alert_qty !== null && !isValidNumber(supplyForm.min_alert_qty, { min: 0 })) {
@@ -357,12 +432,16 @@ async function submitSupply() {
   supplyError.value = "";
   try {
     if (editingSupplyId.value) {
-      await inventoryApi.updateSupply(editingSupplyId.value, supplyForm);
+      // Un insumo en negativo se puede editar (nombre, alerta...) sin tocar su cantidad:
+      // lo que se debe se salda con Reponer, para corregir el costo de las ventas.
+      const { quantity_available, ...rest } = supplyForm;
+      await inventoryApi.updateSupply(editingSupplyId.value, supplyQtyChanged() ? supplyForm : rest);
     } else {
       await inventoryApi.createSupply(supplyForm);
     }
     showSupplyModal.value = false;
     await loadSupplies();
+    refreshSupplyDebt();
   } catch (err) {
     supplyError.value = extractApiError(err, "No se pudo guardar el insumo.");
   } finally {
@@ -493,6 +572,10 @@ async function deleteSupply(s) {
         </button>
       </div>
 
+      <div v-if="restockResult" class="alert alert-success" style="margin-bottom: 12px">
+        <span style="flex: 1">{{ restockResult }}</span>
+        <button type="button" class="btn btn-icon btn-ghost btn-sm" aria-label="Cerrar" @click="restockResult = ''">✕</button>
+      </div>
       <div v-if="loadingSupplies" class="empty-state">Cargando...</div>
       <div v-else-if="!ownerSupplies.length" class="empty-state">
         <h3>Sin insumos registrados</h3>
@@ -515,7 +598,9 @@ async function deleteSupply(s) {
             <tr v-for="s in ownerSupplies" :key="s.id">
               <td><strong>{{ s.name }}</strong></td>
               <td>{{ s.category }}</td>
-              <td class="text-right mono">{{ formatNumber(s.quantity_available, 0) }}</td>
+              <td class="text-right mono" :class="{ 'qty-negative': Number(s.quantity_available) < 0 }">
+                {{ formatNumber(s.quantity_available, 0) }}
+              </td>
               <td class="text-right mono">
                 <div>{{ s.unit_cost !== null ? formatCurrency(s.unit_cost) : "-" }}</div>
                 <div v-if="s.purchase_quantity" class="text-muted text-sm">
@@ -523,11 +608,23 @@ async function deleteSupply(s) {
                 </div>
               </td>
               <td>
-                <span v-if="s.low_stock" class="badge badge-warning">Stock bajo</span>
+                <span v-if="Number(s.owed_qty) > 0" class="badge badge-danger">Debes {{ formatNumber(s.owed_qty, 0) }}</span>
+                <span v-else-if="s.low_stock" class="badge badge-warning">Stock bajo</span>
                 <span v-else class="badge badge-success">OK</span>
+                <div v-if="Number(s.pending_cost_qty) > 0" class="text-sm pending-cost-hint">
+                  {{ formatNumber(s.pending_cost_qty, 0) }} ud(s). con costo provisional
+                </div>
               </td>
               <td class="text-right">
                 <div v-if="!auth.isWatcher" class="flex gap-2" style="justify-content: flex-end">
+                  <button
+                    class="btn btn-sm"
+                    :class="Number(s.owed_qty) > 0 ? 'btn-danger' : 'btn-secondary'"
+                    title="Registrar una compra de este insumo"
+                    @click="openRestock(s)"
+                  >
+                    <Icon name="plus" :size="14" /> Reponer
+                  </button>
                   <button class="btn btn-icon btn-ghost" @click="openEditSupply(s)"><Icon name="edit" :size="16" /></button>
                   <button class="btn btn-icon btn-ghost" @click="deleteSupply(s)"><Icon name="trash" :size="16" /></button>
                 </div>
@@ -537,6 +634,53 @@ async function deleteSupply(s) {
         </table>
       </div>
     </div>
+
+    <Modal persistent v-if="restockTarget" title="Reponer insumo" :subtitle="restockTarget.name" width="500px" @close="restockTarget = null">
+      <form @submit.prevent="confirmRestock">
+        <div v-if="Number(restockTarget.owed_qty) > 0" class="alert alert-danger" style="margin-bottom: 14px">
+          Debes {{ formatNumber(restockTarget.owed_qty, 0) }} unidad(es). La compra cubre primero lo que se usó sin stock y
+          corrige el costo de esas ventas al precio real.
+        </div>
+        <div class="form-grid">
+          <div class="field">
+            <label>Cantidad comprada</label>
+            <input v-model.number="restockForm.quantity" type="number" min="1" step="1" required />
+          </div>
+          <div class="field">
+            <label>Total pagado (CLP)</label>
+            <input v-model.number="restockForm.total_cost" type="number" min="0" step="1" required placeholder="Ej: 5000" />
+          </div>
+        </div>
+        <div v-if="restockPreview" class="restock-preview mt-2">
+          <div><span>Costo por unidad</span><strong class="mono">{{ formatCurrency(restockPreview.unit) }}</strong></div>
+          <div v-if="restockTarget.unit_cost !== null">
+            <span>Costo anterior</span><span class="mono">{{ formatCurrency(restockTarget.unit_cost) }}</span>
+          </div>
+          <div v-if="restockPreview.settled > 0">
+            <span>Unidades fiadas que se saldan</span><strong class="mono">{{ formatNumber(restockPreview.settled, 0) }}</strong>
+          </div>
+          <div v-if="restockPreview.settled > 0 && restockPreview.adjustment !== null">
+            <span>Ajuste aprox. en el costo de esas ventas</span>
+            <strong class="mono" :style="{ color: restockPreview.adjustment > 0 ? 'var(--danger)' : 'var(--success)' }">
+              {{ restockPreview.adjustment >= 0 ? "+" : "−" }}{{ formatCurrency(Math.abs(restockPreview.adjustment)) }}
+            </strong>
+          </div>
+          <div>
+            <span>Stock después de reponer</span>
+            <strong class="mono" :class="{ 'qty-negative': restockPreview.stockAfter < 0 }">
+              {{ formatNumber(restockPreview.stockAfter, 0) }}
+            </strong>
+          </div>
+        </div>
+        <div v-if="restockError" class="alert alert-danger mt-4">{{ restockError }}</div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" @click="restockTarget = null">Cancelar</button>
+          <button type="submit" class="btn btn-primary" :disabled="restockBusy">
+            {{ restockBusy ? "Guardando..." : "Registrar compra" }}
+          </button>
+        </div>
+      </form>
+    </Modal>
 
     <Modal persistent v-if="showFilamentModal" :title="editingFilamentId ? 'Editar filamento' : 'Nuevo filamento'" @close="showFilamentModal = false">
       <form @submit.prevent="submitFilament">
@@ -859,5 +1003,32 @@ async function deleteSupply(s) {
     width: 64px;
     height: 64px;
   }
+}
+
+.qty-negative {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.pending-cost-hint {
+  margin-top: 4px;
+  color: var(--danger);
+}
+
+.restock-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-alt);
+  font-size: 0.88rem;
+}
+
+.restock-preview > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
 }
 </style>
