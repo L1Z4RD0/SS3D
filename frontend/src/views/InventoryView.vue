@@ -1,11 +1,11 @@
 <script setup>
-import { ref, onMounted, reactive, computed } from "vue";
+import { ref, onMounted, reactive, computed, watch } from "vue";
 import * as inventoryApi from "../api/inventory";
 import { useObservedUsers } from "../composables/useObservedUsers";
 import { formatCurrency, formatNumber, formatPercent, formatDate } from "../utils/format";
 import { GRAMS_MAX, isValidNumber, extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
-import { useFilamentCatalog } from "../composables/useFilamentCatalog";
+import { useFilamentCatalog, swatchFor, catalogHexFor, NEUTRAL_SWATCH } from "../composables/useFilamentCatalog";
 import { useAuthStore } from "../stores/auth";
 import { todayISO } from "../utils/format";
 import Modal from "../components/Modal.vue";
@@ -30,14 +30,6 @@ const showExhausted = ref(false);
 const statusLabels = { disponible: "Disponible", alerta: "Alerta", critico: "Crítico", vacio: "Agotado" };
 const statusBadge = { disponible: "badge-success", alerta: "badge-warning", critico: "badge-danger", vacio: "badge-danger" };
 
-const colorHexMap = computed(() => {
-  const map = {};
-  for (const c of catalog.value.colors) map[c.name] = c.hex_color;
-  return map;
-});
-function swatchColor(name) {
-  return colorHexMap.value[name] || "#c9cbd6";
-}
 
 /* -------- Sort toggle (por gramos disponibles) -------- */
 const sortDirection = ref(null); // null | 'desc' | 'asc'
@@ -121,6 +113,7 @@ const emptyFilamentForm = () => ({
   brand: "",
   type: "PLA",
   color: "",
+  color_hex: NEUTRAL_SWATCH,
   sku: "",
   entry_date: todayISO(),
   spool_weight_g: 1000,
@@ -132,6 +125,31 @@ const filamentForm = reactive(emptyFilamentForm());
 const customBrandText = ref("");
 const customMaterialText = ref("");
 const customColorText = ref("");
+
+/* Color: los del catálogo son atajos (nombre + tono); el selector RGB ajusta el tono exacto. */
+const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+function pickCatalogColor(c) {
+  filamentForm.color = c.name;
+  filamentForm.color_hex = c.hex_color;
+}
+function pickCustomColor() {
+  filamentForm.color = CUSTOM;
+}
+// Campo de texto para pegar un código (#RRGGBB); solo se aplica cuando está completo.
+const hexText = ref("");
+watch(
+  () => filamentForm.color_hex,
+  (hex) => {
+    hexText.value = (hex || "").toUpperCase();
+  },
+  { immediate: true }
+);
+function onHexText(value) {
+  let v = value.trim();
+  if (v && !v.startsWith("#")) v = `#${v}`;
+  hexText.value = v.toUpperCase();
+  if (HEX_RE.test(v)) filamentForm.color_hex = v.toLowerCase();
+}
 const multiRoll = ref(false);
 const multiRollCount = ref(2);
 
@@ -157,6 +175,7 @@ function openEditFilament(f) {
     brand: brandMatch ? f.brand : CUSTOM,
     type: materialMatch ? f.type : CUSTOM,
     color: colorMatch ? f.color : CUSTOM,
+    color_hex: f.color_hex || catalogHexFor(f.color) || NEUTRAL_SWATCH,
     sku: f.sku || "",
     entry_date: f.entry_date,
     spool_weight_g: Number(f.spool_weight_g),
@@ -172,6 +191,12 @@ function openEditFilament(f) {
 }
 
 function validateFilamentForm() {
+  if (!filamentForm.color || (filamentForm.color === CUSTOM && !customColorText.value.trim())) {
+    return "Elige un color del catálogo o escribe el nombre de tu color.";
+  }
+  if (!HEX_RE.test(filamentForm.color_hex || "")) {
+    return "El tono exacto debe tener el formato #RRGGBB (ej. #1ABC9C).";
+  }
   if (!isValidNumber(filamentForm.spool_weight_g, { min: 0, max: GRAMS_MAX, allowZero: false })) {
     return `El peso del carrete debe ser mayor a 0 y no superar ${GRAMS_MAX}g.`;
   }
@@ -435,7 +460,7 @@ async function deleteSupply(s) {
             <tr v-for="f in displayedFilaments" :key="f.id">
               <td>
                 <div class="flex items-center gap-2">
-                  <FilamentSpoolIcon :color="swatchColor(f.color)" :size="40" />
+                  <FilamentSpoolIcon :color="swatchFor(f)" :size="40" />
                   <div>
                     <strong>{{ f.brand }} · {{ f.color }}</strong>
                     <span v-if="f.sku" class="badge badge-neutral" style="margin-left: 6px">{{ f.sku }}</span>
@@ -536,27 +561,50 @@ async function deleteSupply(s) {
           </div>
           <div class="field" style="grid-column: span 2">
             <label>Color</label>
-            <div class="color-swatch-grid">
-              <button
-                v-for="c in catalog.colors"
-                :key="c.id"
-                type="button"
-                class="color-swatch"
-                :class="{ selected: filamentForm.color === c.name }"
-                :style="{ background: c.hex_color }"
-                :title="c.name"
-                @click="filamentForm.color = c.name"
-              ></button>
-              <button
-                type="button"
-                class="color-swatch color-swatch-custom"
-                :class="{ selected: filamentForm.color === CUSTOM }"
-                title="Otro color"
-                @click="filamentForm.color = CUSTOM"
-              >+</button>
+            <div class="color-editor">
+              <div class="color-preview" :title="`Vista previa: ${filamentForm.color_hex}`">
+                <FilamentSpoolIcon :color="filamentForm.color_hex" :size="72" />
+              </div>
+              <div class="color-editor-controls">
+                <div class="color-swatch-grid">
+                  <button
+                    v-for="c in catalog.colors"
+                    :key="c.id"
+                    type="button"
+                    class="color-swatch"
+                    :class="{ selected: filamentForm.color === c.name }"
+                    :style="{ background: c.hex_color }"
+                    :title="c.name"
+                    @click="pickCatalogColor(c)"
+                  ></button>
+                  <button
+                    type="button"
+                    class="color-swatch color-swatch-custom"
+                    :class="{ selected: filamentForm.color === CUSTOM }"
+                    title="Otro color"
+                    @click="pickCustomColor"
+                  >+</button>
+                </div>
+                <div class="color-exact">
+                  <label class="color-exact-picker" title="Elegir el tono exacto">
+                    <input v-model="filamentForm.color_hex" type="color" aria-label="Tono exacto (RGB)" />
+                    <span>Tono exacto (RGB)</span>
+                  </label>
+                  <input
+                    class="color-exact-hex mono"
+                    :value="hexText"
+                    maxlength="7"
+                    placeholder="#RRGGBB"
+                    aria-label="Código de color hexadecimal"
+                    @input="onHexText($event.target.value)"
+                  />
+                </div>
+              </div>
             </div>
-            <span v-if="filamentForm.color && filamentForm.color !== CUSTOM" class="field-hint">Seleccionado: {{ filamentForm.color }}</span>
-            <input v-if="filamentForm.color === CUSTOM" v-model="customColorText" placeholder="Nombre del color" class="mt-2" required />
+            <span v-if="filamentForm.color && filamentForm.color !== CUSTOM" class="field-hint">
+              Seleccionado: {{ filamentForm.color }} · puedes ajustar el tono con el selector RGB.
+            </span>
+            <input v-if="filamentForm.color === CUSTOM" v-model="customColorText" placeholder="Nombre del color (ej. Verde agua)" class="mt-2" required />
           </div>
           <div class="field" style="grid-column: span 2">
             <label>SKU / Identificador (opcional)</label>
@@ -744,5 +792,72 @@ async function deleteSupply(s) {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.color-editor {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.color-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 88px;
+  height: 88px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-alt);
+}
+
+.color-editor-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.color-exact {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.color-exact-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.color-exact-picker input[type="color"] {
+  width: 38px;
+  height: 30px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.color-exact-hex {
+  width: 110px;
+  text-transform: uppercase;
+}
+
+@media (max-width: 480px) {
+  .color-editor {
+    align-items: flex-start;
+  }
+  .color-preview {
+    width: 64px;
+    height: 64px;
+  }
 }
 </style>

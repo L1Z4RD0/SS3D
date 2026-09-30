@@ -39,6 +39,7 @@ def _to_response(filament: Filament) -> FilamentResponse:
         brand=filament.brand,
         type=filament.type,
         color=filament.color,
+        color_hex=filament.color_hex,
         sku=filament.sku,
         entry_date=filament.entry_date,
         spool_weight_g=filament.spool_weight_g,
@@ -94,6 +95,7 @@ def create_filament(
         brand=payload.brand,
         type=payload.type,
         color=payload.color,
+        color_hex=payload.color_hex.lower() if payload.color_hex else None,
         sku=payload.sku,
         entry_date=payload.entry_date,
         spool_weight_g=payload.spool_weight_g,
@@ -139,6 +141,8 @@ def update_filament(
     if "sku" in changes:
         _check_sku_unique(db, current_user.id, changes["sku"], exclude_id=filament.id)
 
+    if changes.get("color_hex"):
+        changes["color_hex"] = changes["color_hex"].lower()
     for field, value in changes.items():
         setattr(filament, field, value)
 

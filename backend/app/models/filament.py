@@ -24,6 +24,9 @@ class Filament(UUIDMixin, TimestampMixin, Base):
     brand: Mapped[str] = mapped_column(Text, nullable=False)
     type: Mapped[str] = mapped_column(Text, nullable=False)
     color: Mapped[str] = mapped_column(Text, nullable=False)
+    # Tono exacto elegido con el selector RGB (#rrggbb). Vacío en los filamentos anteriores:
+    # esos siguen usando el color del catálogo según su nombre.
+    color_hex: Mapped[str | None] = mapped_column(Text, nullable=True)
     sku: Mapped[str | None] = mapped_column(Text, nullable=True)
     entry_date: Mapped[date] = mapped_column(Date, nullable=False)
     spool_weight_g: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=1000)

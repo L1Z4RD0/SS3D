@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, nextTick } from "vue";
 import { formatNumber } from "../utils/format";
-import { useFilamentCatalog } from "../composables/useFilamentCatalog";
+import { useFilamentCatalog, swatchFor } from "../composables/useFilamentCatalog";
 import Modal from "./Modal.vue";
 import Icon from "./Icon.vue";
 import FilamentSpoolIcon from "./FilamentSpoolIcon.vue";
@@ -26,7 +26,7 @@ function ownerOf(f) {
   return props.ownerNames[f.owner_id] || "usuario desconocido";
 }
 const selectedId = ref("");
-const { catalog, ensureFilamentCatalog } = useFilamentCatalog();
+const { ensureFilamentCatalog } = useFilamentCatalog();
 
 const searchInput = ref(null);
 
@@ -39,14 +39,6 @@ onMounted(() => {
   ensureFilamentCatalog().catch(() => {});
 });
 
-const colorHexMap = computed(() => {
-  const map = {};
-  for (const c of catalog.value.colors) map[c.name] = c.hex_color;
-  return map;
-});
-function swatchColor(name) {
-  return colorHexMap.value[name] || "#c9cbd6";
-}
 
 const excludeSet = computed(() => new Set(props.excludeIds));
 
@@ -124,14 +116,14 @@ function confirm() {
         @click="selectedId = f.id"
       >
         <div class="picker-card-image">
-          <FilamentSpoolIcon :color="swatchColor(f.color)" :size="90" />
+          <FilamentSpoolIcon :color="swatchFor(f)" :size="90" />
           <span v-if="selectedId === f.id" class="picker-check"><Icon name="check" :size="12" /></span>
         </div>
         <span v-if="showOwners" class="picker-card-owner">De {{ ownerOf(f) }}</span>
         <strong class="picker-card-title">{{ f.brand }} · {{ f.type }}</strong>
         <span v-if="f.sku" class="text-muted text-sm">SKU: {{ f.sku }}</span>
         <span class="picker-card-color">
-          <span class="color-dot-sm" :style="{ background: swatchColor(f.color) }"></span>
+          <span class="color-dot-sm" :style="{ background: swatchFor(f) }"></span>
           {{ f.color }}
         </span>
         <span class="picker-card-stock">
