@@ -17,7 +17,8 @@ export default defineConfig({
         start_url: '/',
         scope: '/',
         display: 'standalone',
-        background_color: '#ffffff',
+        // Fondo de la pantalla de carga en Android: el mismo azul oscuro del logo de Zola.
+        background_color: '#050a1b',
         theme_color: '#5b4bf5',
         icons: [
           { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
