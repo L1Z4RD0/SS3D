@@ -42,7 +42,7 @@ watch(
 
   <aside class="sidebar" :class="{ open: mobileNav.isOpen.value }">
     <div class="sidebar-brand">
-      <div class="brand-mark">Z</div>
+      <img class="brand-mark" src="/img/LogoZola.png" alt="" />
       <span>Zola</span>
       <button type="button" class="sidebar-close" @click="mobileNav.close()">
         <Icon name="close" :size="18" />
@@ -102,13 +102,8 @@ watch(
 .brand-mark {
   width: 30px;
   height: 30px;
-  border-radius: 9px;
-  background: linear-gradient(135deg, var(--primary), var(--accent));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 800;
-  color: #fff;
+  border-radius: 8px;
+  object-fit: cover;
   flex-shrink: 0;
 }
 

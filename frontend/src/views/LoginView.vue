@@ -39,7 +39,7 @@ async function handleSubmit() {
   <div class="login-page">
     <div class="login-panel">
       <div class="login-brand">
-        <div class="brand-mark">Z</div>
+        <img class="brand-mark" src="/img/LogoZola.png" alt="" />
         <span>Zola</span>
       </div>
       <p class="login-tagline">Gestión integral para tu negocio de impresión 3D</p>
@@ -96,15 +96,10 @@ async function handleSubmit() {
 }
 
 .brand-mark {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   border-radius: 10px;
-  background: linear-gradient(135deg, var(--primary), var(--accent));
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 800;
+  object-fit: cover;
 }
 
 .login-tagline {
