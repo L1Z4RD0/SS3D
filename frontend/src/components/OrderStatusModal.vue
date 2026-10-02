@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from "vue";
 import * as salesApi from "../api/sales";
+import * as betaApi from "../api/beta";
 import { formatCurrency, formatDate, formatDateTime, todayISO } from "../utils/format";
 import { extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
@@ -98,6 +99,51 @@ async function saveDate() {
   }
 }
 
+/* -------- Delivery --------
+   Si el cliente pidió delivery (aunque al principio dijera que retiraba), se registra quién
+   lo llevó y cuánto se le devuelve. Es solo un registro: no cambia precio, costos ni ganancia. */
+const canEditDelivery = computed(() => sale.value?.can_edit && sale.value.status !== "cancelado");
+const editingDelivery = ref(false);
+const deliveryForm = ref({ delivery_by: "", delivery_amount: null });
+const deliveryPeople = ref([]);
+
+async function startDeliveryEdit() {
+  deliveryForm.value = {
+    delivery_by: sale.value.delivery_by || "",
+    delivery_amount: Number(sale.value.delivery_amount) || null,
+  };
+  editingDelivery.value = true;
+  if (!deliveryPeople.value.length) {
+    try {
+      deliveryPeople.value = (await betaApi.getBetaAccess()).partners.filter((p) => p !== "Caja");
+    } catch {
+      // Sin lista sugerida: se escribe el nombre a mano.
+    }
+  }
+}
+
+async function saveDelivery(remove = false) {
+  const who = remove ? "" : deliveryForm.value.delivery_by.trim();
+  if (!remove && !who) {
+    error.value = "Indica quién hizo el delivery.";
+    return;
+  }
+  busy.value = true;
+  error.value = "";
+  try {
+    sale.value = await salesApi.setSaleDelivery(sale.value.id, {
+      delivery_by: who || null,
+      delivery_amount: remove ? 0 : Number(deliveryForm.value.delivery_amount) || 0,
+    });
+    editingDelivery.value = false;
+    emit("changed", sale.value);
+  } catch (err) {
+    error.value = extractApiError(err, "No se pudo guardar el delivery.");
+  } finally {
+    busy.value = false;
+  }
+}
+
 /* -------- Cancelación -------- */
 const showCancel = ref(false);
 const PIECE_STATUS = { en_almacen: "En almacén", reservada: "Reservada", vendida: "Vendida", descartada: "Descartada" };
@@ -150,6 +196,47 @@ onMounted(load);
             <dt>Comprador</dt>
             <dd>{{ sale.buyer_name }}</dd>
           </template>
+          <dt>Delivery</dt>
+          <dd>
+            <template v-if="!editingDelivery">
+              <span v-if="sale.delivery_by">
+                🛵 {{ sale.delivery_by }}<template v-if="Number(sale.delivery_amount) > 0">
+                  · se le devuelven {{ formatCurrency(sale.delivery_amount) }}</template>
+              </span>
+              <span v-else class="text-muted">Retira el cliente</span>
+              <button v-if="canEditDelivery" type="button" class="link-btn" @click="startDeliveryEdit">
+                {{ sale.delivery_by ? "Cambiar" : "Cambiar a delivery" }}
+              </button>
+            </template>
+            <div v-else class="delivery-edit">
+              <input
+                v-model="deliveryForm.delivery_by"
+                list="delivery-people"
+                maxlength="60"
+                placeholder="¿Quién lo llevó?"
+                aria-label="Quién hizo el delivery"
+              />
+              <datalist id="delivery-people">
+                <option v-for="p in deliveryPeople" :key="p" :value="p" />
+              </datalist>
+              <input
+                v-model.number="deliveryForm.delivery_amount"
+                type="number"
+                min="0"
+                step="100"
+                placeholder="Monto a devolver"
+                aria-label="Monto a devolver"
+              />
+              <div class="delivery-edit-actions">
+                <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="saveDelivery()">Guardar</button>
+                <button v-if="sale.delivery_by" type="button" class="btn btn-ghost btn-sm" :disabled="busy" @click="saveDelivery(true)">
+                  Quitar delivery
+                </button>
+                <button type="button" class="btn btn-ghost btn-sm" :disabled="busy" @click="editingDelivery = false">Cancelar</button>
+              </div>
+              <span class="field-hint">Solo es un registro: no cambia el precio, los costos ni la ganancia del pedido.</span>
+            </div>
+          </dd>
         </dl>
       </div>
 
@@ -319,5 +406,24 @@ onMounted(load);
   border: 2px solid var(--surface);
   /* El color del estado (de la clase status-*) como punto sólido. */
   background: currentColor;
+}
+
+.delivery-edit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.delivery-edit input {
+  width: auto;
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.delivery-edit-actions {
+  display: flex;
+  gap: 6px;
+  width: 100%;
 }
 </style>

@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.routers import (
+    beta,
     admin,
     auth,
     business_profile,
@@ -49,6 +50,7 @@ app.include_router(business_profile.router)
 app.include_router(filament_catalog.router)
 app.include_router(history.router)
 app.include_router(warehouse.router)
+app.include_router(beta.router)
 
 
 @app.get("/api/health")

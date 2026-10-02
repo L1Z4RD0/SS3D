@@ -17,6 +17,7 @@ from app.models.sale_plate import SalePlate
 from app.schemas.sale import (
     GIFT_PAYMENT_METHOD,
     AddPlateRequest,
+    DeliveryRequest,
     CalendarOrder,
     CancelOrderRequest,
     DeliveryDateChangeRequest,
@@ -27,7 +28,7 @@ from app.schemas.sale import (
     SaleUpdateRequest,
 )
 from app.services.audit import log_event
-from app.services.calculator import calculate_margin_percent, money
+from app.services.calculator import calculate_margin_percent, money, risk_level_for, with_risk
 from app.services.cancellation import cancel_order, check_can_delete, undo_remaining_consumption
 from app.services.discord import announce_order, mark_order_deleted, snapshot_before_delete, sync_order
 from app.services.inventory import consume_supply, restore_filament, restore_supply
@@ -55,6 +56,7 @@ from app.services.sale_builder import (
     resolve_filaments,
     resolve_printer,
     resolve_sale_owner,
+    sale_resource_owner_ids,
     resolve_supplies,
     sales_editable_by,
     sales_listed_for,
@@ -286,10 +288,13 @@ def create_sale(
     # La venta usa solo el inventario de un dueño: el propio usuario, o el usuario
     # asignado que eligió el observador. Así los inventarios nunca se mezclan.
     owner_id = resolve_sale_owner(db, current_user, payload.owner_id)
+    # La impresora es del dueño de la venta; filamentos, insumos y planchas pueden ser
+    # también de la Empresa si es ella quien registra la venta.
+    resource_owners = sale_resource_owner_ids(owner_id, current_user)
     printer = resolve_printer(db, current_user, payload.printer_id, [owner_id])
-    resolved_filaments = resolve_filaments(db, current_user, payload.filaments, [owner_id])
-    resolved_supplies = resolve_supplies(db, current_user, payload.supplies, [owner_id])
-    resolved_plates = resolve_plates(db, current_user, payload.extra_plates, [owner_id])
+    resolved_filaments = resolve_filaments(db, current_user, payload.filaments, resource_owners)
+    resolved_supplies = resolve_supplies(db, current_user, payload.supplies, resource_owners)
+    resolved_plates = resolve_plates(db, current_user, payload.extra_plates, resource_owners)
 
     breakdown = build_cost_breakdown(
         printer=printer,
@@ -301,7 +306,7 @@ def create_sale(
         electricity_rate=ELECTRICITY_RATE,
         labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
-    breakdown = with_new_plates(breakdown, resolved_plates)
+    breakdown = with_risk(with_new_plates(breakdown, resolved_plates), payload.risk_level)
 
     price = Decimal(0) if payload.payment_method == GIFT_PAYMENT_METHOD else money(payload.price)
     printer.hours_used += payload.print_hours
@@ -332,6 +337,9 @@ def create_sale(
         margin_percent=calculate_margin_percent(price, breakdown.total_cost),
         payment_method=payload.payment_method,
         notes=payload.notes,
+        # Un regalo no cobra nada, tampoco la reserva por riesgo.
+        risk_percent=0 if payload.payment_method == GIFT_PAYMENT_METHOD else breakdown.risk_percent,
+        risk_amount=0 if payload.payment_method == GIFT_PAYMENT_METHOD else breakdown.risk_cost,
     )
     # El consumo es igual que siempre (se descuenta al crear); lo que cambia es que el
     # pedido nace Pendiente y no cuenta como ingreso hasta que se entrega.
@@ -388,6 +396,7 @@ def update_sale(
         "payment_method" in changes or changes.get("price") is not None
     ):
         changes["price"] = Decimal(0)
+        sale.risk_percent = sale.risk_amount = 0  # un regalo no cobra reserva por riesgo
 
     # ---- Reglas según el estado del pedido ----
     if sale.status == STATUS_CANCELLED:
@@ -465,7 +474,7 @@ def _update_full(db: Session, sale: Sale, payload: SaleUpdateRequest, changes: d
     """Edición completa (Pendiente y Entregada): igual que siempre, devuelve lo que usaba
     la venta y vuelve a descontar lo nuevo, recalculando costos."""
     # El dueño de una venta no cambia al editarla: sus recursos siguen siendo los suyos.
-    owner_ids = [sale.user_id]
+    owner_ids = sale_resource_owner_ids(sale.user_id, sale.created_by)
 
     old_printer = sale.printer
     old_filament_rows = list(sale.filaments_used)
@@ -491,7 +500,7 @@ def _update_full(db: Session, sale: Sale, payload: SaleUpdateRequest, changes: d
     new_filaments = payload.filaments if "filaments" in payload.model_fields_set else None
     new_supplies = payload.supplies if "supplies" in payload.model_fields_set else None
 
-    printer = resolve_printer(db, current_user, new_printer_id, owner_ids)
+    printer = resolve_printer(db, current_user, new_printer_id, [sale.user_id])
     resolved_supplies = (
         resolve_supplies(db, current_user, new_supplies, owner_ids)
         if new_supplies is not None
@@ -515,6 +524,8 @@ def _update_full(db: Session, sale: Sale, payload: SaleUpdateRequest, changes: d
     )
     # Las planchas adicionales no se editan aquí: se conservan y siguen sumando su costo.
     breakdown = with_stored_plates(breakdown, sale.plates)
+    # Riesgo: el elegido ahora o, si no viene, el que tenía la venta.
+    breakdown = with_risk(breakdown, changes.get("risk_level") or risk_level_for(sale.risk_percent))
 
     if new_price is not None:
         _set_price(sale, new_price)
@@ -526,7 +537,7 @@ def _update_full(db: Session, sale: Sale, payload: SaleUpdateRequest, changes: d
     printer.hours_used += new_print_hours
 
     for field, value in changes.items():
-        if field in ("supplies", "filaments", "price"):
+        if field in ("supplies", "filaments", "price", "risk_level"):
             continue
         if field in ("promised_delivery_date", "delivered_date") and value is None:
             continue
@@ -544,6 +555,9 @@ def _update_full(db: Session, sale: Sale, payload: SaleUpdateRequest, changes: d
     sale.total_cost = breakdown.total_cost
     sale.profit = profit
     sale.margin_percent = margin_percent
+    is_gift = sale.payment_method == GIFT_PAYMENT_METHOD
+    sale.risk_percent = 0 if is_gift else breakdown.risk_percent
+    sale.risk_amount = 0 if is_gift else breakdown.risk_cost
 
     exhausted_filaments = apply_filaments_to_sale(db, sale, resolved_filaments)
     sale.grams_used = money(sale.grams_used + plates_grams(sale.plates))
@@ -642,6 +656,37 @@ def cancel_sale(
     return to_sale_response(_get_listed_sale(db, sale.id, current_user), viewer=current_user, include_history=True)
 
 
+@router.put("/{sale_id}/delivery", response_model=SaleResponse)
+def set_sale_delivery(
+    sale_id: uuid.UUID,
+    payload: DeliveryRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Registra (o quita) el delivery de un pedido: quién lo llevó y cuánto se le devuelve.
+    Solo es un registro: no cambia el precio, los costos ni la ganancia."""
+    sale = _get_editable_sale(db, sale_id, current_user)
+    if sale.status == STATUS_CANCELLED:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Un pedido cancelado no lleva delivery.")
+    who = (payload.delivery_by or "").strip() or None
+    previous = {"delivery_by": sale.delivery_by, "delivery_amount": str(sale.delivery_amount)}
+    sale.delivery_by = who
+    sale.delivery_amount = money(payload.delivery_amount) if who else Decimal(0)
+    log_event(
+        db,
+        user_id=current_user.id,
+        event_type="SALE_DELIVERY_SET",
+        entity_type="sale",
+        entity_id=sale.id,
+        details={"from": previous, "to": {"delivery_by": sale.delivery_by, "delivery_amount": str(sale.delivery_amount)}},
+        ip_address=request.client.host if request.client else None,
+    )
+    db.commit()
+    db.expire_all()
+    return to_sale_response(_get_listed_sale(db, sale.id, current_user), viewer=current_user, include_history=True)
+
+
 def _check_plates_editable(sale: Sale) -> None:
     if sale.status not in OPEN_STATUSES:
         raise HTTPException(
@@ -668,7 +713,9 @@ def add_sale_plate(
     impresora y su costo al pedido; el precio no cambia."""
     sale = _get_editable_sale(db, sale_id, current_user)
     _check_plates_editable(sale)
-    [plate] = resolve_plates(db, current_user, [payload], [sale.user_id], is_reprint=payload.is_reprint)
+    [plate] = resolve_plates(
+        db, current_user, [payload], sale_resource_owner_ids(sale.user_id, sale.created_by), is_reprint=payload.is_reprint
+    )
     exhausted = add_plate(db, sale, plate)
     log_event(
         db,

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, reactive, onMounted, computed, watch, nextTick } from "vue";
 import * as calculatorApi from "../api/calculator";
+import { DEFAULT_RISK_LEVEL, RISK_LEVELS } from "../api/calculator";
 import * as printersApi from "../api/printers";
 import * as inventoryApi from "../api/inventory";
 import * as quotesApi from "../api/quotes";
@@ -16,6 +17,7 @@ import DoughnutChart from "../components/DoughnutChart.vue";
 import QuoteDocument from "../components/QuoteDocument.vue";
 import FilamentPickerModal from "../components/FilamentPickerModal.vue";
 import ExtraPlatesEditor from "../components/ExtraPlatesEditor.vue";
+import RiskLevelPicker from "../components/RiskLevelPicker.vue";
 import { platesPayload, platesError } from "../utils/plates";
 import { useObservedUsers } from "../composables/useObservedUsers";
 
@@ -39,6 +41,7 @@ const form = reactive({
   print_hours: null,
   postprocess_hours: 0,
   shipping_cost: 0,
+  risk_level: DEFAULT_RISK_LEVEL,
 });
 
 /* -------- Filament selection (single vs multicolor) -------- */
@@ -244,6 +247,7 @@ const extraPlates = ref([]);
 function buildQuotePayload() {
   return {
     extra_plates: platesPayload(extraPlates.value),
+    risk_level: form.risk_level,
     printer_id: form.printer_id,
     filaments: buildFilamentsPayload(),
     print_hours: Number(form.print_hours) || 0,
@@ -284,14 +288,16 @@ function round2(n) {
   return Math.round(n * 100) / 100;
 }
 
-// Recargo equivalente sobre la base del margen (material + depreciación + energía),
-// para comparar un precio manual con los escenarios 90/140/190. Los extras
-// (postprocesado, consumibles, envío) no llevan margen, así que se descuentan.
+// Recargo equivalente sobre la base del margen (material + depreciación + energía +
+// insumos), para comparar un precio manual con los escenarios 90/140/190. Los extras
+// (postprocesado, envío) y el riesgo de fallo no llevan margen, así que se descuentan.
 function markupPercent(price, breakdown) {
   const marginBase = Number(breakdown.margin_base_cost);
   if (marginBase <= 0) return 0;
-  return Math.round(((price - Number(breakdown.extras_cost)) / marginBase - 1) * 100);
+  const outsideMargin = Number(breakdown.extras_cost) + Number(breakdown.risk_cost || 0);
+  return Math.round(((price - outsideMargin) / marginBase - 1) * 100);
 }
+const riskLabel = (percent) => RISK_LEVELS.find((r) => r.percent === Number(percent))?.label || "";
 
 // Escenario "virtual" con la misma forma que los del backend, para reutilizar
 // openSaveModal/addToCart tal cual.
@@ -370,7 +376,9 @@ const saleOwnerMismatch = computed(() => {
   if (!auth.isWatcher || !saleOwnerId.value) return false;
   const filamentOwners = buildFilamentsPayload().map((u) => filaments.value.find((f) => f.id === u.filament_id)?.owner_id);
   const supplyOwners = supplyRows.value.map((r) => supplies.value.find((s) => s.id === r.supply_id)?.owner_id);
-  return [...filamentOwners, ...supplyOwners].some((id) => id && id !== saleOwnerId.value);
+  // La Empresa puede combinar su propio filamento e insumos con la impresora del socio.
+  const allowed = new Set([saleOwnerId.value, ...(auth.isCompany ? [auth.user?.id] : [])]);
+  return [...filamentOwners, ...supplyOwners].some((id) => id && !allowed.has(id));
 });
 
 function openSaveModal(scenario) {
@@ -607,6 +615,7 @@ function resetForm() {
   form.print_hours = null;
   form.postprocess_hours = 0;
   form.shipping_cost = 0;
+  form.risk_level = DEFAULT_RISK_LEVEL;
   isMulticolor.value = false;
   singleFilamentId.value = "";
   singleGramsUsed.value = null;
@@ -769,6 +778,8 @@ onMounted(() => {
             </div>
           </div>
 
+          <RiskLevelPicker v-model="form.risk_level" />
+
           <ExtraPlatesEditor
             v-model="extraPlates"
             :printers="printers"
@@ -845,10 +856,15 @@ onMounted(() => {
                   <tr><td>Material</td><td class="text-right mono">{{ formatCurrency(quote.breakdown.material_cost) }}</td></tr>
                   <tr><td>Depreciación</td><td class="text-right mono">{{ formatCurrency(quote.breakdown.depreciation_cost) }}</td></tr>
                   <tr><td>Energía</td><td class="text-right mono">{{ formatCurrency(quote.breakdown.energy_cost) }}</td></tr>
+                  <tr><td>Consumibles</td><td class="text-right mono">{{ formatCurrency(quote.breakdown.supplies_cost) }}</td></tr>
                   <tr class="breakdown-group"><td colspan="2">Extras (se suman al final, sin margen)</td></tr>
                   <tr><td>Postprocesado</td><td class="text-right mono">{{ formatCurrency(quote.breakdown.postprocess_cost) }}</td></tr>
-                  <tr><td>Consumibles</td><td class="text-right mono">{{ formatCurrency(quote.breakdown.supplies_cost) }}</td></tr>
                   <tr><td>Envío</td><td class="text-right mono">{{ formatCurrency(quote.breakdown.shipping_cost) }}</td></tr>
+                  <tr class="breakdown-group"><td colspan="2">Se cobra, no es costo</td></tr>
+                  <tr>
+                    <td>Riesgo de fallo ({{ riskLabel(quote.breakdown.risk_percent).toLowerCase() }}, {{ Number(quote.breakdown.risk_percent) }}%)</td>
+                    <td class="text-right mono">{{ formatCurrency(quote.breakdown.risk_cost) }}</td>
+                  </tr>
                 </tbody>
               </table>
             </div>
@@ -985,7 +1001,7 @@ onMounted(() => {
         <template v-if="auth.isWatcher">
           <div v-if="saleOwnerMismatch" class="alert alert-danger" style="margin-bottom: 14px">
             Esta cotización mezcla recursos de distintos usuarios. Para guardarla como venta, la impresora, los
-            filamentos y los insumos deben ser del mismo usuario.
+            filamentos y los insumos deben ser del mismo usuario<template v-if="auth.isCompany"> (o de la Empresa)</template>.
           </div>
           <div v-else class="alert alert-info" style="margin-bottom: 14px">
             Venta para <strong>{{ ownerName(saleOwnerId) }}</strong>: se descuenta de su inventario y quedará registrada

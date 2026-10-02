@@ -23,5 +23,8 @@ class User(UUIDMixin, TimestampMixin, Base):
     # Contador propio de cotizaciones: solo sube, así el número nunca se reutiliza
     # aunque se borren cotizaciones viejas.
     last_quote_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # Cuenta de la Empresa (Simple_Solutions3D): un observador que además tiene inventario
+    # propio. Puede vender con la impresora de un socio usando su propio filamento.
+    is_company: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     role: Mapped["Role"] = relationship(back_populates="users")

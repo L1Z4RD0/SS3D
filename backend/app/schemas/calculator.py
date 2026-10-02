@@ -2,6 +2,8 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from app.constants import GRAMS_MAX
@@ -35,6 +37,8 @@ class QuoteRequest(BaseModel):
     shipping_cost: Decimal = Field(ge=0, default=0)
     # Planchas adicionales del mismo producto (la de arriba es la principal).
     extra_plates: list[PlateInput] = Field(default_factory=list, max_length=20)
+    # Riesgo de fallo: bajo 10 %, medio 15 %, alto 20 % del costo de producción.
+    risk_level: Literal["bajo", "medio", "alto"] = "bajo"
 
 
 class CostBreakdown(BaseModel):
@@ -45,10 +49,13 @@ class CostBreakdown(BaseModel):
     supplies_cost: Decimal
     shipping_cost: Decimal
     total_cost: Decimal
-    # Material + depreciación + energía: lo único sobre lo que se aplica el margen.
+    # Material + depreciación + energía + insumos: sobre esto se aplica el margen.
     margin_base_cost: Decimal
-    # Postprocesado + consumibles + envío: se suman al final, sin margen.
+    # Postprocesado + envío: se suman al final, sin margen.
     extras_cost: Decimal
+    # Riesgo de fallo: se cobra fuera del margen y no es un costo (queda en la ganancia).
+    risk_percent: Decimal = Decimal(0)
+    risk_cost: Decimal = Decimal(0)
 
 
 class ScenarioItem(BaseModel):

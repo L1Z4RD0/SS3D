@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from sqlalchemy import Boolean, Date, ForeignKey, Numeric, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 from app.models.base import TimestampMixin, UUIDMixin
@@ -36,3 +36,6 @@ class Filament(UUIDMixin, TimestampMixin, Base):
     min_alert_g: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     spool_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    # Dueño (quién lo compró): a él van los costos de este recurso en cada venta.
+    owner: Mapped["User"] = relationship(viewonly=True)

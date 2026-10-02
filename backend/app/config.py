@@ -18,7 +18,10 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     # Aviso en Discord cuando uno de estos usuarios agenda un pedido. Sin URL no se envía nada.
     discord_webhook_url: str | None = None
-    discord_notify_users: str = "Olzer,Diego,Sntg"
+    discord_notify_users: str = "Simple_Solutions3D,Diego,Sntg"
+    # Módulo beta de Reparto: socios que se reparten la ganancia (además de la Caja de la
+    # Empresa). Si el nombre coincide con un usuario, sus costos se le devuelven a él.
+    split_partners: str = "Diego,Sntg,Omar"
     # URL pública del frontend (ej. https://tu-app.vercel.app). Opcional: si está, el aviso
     # enlaza al Calendario y muestra el logo de la app.
     app_url: str | None = None

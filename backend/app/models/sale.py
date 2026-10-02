@@ -69,6 +69,16 @@ class Sale(UUIDMixin, TimestampMixin, Base):
     profit: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     margin_percent: Mapped[Decimal] = mapped_column(Numeric(6, 2), nullable=False)
 
+    # Riesgo de fallo cobrado en el precio: % del costo de producción y su monto. Es una
+    # reserva dentro de la ganancia (no un costo). 0 en las ventas anteriores a este cambio.
+    risk_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=0, server_default="0")
+    risk_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+
+    # Delivery: quién lo hizo y cuánto se le devuelve. Solo es un registro: no entra en el
+    # precio, los costos ni la ganancia.
+    delivery_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    delivery_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0, server_default="0")
+
     payment_method: Mapped[str] = mapped_column(Text, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 

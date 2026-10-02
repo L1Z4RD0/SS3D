@@ -23,6 +23,8 @@ const titles = {
   printers: "Impresoras",
   history: "Historial",
   admin: "Administración",
+  split: "Reparto del mes",
+  investment: "Mi inversión",
 };
 
 const title = computed(() => titles[route.name] || "Zola");

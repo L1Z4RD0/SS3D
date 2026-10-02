@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
 from app.database import get_db
-from app.dependencies import get_current_user, is_watcher
+from app.dependencies import get_current_user, is_company, is_watcher
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.models.watcher_assignment import WatcherAssignment
@@ -195,6 +195,7 @@ def me(current_user: User = Depends(get_current_user)):
         username=current_user.username,
         role=current_user.role.name,
         is_active=current_user.is_active,
+        is_company=current_user.is_company,
     )
 
 
@@ -211,4 +212,8 @@ def observed_users(db: Session = Depends(get_db), current_user: User = Depends(g
         .order_by(User.username)
         .all()
     )
-    return [ObservedUserResponse(id=row.id, username=row.username) for row in rows]
+    users = [ObservedUserResponse(id=row.id, username=row.username) for row in rows]
+    if is_company(current_user):
+        # La Empresa también tiene inventario propio: aparece primero.
+        users.insert(0, ObservedUserResponse(id=current_user.id, username=current_user.username, is_self=True))
+    return users

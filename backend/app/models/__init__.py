@@ -1,5 +1,6 @@
 from app.models.audit_log import AuditLog
 from app.models.business_profile import BusinessProfile
+from app.models.company_expense import CompanyExpense
 from app.models.discord_message import DiscordMessage
 from app.models.filament import Filament
 from app.models.filament_catalog import FilamentBrand, FilamentColor, FilamentMaterial
@@ -20,6 +21,7 @@ from app.models.watcher_assignment import WatcherAssignment
 __all__ = [
     "AuditLog",
     "BusinessProfile",
+    "CompanyExpense",
     "DiscordMessage",
     "Filament",
     "FilamentBrand",

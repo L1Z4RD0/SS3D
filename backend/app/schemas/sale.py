@@ -2,6 +2,8 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from app.schemas.calculator import FilamentUsageInput, PlateInput, SupplyUsageInput
@@ -36,6 +38,8 @@ class SaleCreateRequest(BaseModel):
     # Planchas adicionales del mismo producto (la impresora/horas/filamentos de arriba son
     # la plancha principal).
     extra_plates: list[PlateInput] = Field(default_factory=list, max_length=20)
+    # Riesgo de fallo con que se calculó el precio (se guarda como referencia).
+    risk_level: Literal["bajo", "medio", "alto"] = "bajo"
 
 
 class SaleUpdateRequest(BaseModel):
@@ -56,6 +60,8 @@ class SaleUpdateRequest(BaseModel):
     supplies: list[SupplyUsageInput] | None = None
     payment_method: str | None = Field(default=None, pattern="^(" + "|".join(PAYMENT_METHODS) + ")$")
     notes: str | None = None
+    # Solo en edición completa (Pendiente/Entregada): recalcula la reserva por riesgo.
+    risk_level: Literal["bajo", "medio", "alto"] | None = None
 
 
 class SaleStatusChangeRequest(BaseModel):
@@ -130,6 +136,23 @@ class SaleSupplyResponse(BaseModel):
 class AddPlateRequest(PlateInput):
     # Reimpresión por fallo: suma costo sin cambiar el precio (la pérdida se ve en la ganancia).
     is_reprint: bool = False
+
+
+class OwnerCostResponse(BaseModel):
+    """Parte del costo de la venta que pone cada dueño de recursos."""
+
+    user_id: uuid.UUID
+    username: str
+    machine: Decimal
+    material: Decimal
+    supplies: Decimal
+    total: Decimal
+
+
+class DeliveryRequest(BaseModel):
+    # Quién hizo el delivery (vacío = sin delivery) y cuánto se le devuelve.
+    delivery_by: str | None = Field(default=None, max_length=60)
+    delivery_amount: Decimal = Field(default=Decimal(0), ge=0)
 
 
 class SalePlateFilamentResponse(BaseModel):
@@ -210,6 +233,17 @@ class SaleResponse(BaseModel):
     supplies_used: list[SaleSupplyResponse]
     # Algún insumo se usó sin stock: su costo (y la ganancia) es provisional hasta reponerlo.
     has_provisional_costs: bool = False
+    # Costos por dueño de recurso (máquina, material, insumos). El postprocesado y el envío
+    # no son de un recurso con dueño: van en shared_cost.
+    cost_by_owner: list[OwnerCostResponse] = Field(default_factory=list)
+    shared_cost: Decimal = Decimal(0)
+    # Delivery: registro de quién lo hizo y cuánto se le devuelve (no entra en las cifras).
+    delivery_by: str | None = None
+    delivery_amount: Decimal = Decimal(0)
+    # Riesgo de fallo cobrado en el precio (% y monto). No es un costo: es parte de la
+    # ganancia, como reserva para cubrir reimpresiones.
+    risk_percent: Decimal = Decimal(0)
+    risk_amount: Decimal = Decimal(0)
     # Planchas adicionales y reimpresiones (ya incluidas en los costos de arriba).
     plates: list[SalePlateResponse] = Field(default_factory=list)
     # Cuánto costaron las reimpresiones por fallo (parte del costo total).

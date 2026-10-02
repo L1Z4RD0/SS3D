@@ -59,6 +59,16 @@ const routes = [
     component: () => import("../views/HistoryView.vue"),
   },
   {
+    path: "/reparto",
+    name: "split",
+    component: () => import("../views/SplitView.vue"),
+  },
+  {
+    path: "/inversion",
+    name: "investment",
+    component: () => import("../views/InvestmentView.vue"),
+  },
+  {
     path: "/admin",
     name: "admin",
     component: () => import("../views/AdminView.vue"),

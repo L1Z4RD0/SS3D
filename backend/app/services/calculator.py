@@ -1,7 +1,7 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import ROUND_HALF_UP, Decimal
 
-from app.constants import MARGIN_SCENARIOS
+from app.constants import MARGIN_SCENARIOS, RISK_LEVELS
 
 TWO_PLACES = Decimal("0.01")
 
@@ -40,13 +40,22 @@ class CostBreakdown:
     supplies_cost: Decimal
     shipping_cost: Decimal
     total_cost: Decimal
-    # Costo sobre el que se aplica el margen (90/140/190): material + depreciación + energía.
+    # Costo sobre el que se aplica el margen (90/140/190): material + depreciación +
+    # energía + insumos (el costo de producir la pieza).
     margin_base_cost: Decimal = Decimal(0)
-    # Extras que se suman al final a precio de costo, sin margen: postprocesado,
-    # consumibles y envío (si el courier cobra $3.000, se cobran $3.000).
+    # Extras que se suman al final a precio de costo, sin margen: postprocesado y envío
+    # (si el courier cobra $3.000, se cobran $3.000).
     extras_cost: Decimal = Decimal(0)
     supply_lines: list[SupplyUsage] = field(default_factory=list)
     filament_lines: list[FilamentUsage] = field(default_factory=list)
+    # Riesgo de fallo: % de margin_base_cost que se cobra como reserva, fuera del margen.
+    # No es un costo (no entra en total_cost): si la pieza no falla, queda como ganancia;
+    # si falla, la reimpresión se registra como costo real.
+    risk_percent: Decimal = Decimal(0)
+
+    @property
+    def risk_cost(self) -> Decimal:
+        return money(self.margin_base_cost * self.risk_percent / Decimal(100))
 
 
 @dataclass
@@ -82,8 +91,8 @@ def calculate_costs(
     supplies_cost = money(sum((usage.quantity * usage.unit_cost for usage in supply_usages), Decimal(0)))
     shipping = money(shipping_cost)
 
-    margin_base_cost = money(material_cost + depreciation_cost + energy_cost)
-    extras_cost = money(postprocess_cost + supplies_cost + shipping)
+    margin_base_cost = money(material_cost + depreciation_cost + energy_cost + supplies_cost)
+    extras_cost = money(postprocess_cost + shipping)
     total_cost = money(margin_base_cost + extras_cost)
 
     return CostBreakdown(
@@ -101,11 +110,27 @@ def calculate_costs(
     )
 
 
+def risk_level_for(percent: Decimal) -> str | None:
+    """Nivel (bajo/medio/alto) que corresponde a un % guardado; None si no tenía riesgo."""
+    for level, value in RISK_LEVELS.items():
+        if Decimal(value) == percent:
+            return level
+    return None
+
+
+def with_risk(breakdown: CostBreakdown, risk_level: str | None) -> CostBreakdown:
+    """Aplica el riesgo de fallo elegido (bajo/medio/alto). Sin nivel, no hay riesgo."""
+    percent = RISK_LEVELS.get(risk_level or "", 0)
+    return replace(breakdown, risk_percent=Decimal(percent))
+
+
 def _build_scenario(breakdown: CostBreakdown, margin_percent: int, label: str) -> ScenarioResult:
-    # El margen se aplica solo sobre material + depreciación + energía; postprocesado,
-    # consumibles y envío se suman después tal cual, sin margen.
+    # El margen se aplica sobre el costo de producción (material + depreciación + energía
+    # + insumos); postprocesado, envío y el riesgo de fallo se suman después, sin margen.
     price = money(
-        breakdown.margin_base_cost * (Decimal(1) + Decimal(margin_percent) / Decimal(100)) + breakdown.extras_cost
+        breakdown.margin_base_cost * (Decimal(1) + Decimal(margin_percent) / Decimal(100))
+        + breakdown.extras_cost
+        + breakdown.risk_cost
     )
     return ScenarioResult(
         margin_percent=margin_percent,

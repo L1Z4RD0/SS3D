@@ -26,6 +26,7 @@ class UserResponse(BaseModel):
     username: str
     role: str
     is_active: bool
+    is_company: bool = False
     failed_login_attempts: int
     locked_until: datetime | None
     created_at: datetime

@@ -28,3 +28,8 @@ MARGIN_SCENARIOS: list[MarginScenario] = [
 ]
 
 MARGIN_SCENARIO_PERCENTS = {s["margin_percent"] for s in MARGIN_SCENARIOS}
+
+# Riesgo de fallo de la impresión: % del costo de producción de la pieza (material,
+# depreciación, energía e insumos) que se cobra como reserva, fuera del margen.
+RISK_LEVELS: dict[str, int] = {"bajo": 10, "medio": 15, "alto": 20}
+DEFAULT_RISK_LEVEL = "bajo"

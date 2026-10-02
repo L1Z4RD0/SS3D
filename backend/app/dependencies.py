@@ -43,11 +43,18 @@ def is_watcher(user: User) -> bool:
     return user.role.name == "watcher"
 
 
+def is_company(user: User | None) -> bool:
+    """Cuenta de la Empresa: un observador que además tiene inventario propio."""
+    return bool(user is not None and user.is_company)
+
+
 def require_not_watcher(current_user: User = Depends(get_current_user)) -> User:
     """Bloquea a los watchers en todo lo que sea administrar inventario e impresoras.
     Un watcher puede cotizar y registrar ventas con el inventario de sus usuarios
-    asignados (eso se controla en ventas/calculadora), pero no editar ese inventario."""
-    if is_watcher(current_user):
+    asignados (eso se controla en ventas/calculadora), pero no editar ese inventario.
+    La cuenta Empresa sí administra su propio inventario (cada ruta solo deja tocar lo
+    propio, así que el de los socios sigue siendo de solo lectura para ella)."""
+    if is_watcher(current_user) and not is_company(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Como observador puedes ver inventario, cotizar y registrar ventas, pero no modificar inventario ni impresoras.",
@@ -57,8 +64,8 @@ def require_not_watcher(current_user: User = Depends(get_current_user)) -> User:
 
 def readable_user_ids(db: Session, user: User) -> list[uuid.UUID]:
     """IDs cuyos datos puede LEER este usuario. Un usuario normal solo los propios;
-    un watcher, los de los usuarios que el administrador le asignó (nunca los suyos,
-    porque un watcher no tiene inventario propio)."""
+    un watcher, los de los usuarios que el administrador le asignó (un watcher no tiene
+    inventario propio; la cuenta Empresa sí, así que también ve el suyo)."""
     if not is_watcher(user):
         return [user.id]
     rows = (
@@ -66,4 +73,7 @@ def readable_user_ids(db: Session, user: User) -> list[uuid.UUID]:
         .filter(WatcherAssignment.watcher_user_id == user.id)
         .all()
     )
-    return [row[0] for row in rows]
+    ids = [row[0] for row in rows]
+    if is_company(user):
+        ids.append(user.id)
+    return ids

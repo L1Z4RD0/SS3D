@@ -29,6 +29,7 @@ def _to_user_response(user: User) -> UserResponse:
         username=user.username,
         role=user.role.name,
         is_active=user.is_active,
+        is_company=user.is_company,
         failed_login_attempts=user.failed_login_attempts,
         locked_until=user.locked_until,
         created_at=user.created_at,

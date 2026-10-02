@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from sqlalchemy import Boolean, ForeignKey, Numeric, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 from app.models.base import TimestampMixin, UUIDMixin
@@ -24,3 +24,6 @@ class Printer(UUIDMixin, TimestampMixin, Base):
     hours_used: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     depreciation_cost_per_hour: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    # Dueño (quién lo compró): a él van los costos de este recurso en cada venta.
+    owner: Mapped["User"] = relationship(viewonly=True)

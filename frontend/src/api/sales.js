@@ -38,3 +38,6 @@ export const GIFT_PAYMENT_METHOD = "cortesia";
 // (suma costo, no cambia el precio). Devuelven el pedido actualizado.
 export const addSalePlate = (id, payload) => client.post(`/api/sales/${id}/plates`, payload).then((r) => r.data);
 export const deleteSalePlate = (id, plateId) => client.delete(`/api/sales/${id}/plates/${plateId}`).then((r) => r.data);
+
+// Delivery: quién lo hizo y cuánto se le devuelve (solo un registro, no cambia las cifras).
+export const setSaleDelivery = (id, payload) => client.put(`/api/sales/${id}/delivery`, payload).then((r) => r.data);

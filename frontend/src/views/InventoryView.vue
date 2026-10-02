@@ -58,6 +58,9 @@ async function loadOwners() {
 function belongsToSelected(item) {
   return !auth.isWatcher || item.owner_id === selectedOwnerId.value;
 }
+// Se puede administrar lo propio: un usuario normal, o la Empresa mirando su inventario.
+// El inventario de los socios es de solo lectura para la Empresa (igual que para un observador).
+const canManage = computed(() => !auth.isWatcher || (auth.isCompany && selectedOwnerId.value === auth.user?.id));
 
 const ownerFilaments = computed(() => filaments.value.filter(belongsToSelected));
 const ownerSupplies = computed(() => supplies.value.filter(belongsToSelected));
@@ -485,7 +488,7 @@ async function deleteSupply(s) {
             :aria-pressed="selectedOwnerId === u.id"
             @click="selectedOwnerId = u.id"
           >
-            <strong>{{ u.username }}</strong>
+            <strong>{{ u.username }}<template v-if="u.is_self"> (Empresa)</template></strong>
             <span class="owner-chip-meta">
               {{ ownerCounts(u.id).filaments }} filamentos · {{ ownerCounts(u.id).supplies }} insumos
             </span>
@@ -510,7 +513,7 @@ async function deleteSupply(s) {
             <Icon name="filter" :size="14" />
             {{ sortLabel }}
           </button>
-          <button v-if="!auth.isWatcher" class="btn btn-primary btn-sm" @click="openCreateFilament">
+          <button v-if="canManage" class="btn btn-primary btn-sm" @click="openCreateFilament">
             <Icon name="plus" :size="15" /> Nuevo filamento
           </button>
         </div>
@@ -553,7 +556,7 @@ async function deleteSupply(s) {
               <td><span class="badge" :class="statusBadge[f.stock_status]">{{ statusLabels[f.stock_status] }}</span></td>
               <td class="text-right mono">{{ formatCurrency(f.spool_price) }}</td>
               <td class="text-right">
-                <div v-if="!auth.isWatcher" class="flex gap-2" style="justify-content: flex-end">
+                <div v-if="canManage" class="flex gap-2" style="justify-content: flex-end">
                   <button class="btn btn-icon btn-ghost" @click="openEditFilament(f)"><Icon name="edit" :size="16" /></button>
                   <button class="btn btn-icon btn-ghost" @click="deleteFilament(f)"><Icon name="trash" :size="16" /></button>
                 </div>
@@ -567,7 +570,7 @@ async function deleteSupply(s) {
     <div v-else class="card">
       <div class="card-header">
         <h3>Insumos y accesorios</h3>
-        <button v-if="!auth.isWatcher" class="btn btn-primary btn-sm" @click="openCreateSupply">
+        <button v-if="canManage" class="btn btn-primary btn-sm" @click="openCreateSupply">
           <Icon name="plus" :size="15" /> Nuevo insumo
         </button>
       </div>
@@ -616,7 +619,7 @@ async function deleteSupply(s) {
                 </div>
               </td>
               <td class="text-right">
-                <div v-if="!auth.isWatcher" class="flex gap-2" style="justify-content: flex-end">
+                <div v-if="canManage" class="flex gap-2" style="justify-content: flex-end">
                   <button
                     class="btn btn-sm"
                     :class="Number(s.owed_qty) > 0 ? 'btn-danger' : 'btn-secondary'"

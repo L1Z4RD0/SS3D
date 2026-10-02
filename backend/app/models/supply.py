@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from sqlalchemy import Boolean, ForeignKey, Numeric, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 from app.models.base import TimestampMixin, UUIDMixin
@@ -25,3 +25,6 @@ class Supply(UUIDMixin, TimestampMixin, Base):
     purchase_total_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     unit_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    # Dueño (quién lo compró): a él van los costos de este recurso en cada venta.
+    owner: Mapped["User"] = relationship(viewonly=True)

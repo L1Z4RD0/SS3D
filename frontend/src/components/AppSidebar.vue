@@ -1,5 +1,6 @@
 <script setup>
-import { computed, watch } from "vue";
+import { computed, ref, watch } from "vue";
+import * as betaApi from "../api/beta";
 import { useRoute } from "vue-router";
 import { useAuthStore } from "../stores/auth";
 import { useMobileNav } from "../composables/useMobileNav";
@@ -23,12 +24,30 @@ const allLinks = [
 
 const roleLabel = computed(() => {
   if (auth.isAdmin) return "Administrador";
+  if (auth.isCompany) return "Empresa";
   if (auth.isWatcher) return "Observador";
   return "Usuario";
 });
 
+// La Empresa sí tiene impresoras propias (a futuro); el observador común no.
 const links = computed(() =>
-  allLinks.filter((link) => !(link.hideForWatcher && auth.isWatcher))
+  allLinks.filter((link) => !(link.hideForWatcher && auth.isWatcher && !auth.isCompany))
+);
+
+// Vistas BETA (Reparto e Inversión): solo para quien tiene acceso.
+const beta = ref({ split: false, investment: false });
+watch(
+  () => auth.user?.id,
+  async (id) => {
+    beta.value = { split: false, investment: false };
+    if (!id) return;
+    try {
+      beta.value = await betaApi.getBetaAccess();
+    } catch {
+      // Si falla, simplemente no se muestran las vistas beta.
+    }
+  },
+  { immediate: true }
 );
 
 watch(
@@ -54,6 +73,20 @@ watch(
         <Icon :name="link.icon" :size="20" />
         <span>{{ link.label }}</span>
       </router-link>
+
+      <template v-if="beta.split || beta.investment">
+        <div class="nav-divider" />
+        <router-link v-if="beta.split" to="/reparto" class="nav-item">
+          <Icon name="users" :size="20" />
+          <span>Reparto</span>
+          <span class="nav-beta">BETA</span>
+        </router-link>
+        <router-link v-if="beta.investment" to="/inversion" class="nav-item">
+          <Icon name="dashboard" :size="20" />
+          <span>Mi inversión</span>
+          <span class="nav-beta">BETA</span>
+        </router-link>
+      </template>
 
       <div v-if="auth.isAdmin" class="nav-divider" />
 
@@ -272,5 +305,15 @@ watch(
     background: rgba(10, 10, 20, 0.5);
     z-index: 190;
   }
+}
+
+.nav-beta {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
 }
 </style>

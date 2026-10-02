@@ -5,7 +5,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.dependencies import is_watcher, readable_user_ids
+from app.dependencies import is_company, is_watcher, readable_user_ids
 from app.models.filament import Filament
 from app.models.printer import Printer
 from app.models.sale import ORDER_STATUSES, Sale
@@ -15,6 +15,7 @@ from app.models.user import User
 from app.schemas.calculator import FilamentUsageInput, SupplyUsageInput
 from app.schemas.sale import (
     ExhaustedFilamentInfo,
+    OwnerCostResponse,
     SaleFilamentResponse,
     SalePlateFilamentResponse,
     SalePlateResponse,
@@ -58,6 +59,16 @@ def can_edit_sale(sale: Sale, viewer: User | None) -> bool:
     if is_watcher(viewer):
         return sale.created_by_user_id == viewer.id
     return sale.user_id == viewer.id
+
+
+def sale_resource_owner_ids(owner_id: uuid.UUID, seller: User | None) -> list[uuid.UUID]:
+    """De quién pueden ser los recursos de una venta: del dueño de la impresora y, si la
+    registra la Empresa, también de la Empresa (ej. impresora de un socio + filamento de la
+    Empresa). Fuera de eso, los inventarios no se mezclan."""
+    ids = [owner_id]
+    if is_company(seller) and seller.id != owner_id:
+        ids.append(seller.id)
+    return ids
 
 
 def resolve_sale_owner(db: Session, user: User, owner_id: uuid.UUID | None) -> uuid.UUID:
@@ -215,6 +226,23 @@ def apply_filaments_to_sale(
     return exhausted
 
 
+def _cost_allocation_fields(sale: Sale) -> dict:
+    # Import local: cost_allocation importa modelos que importan este módulo indirectamente.
+    from app.services.cost_allocation import allocate_sale_costs
+
+    allocation = allocate_sale_costs(sale)
+    return {
+        "cost_by_owner": [
+            OwnerCostResponse(
+                user_id=o.user_id, username=o.username, machine=o.machine, material=o.material,
+                supplies=o.supplies, total=o.total,
+            )
+            for o in allocation.owners
+        ],
+        "shared_cost": allocation.shared,
+    }
+
+
 def to_sale_response(
     sale: Sale,
     exhausted_filaments: list[Filament] | None = None,
@@ -248,6 +276,11 @@ def to_sale_response(
         warehouse_item_id=sale.warehouse_item_id,
         can_edit=can_edit_sale(sale, viewer),
         has_provisional_costs=any(ss.pending_qty > 0 for ss in sale.supplies_used),
+        risk_percent=sale.risk_percent,
+        risk_amount=sale.risk_amount,
+        delivery_by=sale.delivery_by,
+        delivery_amount=sale.delivery_amount,
+        **_cost_allocation_fields(sale),
         plates=[
             SalePlateResponse(
                 id=p.id,

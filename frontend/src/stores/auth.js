@@ -14,6 +14,8 @@ export const useAuthStore = defineStore("auth", {
     isAuthenticated: (state) => !!state.user,
     isAdmin: (state) => state.user?.role === "admin",
     isWatcher: (state) => state.user?.role === "watcher",
+    // Cuenta Empresa (Simple_Solutions3D): observador con inventario propio.
+    isCompany: (state) => !!state.user?.is_company,
   },
   actions: {
     async login(username, password) {

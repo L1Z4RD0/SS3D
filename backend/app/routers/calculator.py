@@ -20,6 +20,7 @@ from app.schemas.calculator import (
 from app.schemas.sale import GIFT_PAYMENT_METHOD, SaleResponse
 from app.services.audit import log_event
 from app.services.calculator import (
+    with_risk,
     build_manual_price_scenario,
     calculate_margin_percent,
     calculate_scenarios,
@@ -35,6 +36,7 @@ from app.services.sale_builder import (
     resolve_filaments,
     resolve_printer,
     resolve_sale_owner,
+    sale_resource_owner_ids,
     resolve_supplies,
     to_sale_response,
 )
@@ -65,7 +67,7 @@ def compute_quote(
         electricity_rate=ELECTRICITY_RATE,
         labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
-    breakdown = with_new_plates(breakdown, resolved_plates)
+    breakdown = with_risk(with_new_plates(breakdown, resolved_plates), payload.risk_level)
 
     return QuoteResponse(
         breakdown=CostBreakdownSchema(
@@ -78,6 +80,8 @@ def compute_quote(
             total_cost=breakdown.total_cost,
             margin_base_cost=breakdown.margin_base_cost,
             extras_cost=breakdown.extras_cost,
+            risk_percent=breakdown.risk_percent,
+            risk_cost=breakdown.risk_cost,
         ),
         scenarios=[
             ScenarioItem(margin_percent=s.margin_percent, label=s.label, price=s.price, profit=s.profit)
@@ -109,19 +113,22 @@ def save_quote_as_sale(
     # que ser de ese mismo dueño (un observador puede cotizar mezclando, pero no vender así).
     printer = resolve_printer(db, current_user, payload.printer_id)
     owner_id = resolve_sale_owner(db, current_user, printer.user_id)
+    # Recursos del dueño de la impresora y, si vende la Empresa, también de la Empresa.
+    allowed = sale_resource_owner_ids(owner_id, current_user)
     resolved_filaments = resolve_filaments(db, current_user, payload.filaments)
     resolved_supplies = resolve_supplies(db, current_user, payload.supplies)
     resolved_plates = resolve_plates(db, current_user, payload.extra_plates)
     foreign = (
-        [f for f, _ in resolved_filaments if f.user_id != owner_id]
-        + [s for s, _ in resolved_supplies if s.user_id != owner_id]
-        + [p.printer for p in resolved_plates if p.printer.user_id != owner_id]
-        + [f for p in resolved_plates for f, _ in p.filaments if f.user_id != owner_id]
+        [f for f, _ in resolved_filaments if f.user_id not in allowed]
+        + [s for s, _ in resolved_supplies if s.user_id not in allowed]
+        + [p.printer for p in resolved_plates if p.printer.user_id not in allowed]
+        + [f for p in resolved_plates for f, _ in p.filaments if f.user_id not in allowed]
     )
     if foreign:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "Para guardar como venta, la impresora, los filamentos y los insumos deben ser del mismo usuario.",
+            "Para guardar como venta, la impresora, los filamentos y los insumos deben ser del mismo usuario"
+            " (o de la Empresa, si vendes desde su cuenta).",
         )
 
     breakdown = build_cost_breakdown(
@@ -134,7 +141,7 @@ def save_quote_as_sale(
         electricity_rate=ELECTRICITY_RATE,
         labor_rate_per_hour=LABOR_RATE_PER_HOUR,
     )
-    breakdown = with_new_plates(breakdown, resolved_plates)
+    breakdown = with_risk(with_new_plates(breakdown, resolved_plates), payload.risk_level)
 
     if manual_price is not None:
         scenario = build_manual_price_scenario(breakdown.total_cost, manual_price)
@@ -169,6 +176,9 @@ def save_quote_as_sale(
         margin_percent=calculate_margin_percent(scenario.price, breakdown.total_cost),
         payment_method=payload.payment_method,
         notes=payload.notes,
+        # Un regalo no cobra nada, tampoco la reserva por riesgo.
+        risk_percent=0 if payload.payment_method == GIFT_PAYMENT_METHOD else breakdown.risk_percent,
+        risk_amount=0 if payload.payment_method == GIFT_PAYMENT_METHOD else breakdown.risk_cost,
     )
     start_as_pending(sale, payload.promised_delivery_date)
     db.add(sale)

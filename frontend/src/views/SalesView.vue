@@ -2,6 +2,7 @@
 import { ref, reactive, onMounted, computed, watch } from "vue";
 import * as salesApi from "../api/sales";
 import * as calculatorApi from "../api/calculator";
+import { DEFAULT_RISK_LEVEL, riskLevelForPercent } from "../api/calculator";
 import * as printersApi from "../api/printers";
 import * as inventoryApi from "../api/inventory";
 import { PAYMENT_METHODS, GIFT_PAYMENT_METHOD } from "../api/sales";
@@ -15,6 +16,7 @@ import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
 import FilamentPickerModal from "../components/FilamentPickerModal.vue";
 import ExtraPlatesEditor from "../components/ExtraPlatesEditor.vue";
+import RiskLevelPicker from "../components/RiskLevelPicker.vue";
 import AddPlateModal from "../components/AddPlateModal.vue";
 import { platesPayload, platesError } from "../utils/plates";
 import OrderStatusModal from "../components/OrderStatusModal.vue";
@@ -55,7 +57,11 @@ const paymentLabel = (v) => PAYMENT_METHODS.find((p) => p.value === v)?.label ||
 const plateSale = ref(null);
 const saleOwnerPrinters = (sale) => printers.value.filter((p) => !auth.isWatcher || p.owner_id === sale.owner_id);
 const saleOwnerFilaments = (sale) =>
-  filaments.value.filter((f) => Number(f.available_g) > 0 && (!auth.isWatcher || f.owner_id === sale.owner_id));
+  filaments.value.filter(
+    (f) =>
+      Number(f.available_g) > 0 &&
+      (!auth.isWatcher || f.owner_id === sale.owner_id || (auth.isCompany && f.owner_id === auth.user?.id))
+  );
 const canManagePlates = (sale) => sale.can_edit && OPEN_STATUSES.includes(sale.status) && !sale.warehouse_item_id;
 
 function replaceSale(updated) {
@@ -201,6 +207,7 @@ const emptyForm = () => ({
   print_hours: 0,
   postprocess_hours: 0,
   shipping_cost: 0,
+  risk_level: DEFAULT_RISK_LEVEL,
   payment_method: "efectivo",
   notes: "",
 });
@@ -225,9 +232,18 @@ const saleOwnerId = computed(() => (auth.isWatcher ? form.owner_id : null));
 function ownedBySaleOwner(item) {
   return !auth.isWatcher || item.owner_id === saleOwnerId.value;
 }
+// La Empresa además puede usar su propio filamento e insumos con la impresora del socio
+// (la máquina queda a cuenta del socio y el material a cuenta de la Empresa).
+function usableInSale(item) {
+  return ownedBySaleOwner(item) || (auth.isCompany && !!saleOwnerId.value && item.owner_id === auth.user?.id);
+}
 const ownerPrinters = computed(() => printers.value.filter(ownedBySaleOwner));
-const ownerFilaments = computed(() => filaments.value.filter(ownedBySaleOwner));
-const ownerSupplies = computed(() => supplies.value.filter(ownedBySaleOwner));
+// La Empresa mezcla su filamento con el del socio: el selector muestra de quién es cada uno.
+const pickerOwnerNames = computed(() =>
+  auth.isCompany ? Object.fromEntries(observedUsers.value.map((u) => [u.id, u.username])) : {}
+);
+const ownerFilaments = computed(() => filaments.value.filter(usableInSale));
+const ownerSupplies = computed(() => supplies.value.filter(usableInSale));
 
 // Al cambiar de usuario se vacía lo elegido: eran recursos del inventario anterior.
 function onOwnerChange() {
@@ -280,6 +296,7 @@ function storedPlatesAsInput(sale) {
 function buildJobPayload() {
   return {
     extra_plates: editingId.value ? storedPlatesAsInput(editingSale.value) : platesPayload(extraPlates.value),
+    risk_level: form.risk_level,
     printer_id: form.printer_id,
     filaments: filamentRows.value.map((r) => ({ filament_id: r.filament_id, grams_used: r.grams_used })),
     print_hours: Number(form.print_hours) || 0,
@@ -487,6 +504,7 @@ function openEdit(sale) {
     print_hours: Number(sale.print_hours),
     postprocess_hours: Number(sale.postprocess_hours),
     shipping_cost: Number(sale.shipping_cost),
+    risk_level: riskLevelForPercent(sale.risk_percent),
     payment_method: sale.payment_method,
     notes: sale.notes || "",
     promised_delivery_date: sale.promised_delivery_date,
@@ -531,6 +549,11 @@ function buildPayload() {
   };
   // Al editar, las planchas no viajan: se agregan o quitan desde el detalle de costos.
   if (editingId.value) delete payload.extra_plates;
+  // El riesgo solo viaja si se cambió: así una venta antigua (sin riesgo) no recibe uno
+  // por el simple hecho de editarla.
+  if (editingId.value && form.risk_level === riskLevelForPercent(editingSale.value.risk_percent)) {
+    delete payload.risk_level;
+  }
   if (editingStatus.value === "entregada") payload.delivered_date = form.delivered_date;
   else payload.promised_delivery_date = form.promised_delivery_date;
   return payload;
@@ -871,6 +894,18 @@ onMounted(async () => {
                       </div>
                     </div>
                     <div class="cost-summary">
+                      <div v-if="s.cost_by_owner?.length > 1" class="owner-costs">
+                        <span class="cost-line-label">Costos por cuenta</span>
+                        <div v-for="o in s.cost_by_owner" :key="o.user_id" class="cost-line text-sm">
+                          <span>
+                            {{ o.username }}
+                            <span class="text-muted">
+                              ({{ [Number(o.machine) && "máquina", Number(o.material) && "material", Number(o.supplies) && "insumos"].filter(Boolean).join(", ") }})
+                            </span>
+                          </span>
+                          <span class="mono">{{ formatCurrency(o.total) }}</span>
+                        </div>
+                      </div>
                       <div v-if="s.has_provisional_costs" class="provisional-note">
                         Se usaron insumos sin stock: el costo y la ganancia se ajustan al registrar la compra (Reponer).
                       </div>
@@ -884,6 +919,10 @@ onMounted(async () => {
                         <span class="mono" :style="{ color: Number(s.profit) < 0 ? 'var(--danger)' : 'var(--success)' }">
                           {{ formatCurrency(s.profit) }}
                         </span>
+                      </div>
+                      <div v-if="Number(s.risk_amount) > 0" class="cost-line text-sm text-muted">
+                        <span>incluye reserva por riesgo ({{ Number(s.risk_percent) }}%)</span>
+                        <span class="mono">{{ formatCurrency(s.risk_amount) }}</span>
                       </div>
                     </div>
                   </div>
@@ -913,11 +952,15 @@ onMounted(async () => {
           <label>Venta para (usuario dueño del inventario)</label>
           <select v-model="form.owner_id" required @change="onOwnerChange">
             <option value="" disabled>Selecciona un usuario</option>
-            <option v-for="u in observedUsers" :key="u.id" :value="u.id">{{ u.username }}</option>
+            <option v-for="u in observedUsers" :key="u.id" :value="u.id">
+              {{ u.is_self ? `${u.username} (Empresa)` : u.username }}
+            </option>
           </select>
           <span class="field-hint">
-            Solo se usan la impresora, los filamentos y los insumos de este usuario. La venta aparecerá en su registro
-            indicando que la hiciste tú ({{ auth.user?.username }}).
+            Solo se usan la impresora, los filamentos y los insumos de este usuario<template v-if="auth.isCompany">
+              (o el filamento e insumos de la Empresa: la máquina queda a cuenta del dueño de la impresora y el
+              material a cuenta de la Empresa)</template>. La venta aparecerá en su registro indicando que la hiciste
+            tú ({{ auth.user?.username }}).
           </span>
         </div>
         <div v-if="fromWarehouse" class="alert alert-warning" style="margin-bottom: 14px">
@@ -1036,6 +1079,8 @@ onMounted(async () => {
           </div>
         </div>
 
+        <RiskLevelPicker v-if="!productionLocked && !isGift" v-model="form.risk_level" class="mt-2" />
+
         <ExtraPlatesEditor
           v-if="!editingId"
           v-model="extraPlates"
@@ -1080,7 +1125,8 @@ onMounted(async () => {
             </div>
             <span class="field-hint">
               Costo del trabajo: {{ formatCurrency(suggestion.breakdown.total_cost) }}. El margen se aplica a material,
-              depreciación y energía; postprocesado, consumibles y envío se suman al final sin margen.
+              depreciación, energía e insumos; postprocesado, envío y el riesgo de fallo
+              ({{ formatCurrency(suggestion.breakdown.risk_cost) }}) se suman al final sin margen.
               <template v-if="suggesting">Actualizando...</template>
             </span>
           </template>
@@ -1149,6 +1195,7 @@ onMounted(async () => {
       v-if="showFilamentPicker"
       :filaments="ownerFilaments"
       :exclude-ids="filamentRows.map((r) => r.filament_id)"
+      :owner-names="pickerOwnerNames"
       title="Seleccionar filamento"
       @select="onFilamentPicked"
       @close="showFilamentPicker = false"
@@ -1367,5 +1414,14 @@ tr.row-expanded td {
 .plate-line.is-reprint .cost-line-value,
 .reprint-note {
   color: var(--danger);
+}
+
+.owner-costs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px dashed var(--border);
 }
 </style>

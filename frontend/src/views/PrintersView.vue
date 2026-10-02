@@ -6,6 +6,14 @@ import { isValidNumber, extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
+import { useAuthStore } from "../stores/auth";
+import { useObservedUsers } from "../composables/useObservedUsers";
+
+// La Empresa ve las impresoras de los socios (para vender con ellas) pero solo administra
+// las suyas. Para un usuario normal todas son propias.
+const auth = useAuthStore();
+const { loadObservedUsers, ownerName } = useObservedUsers();
+const isMine = (p) => !auth.isWatcher || p.owner_id === auth.user?.id;
 
 const printers = ref([]);
 const loading = ref(true);
@@ -93,7 +101,10 @@ async function handleDelete(printer) {
   await load();
 }
 
-onMounted(load);
+onMounted(() => {
+  load();
+  if (auth.isWatcher) loadObservedUsers();
+});
 </script>
 
 <template>
@@ -132,6 +143,7 @@ onMounted(load);
             <tr v-for="p in printers" :key="p.id">
               <td>
                 <strong>{{ p.name }}</strong>
+                <span v-if="auth.isWatcher && !isMine(p)" class="text-muted text-sm" style="margin-left: 8px">de {{ ownerName(p.owner_id) }}</span>
                 <span v-if="!p.is_active" class="badge badge-neutral" style="margin-left: 8px">Inactiva</span>
               </td>
               <td class="text-right mono">{{ formatCurrency(p.purchase_value) }}</td>
@@ -148,7 +160,7 @@ onMounted(load);
               <td class="text-right mono">{{ formatCurrency(p.depreciation_cost_per_hour) }}</td>
               <td class="text-right mono">{{ formatNumber(p.power_kw, 3) }} kW</td>
               <td class="text-right">
-                <div class="flex gap-2" style="justify-content: flex-end">
+                <div v-if="isMine(p)" class="flex gap-2" style="justify-content: flex-end">
                   <button class="btn btn-icon btn-ghost" @click="openEdit(p)"><Icon name="edit" :size="16" /></button>
                   <button class="btn btn-icon btn-ghost" @click="handleDelete(p)"><Icon name="trash" :size="16" /></button>
                 </div>
