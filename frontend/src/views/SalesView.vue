@@ -2,6 +2,7 @@
 import { ref, reactive, onMounted, computed, watch } from "vue";
 import * as salesApi from "../api/sales";
 import * as calculatorApi from "../api/calculator";
+import * as betaApi from "../api/beta";
 import { DEFAULT_RISK_LEVEL, riskLevelForPercent } from "../api/calculator";
 import * as printersApi from "../api/printers";
 import * as inventoryApi from "../api/inventory";
@@ -52,6 +53,13 @@ const supplies = ref([]);
 const filters = reactive({ date_from: "", date_to: "", client: "", printer_id: "", payment_method: "", search: "", status: "" });
 
 const paymentLabel = (v) => PAYMENT_METHODS.find((p) => p.value === v)?.label || v;
+
+// Personas sugeridas para "¿Quién lo lleva?" (los socios; se puede escribir otro nombre).
+const deliveryPeople = ref([]);
+betaApi
+  .getBetaAccess()
+  .then((a) => (deliveryPeople.value = a.partners.filter((p) => p !== "Caja")))
+  .catch(() => {});
 
 // Planchas de un pedido ya registrado (desde el detalle de costos).
 const plateSale = ref(null);
@@ -123,7 +131,11 @@ function costLines(sale) {
       detail: supplyDetail,
       provisional: sale.has_provisional_costs,
     },
-    { label: "Envío", value: sale.shipping_cost },
+    {
+      label: "Delivery",
+      value: sale.shipping_cost,
+      detail: Number(sale.shipping_cost) ? (sale.delivery_by ? `lo llevó ${sale.delivery_by}` : "sin asignar") : "",
+    },
   ];
   // Las líneas en $0 sin detalle solo agregan ruido.
   return lines.filter((l) => Number(l.value) !== 0 || l.detail);
@@ -207,6 +219,7 @@ const emptyForm = () => ({
   print_hours: 0,
   postprocess_hours: 0,
   shipping_cost: 0,
+  delivery_by: "",
   risk_level: DEFAULT_RISK_LEVEL,
   payment_method: "efectivo",
   notes: "",
@@ -217,7 +230,8 @@ const editingSale = ref(null);
 
 /* Edición según el estado del pedido (el servidor lo valida igual):
    Pendiente: todo. En producción / Lista: la pieza ya se fabrica, no se tocan materiales,
-   horas ni envío; solo precio, fecha de entrega, trabajo, comprador, pago y notas.
+   horas ni el monto del delivery; solo precio, fecha de entrega, trabajo, comprador, pago,
+   quién lleva el delivery y notas.
    Entregada: todo como siempre, más la fecha real de entrega. */
 const editingStatus = computed(() => editingSale.value?.status || "pendiente");
 // Pedido de una pieza del Almacén: la pieza ya existe, nunca se editan materiales ni horas.
@@ -508,6 +522,7 @@ function openEdit(sale) {
     payment_method: sale.payment_method,
     notes: sale.notes || "",
     promised_delivery_date: sale.promised_delivery_date,
+    delivery_by: sale.delivery_by || "",
     delivered_date: sale.delivered_date || "",
   });
   supplyRows.value = sale.supplies_used.map((s) => ({ supply_id: s.supply_id, quantity: Number(s.quantity_used) }));
@@ -532,6 +547,7 @@ function buildPayload() {
     buyer_name: form.buyer_name || null,
     ...buildPricingPayload(),
     payment_method: form.payment_method,
+    delivery_by: form.delivery_by?.trim() || null,
     notes: form.notes || null,
   };
   // En producción / Lista solo viajan los datos del pedido (no materiales ni horas).
@@ -567,7 +583,7 @@ function isValidOrEmpty(value, opts) {
 function validateJobInputs() {
   if (!isValidOrEmpty(form.print_hours, { min: 0 })) return "Las horas de impresión no pueden ser negativas.";
   if (!isValidOrEmpty(form.postprocess_hours, { min: 0 })) return "Las horas de postprocesado no pueden ser negativas.";
-  if (!isValidOrEmpty(form.shipping_cost, { min: 0 })) return "El envío/embalaje no puede ser negativo.";
+  if (!isValidOrEmpty(form.shipping_cost, { min: 0 })) return "El delivery no puede ser negativo.";
   return "";
 }
 
@@ -965,11 +981,13 @@ onMounted(async () => {
         </div>
         <div v-if="fromWarehouse" class="alert alert-warning" style="margin-bottom: 14px">
           Pedido de una <strong>pieza del Almacén</strong>: la pieza ya existe, así que no se cambian materiales, horas
-          ni envío. Puedes editar precio, fecha de entrega, trabajo, comprador, método de pago y notas.
+          ni delivery (el delivery se cambia desde el estado del pedido). Puedes editar precio, fecha de entrega,
+          trabajo, comprador, método de pago y notas.
         </div>
         <div v-else-if="productionLocked" class="alert alert-warning" style="margin-bottom: 14px">
           Pedido <strong>{{ STATUS_LABELS[editingStatus] }}</strong>: la pieza ya se está fabricando, así que no se
-          cambian materiales, horas ni envío. Puedes editar precio, fecha de entrega, trabajo, comprador, método de pago
+          cambian materiales ni horas (el delivery se cambia desde el estado del pedido). Puedes editar precio, fecha de
+          entrega, trabajo, comprador, método de pago
           y notas.
         </div>
         <div class="form-grid">
@@ -1014,9 +1032,17 @@ onMounted(async () => {
             <label>Horas de postprocesado</label>
             <input v-model.number="form.postprocess_hours" type="number" min="0" step="0.1" :disabled="productionLocked" />
           </div>
-          <div class="field" style="grid-column: span 2">
-            <label>Envío / embalaje (CLP)</label>
+          <div class="field">
+            <label>Delivery (CLP)</label>
             <input v-model.number="form.shipping_cost" type="number" min="0" step="1" :disabled="productionLocked" />
+            <span class="field-hint">Lo paga el cliente y se le devuelve a quien lo lleve.</span>
+          </div>
+          <div class="field">
+            <label>¿Quién lo lleva? (opcional)</label>
+            <input v-model="form.delivery_by" list="sale-delivery-people" maxlength="60" placeholder="Ej: Omar" />
+            <datalist id="sale-delivery-people">
+              <option v-for="p in deliveryPeople" :key="p" :value="p" />
+            </datalist>
           </div>
         </div>
 
@@ -1125,7 +1151,7 @@ onMounted(async () => {
             </div>
             <span class="field-hint">
               Costo del trabajo: {{ formatCurrency(suggestion.breakdown.total_cost) }}. El margen se aplica a material,
-              depreciación, energía e insumos; postprocesado, envío y el riesgo de fallo
+              depreciación, energía e insumos; postprocesado, delivery y el riesgo de fallo
               ({{ formatCurrency(suggestion.breakdown.risk_cost) }}) se suman al final sin margen.
               <template v-if="suggesting">Actualizando...</template>
             </span>

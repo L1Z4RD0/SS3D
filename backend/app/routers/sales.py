@@ -66,7 +66,9 @@ from app.services.sale_builder import (
 router = APIRouter(prefix="/api/sales", tags=["sales"])
 
 # En En producción y Lista la pieza ya se está fabricando: solo se editan estos datos.
-EDITABLE_WHILE_IN_PRODUCTION = ("client_name", "buyer_name", "notes", "payment_method", "price", "promised_delivery_date")
+EDITABLE_WHILE_IN_PRODUCTION = (
+    "client_name", "buyer_name", "notes", "payment_method", "price", "promised_delivery_date", "delivery_by"
+)
 LOCKED_FIELD_LABELS = {
     "sale_date": "fecha del pedido",
     "printer_id": "impresora",
@@ -337,6 +339,7 @@ def create_sale(
         margin_percent=calculate_margin_percent(price, breakdown.total_cost),
         payment_method=payload.payment_method,
         notes=payload.notes,
+        delivery_by=(payload.delivery_by or "").strip() or None,
         # Un regalo no cobra nada, tampoco la reserva por riesgo.
         risk_percent=0 if payload.payment_method == GIFT_PAYMENT_METHOD else breakdown.risk_percent,
         risk_amount=0 if payload.payment_method == GIFT_PAYMENT_METHOD else breakdown.risk_cost,
@@ -390,6 +393,8 @@ def update_sale(
     sale = _get_editable_sale(db, sale_id, current_user)
     changes = payload.model_dump(exclude_unset=True)
     ip = request.client.host if request.client else None
+    if "delivery_by" in changes:
+        changes["delivery_by"] = (changes["delivery_by"] or "").strip() or None
     # Pasar a cortesía (o tocar el precio de una) la deja como regalo: precio $0. Editar
     # otros datos de una cortesía antigua con precio no le cambia el precio.
     if changes.get("payment_method", sale.payment_method) == GIFT_PAYMENT_METHOD and (
@@ -433,7 +438,7 @@ def update_sale(
             if field == "price" or field not in changes:
                 continue
             # Comprador y notas se pueden vaciar; el resto de los campos no admite vacío.
-            if changes[field] is None and field not in ("buyer_name", "notes"):
+            if changes[field] is None and field not in ("buyer_name", "notes", "delivery_by"):
                 continue
             setattr(sale, field, changes[field])
         if sale.status == STATUS_DELIVERED and new_delivered is not None:
@@ -664,22 +669,36 @@ def set_sale_delivery(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Registra (o quita) el delivery de un pedido: quién lo llevó y cuánto se le devuelve.
-    Solo es un registro: no cambia el precio, los costos ni la ganancia."""
+    """Delivery de un pedido: quién lo lleva y cuánto paga el cliente por él (el mismo monto
+    del campo Delivery de la venta). Si el cliente lo pide después, el precio sube en ese monto;
+    la ganancia no cambia, porque el delivery se le devuelve a quien lo llevó."""
     sale = _get_editable_sale(db, sale_id, current_user)
     if sale.status == STATUS_CANCELLED:
         raise HTTPException(status.HTTP_409_CONFLICT, "Un pedido cancelado no lleva delivery.")
     who = (payload.delivery_by or "").strip() or None
-    previous = {"delivery_by": sale.delivery_by, "delivery_amount": str(sale.delivery_amount)}
+    amount = money(payload.delivery_amount) if who else Decimal(0)
+    previous = {"delivery_by": sale.delivery_by, "delivery_amount": str(sale.shipping_cost)}
+    delta = amount - sale.shipping_cost
+    if delta:
+        sale.shipping_cost = amount
+        sale.total_cost = money(sale.total_cost + delta)
+        if sale.payment_method == GIFT_PAYMENT_METHOD:
+            # Un regalo no cobra nada: el delivery lo absorbe la ganancia.
+            sale.profit = money(sale.profit - delta)
+        else:
+            # El cliente paga el delivery: sube el precio, la ganancia queda igual.
+            sale.base_price = money(sale.base_price + delta)
+            sale.total_price = money(sale.total_price + delta)
+        sale.margin_percent = calculate_margin_percent(sale.base_price, sale.total_cost)
     sale.delivery_by = who
-    sale.delivery_amount = money(payload.delivery_amount) if who else Decimal(0)
+    sale.delivery_amount = amount  # columna heredada; el monto vigente es shipping_cost
     log_event(
         db,
         user_id=current_user.id,
         event_type="SALE_DELIVERY_SET",
         entity_type="sale",
         entity_id=sale.id,
-        details={"from": previous, "to": {"delivery_by": sale.delivery_by, "delivery_amount": str(sale.delivery_amount)}},
+        details={"from": previous, "to": {"delivery_by": sale.delivery_by, "delivery_amount": str(sale.shipping_cost)}},
         ip_address=request.client.host if request.client else None,
     )
     db.commit()

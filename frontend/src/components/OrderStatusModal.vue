@@ -203,9 +203,12 @@ onMounted(load);
                 🛵 {{ sale.delivery_by }}<template v-if="Number(sale.delivery_amount) > 0">
                   · se le devuelven {{ formatCurrency(sale.delivery_amount) }}</template>
               </span>
+              <span v-else-if="Number(sale.delivery_amount) > 0">
+                🛵 {{ formatCurrency(sale.delivery_amount) }} · <span class="text-danger">falta indicar quién lo lleva</span>
+              </span>
               <span v-else class="text-muted">Retira el cliente</span>
               <button v-if="canEditDelivery" type="button" class="link-btn" @click="startDeliveryEdit">
-                {{ sale.delivery_by ? "Cambiar" : "Cambiar a delivery" }}
+                {{ sale.delivery_by || Number(sale.delivery_amount) > 0 ? "Cambiar" : "Cambiar a delivery" }}
               </button>
             </template>
             <div v-else class="delivery-edit">
@@ -224,17 +227,25 @@ onMounted(load);
                 type="number"
                 min="0"
                 step="100"
-                placeholder="Monto a devolver"
-                aria-label="Monto a devolver"
+                placeholder="Monto del delivery"
+                aria-label="Monto del delivery"
               />
               <div class="delivery-edit-actions">
                 <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="saveDelivery()">Guardar</button>
-                <button v-if="sale.delivery_by" type="button" class="btn btn-ghost btn-sm" :disabled="busy" @click="saveDelivery(true)">
+                <button
+                  v-if="sale.delivery_by || Number(sale.delivery_amount) > 0"
+                  type="button"
+                  class="btn btn-ghost btn-sm"
+                  :disabled="busy"
+                  @click="saveDelivery(true)"
+                >
                   Quitar delivery
                 </button>
                 <button type="button" class="btn btn-ghost btn-sm" :disabled="busy" @click="editingDelivery = false">Cancelar</button>
               </div>
-              <span class="field-hint">Solo es un registro: no cambia el precio, los costos ni la ganancia del pedido.</span>
+              <span class="field-hint">
+                Lo paga el cliente: se suma al precio del pedido y se le devuelve a quien lo llevó. La ganancia no cambia.
+              </span>
             </div>
           </dd>
         </dl>

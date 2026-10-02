@@ -69,7 +69,7 @@ def test_company_sells_with_partner_printer_and_own_filament(client, db, biz):
     assert Decimal(d["machine"]) == Decimal(sale["depreciation_cost"]) + Decimal(sale["energy_cost"])
     assert Decimal(d["material"]) == 0
     assert Decimal(c["material"]) == Decimal(sale["material_cost"]) and Decimal(c["machine"]) == 0
-    assert Decimal(sale["shared_cost"]) == Decimal(sale["postprocess_cost"]) + Decimal(sale["shipping_cost"])
+    assert Decimal(sale["shared_cost"]) == Decimal(sale["postprocess_cost"])  # el delivery no es "común"
     db.expire_all()
     assert db.get(Filament, fc["id"]).available_g == Decimal(900)
 
@@ -99,19 +99,43 @@ def test_company_calculator_sale_and_plates_with_own_filament(client, biz):
     assert r.status_code == 201, r.text
 
 
-def test_delivery_is_only_a_record(client, biz):
-    sale = client.post("/api/sales", headers=biz["hd"], json=sale_payload(biz["pd"], biz["fd"], 50)).json()
+def test_delivery_is_the_sale_shipping_and_keeps_profit(client, biz):
+    """El delivery es el monto que paga el cliente por el envío (el campo Delivery de la venta).
+    Cambiarlo desde la ventana de estado sube o baja el precio, nunca la ganancia."""
+    body = sale_payload(biz["pd"], biz["fd"], 50, price=9000, shipping_cost=0)
+    sale = client.post("/api/sales", headers=biz["hd"], json=body).json()
     r = client.put(f"/api/sales/{sale['id']}/delivery", headers=biz["hd"],
                    json={"delivery_by": "Omar", "delivery_amount": 2500})
     assert r.status_code == 200, r.text
     d = r.json()
     assert (d["delivery_by"], Decimal(d["delivery_amount"])) == ("Omar", Decimal(2500))
-    assert (d["price"], d["total_cost"], d["profit"]) == (sale["price"], sale["total_cost"], sale["profit"])
+    assert Decimal(d["shipping_cost"]) == 2500
+    assert Decimal(d["price"]) == Decimal(sale["price"]) + 2500
+    assert Decimal(d["total_cost"]) == Decimal(sale["total_cost"]) + 2500
+    assert Decimal(d["profit"]) == Decimal(sale["profit"])
+    # Quitarlo deja el pedido como estaba.
     r = client.put(f"/api/sales/{sale['id']}/delivery", headers=biz["hd"], json={"delivery_by": "", "delivery_amount": 99})
-    assert r.json()["delivery_by"] is None and Decimal(r.json()["delivery_amount"]) == 0
+    d = r.json()
+    assert d["delivery_by"] is None and Decimal(d["shipping_cost"]) == 0
+    assert (d["price"], d["total_cost"], d["profit"]) == (sale["price"], sale["total_cost"], sale["profit"])
+    # Quién lo lleva también se puede indicar al crear o editar la venta.
+    other = client.post("/api/sales", headers=biz["hd"], json={**body, "shipping_cost": 2000, "delivery_by": " Sntg "}).json()
+    assert other["delivery_by"] == "Sntg" and Decimal(other["delivery_amount"]) == 2000
+    r = client.put(f"/api/sales/{other['id']}", headers=biz["hd"], json={"delivery_by": None})
+    assert r.json()["delivery_by"] is None
+    # Cancelado: no lleva delivery.
     client.post(f"/api/sales/{sale['id']}/cancel", headers=biz["hd"], json={})
     r = client.put(f"/api/sales/{sale['id']}/delivery", headers=biz["hd"], json={"delivery_by": "Omar"})
     assert r.status_code == 409
+
+
+def test_gift_delivery_is_absorbed_by_profit(client, biz):
+    body = sale_payload(biz["pd"], biz["fd"], 50, payment_method="cortesia", shipping_cost=0)
+    sale = client.post("/api/sales", headers=biz["hd"], json=body).json()
+    d = client.put(f"/api/sales/{sale['id']}/delivery", headers=biz["hd"],
+                   json={"delivery_by": "Omar", "delivery_amount": 2000}).json()
+    assert Decimal(d["price"]) == 0
+    assert Decimal(d["profit"]) == Decimal(sale["profit"]) - 2000
 
 
 def test_monthly_split(client, db, make, biz, monkeypatch):
@@ -129,8 +153,10 @@ def test_monthly_split(client, db, make, biz, monkeypatch):
     body = sale_payload(biz["ps"], owner_id=biz["sntg"].id, price=10000)
     body["filaments"] = [{"filament_id": fc["id"], "grams_used": 50}]
     b = client.post("/api/sales", headers=biz["hc"], json=body).json()
-    b = deliver(client, biz["hc"], b["id"], today)
-    client.put(f"/api/sales/{b['id']}/delivery", headers=biz["hc"], json={"delivery_by": "Omar", "delivery_amount": 2000})
+    deliver(client, biz["hc"], b["id"], today)
+    # Lo llevó Omar y el cliente pagó $2.000 de delivery (reemplaza los $3.000 de la venta).
+    b = client.put(f"/api/sales/{b['id']}/delivery", headers=biz["hc"],
+                   json={"delivery_by": "Omar", "delivery_amount": 2000}).json()
     # 3) Venta por cobrar: no entra (queda como pendiente).
     c = client.post("/api/sales", headers=biz["hd"],
                     json=sale_payload(biz["pd"], price=7000, payment_method="por_cobrar")).json()
@@ -149,12 +175,15 @@ def test_monthly_split(client, db, make, biz, monkeypatch):
     lines = {l["name"]: l for l in rep["partners"]}
     refund_a = Decimal(a["total_cost"])  # todo de Diego
     refund_b = Decimal(b["depreciation_cost"]) + Decimal(b["energy_cost"])  # máquina de Sntg
-    assert Decimal(rep["collected_revenue"]) == 30000
+    assert Decimal(rep["collected_revenue"]) == Decimal(a["price"]) + Decimal(b["price"])
     assert Decimal(lines[D]["cost_refund"]) == refund_a - Decimal(a["postprocess_cost"]) - Decimal(a["shipping_cost"])
     assert Decimal(lines[S]["cost_refund"]) == refund_b
     assert Decimal(rep["company_absorbed_cost"]) == Decimal(b["material_cost"])
     assert Decimal(rep["expenses_total"]) == 4000
-    expected_net = Decimal(30000) - Decimal(lines[D]["cost_refund"]) - Decimal(lines[S]["cost_refund"]) - 4000
+    # La venta A cobró $3.000 de delivery sin nadie asignado; la B, $2.000 que llevó Omar.
+    assert Decimal(rep["deliveries_total"]) == 5000 and Decimal(rep["unassigned_delivery"]) == 3000
+    expected_net = (Decimal(a["price"]) + Decimal(b["price"]) - Decimal(lines[D]["cost_refund"])
+                    - Decimal(lines[S]["cost_refund"]) - 5000 - 4000)
     assert Decimal(rep["net"]) == expected_net
     assert rep["parts"] == 4
     share = (expected_net / 4).quantize(Decimal("0.01"))
@@ -162,9 +191,9 @@ def test_monthly_split(client, db, make, biz, monkeypatch):
     assert Decimal(lines[S]["expense_refund"]) == 3000
     assert Decimal(lines[S]["total"]) == share + Decimal(lines[S]["cost_refund"]) + 3000
     assert Decimal(lines["Caja"]["total"]) == share
-    assert Decimal(lines["Omar"]["delivery_refund"]) == 2000 and Decimal(lines["Omar"]["total"]) == share
-    assert Decimal(rep["pending_total"]) == 7000 and len(rep["sales"]) == 2
-    assert [d["delivery_by"] for d in rep["deliveries"]] == ["Omar"]
+    assert Decimal(lines["Omar"]["delivery_refund"]) == 2000 and Decimal(lines["Omar"]["total"]) == share + 2000
+    assert Decimal(rep["pending_total"]) == Decimal(c["price"]) and len(rep["sales"]) == 2
+    assert sorted(str(d["delivery_by"]) for d in rep["deliveries"]) == ["None", "Omar"]
 
     # Borrar un gasto.
     exp = client.get("/api/beta/expenses", headers=biz["hc"], params={"month": month}).json()

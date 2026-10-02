@@ -10,10 +10,11 @@ Reglas (acordadas con los socios):
   y el material e insumos que eran suyos.
 - Lo que pone la Empresa (su filamento/insumos) no se devuelve: lo compró la Caja y ya está
   en los gastos de la Empresa del mes.
-- Postprocesado y envío son ganancia común (no se le devuelven a nadie).
-- Neto = cobrado − costos devueltos a los socios − gastos de la Empresa. Se reparte en
-  partes iguales entre los socios y la Caja.
-- El delivery es aparte: se le devuelve a quien lo hizo y no entra en el conteo.
+- El postprocesado es ganancia común (no se le devuelve a nadie).
+- El delivery (lo que pagó el cliente por el envío) se le devuelve a quien lo llevó: no es
+  ganancia de nadie. Si no tiene a nadie asignado, queda "sin asignar".
+- Neto = cobrado − costos devueltos a los socios − deliveries − gastos de la Empresa. Se
+  reparte en partes iguales entre los socios y la Caja.
 """
 import uuid
 from calendar import monthrange
@@ -127,8 +128,8 @@ class PartnerLine(BaseModel):
     cost_refund: Decimal = Decimal(0)  # lo que puso en máquina/material/insumos
     expense_refund: Decimal = Decimal(0)  # gastos de la Empresa que pagó de su bolsillo
     share: Decimal = Decimal(0)  # su parte del neto
-    total: Decimal = Decimal(0)  # share + devoluciones
-    delivery_refund: Decimal = Decimal(0)  # aparte: no suma al total
+    delivery_refund: Decimal = Decimal(0)  # deliveries que hizo (lo que pagó el cliente)
+    total: Decimal = Decimal(0)  # share + todas las devoluciones
 
 
 class SplitSaleLine(BaseModel):
@@ -154,7 +155,7 @@ class DeliveryLine(BaseModel):
     id: uuid.UUID
     delivered_date: date
     client_name: str
-    delivery_by: str
+    delivery_by: str | None  # None = nadie asignado todavía
     amount: Decimal
 
 
@@ -164,6 +165,8 @@ class SplitResponse(BaseModel):
     partner_cost_refunds: Decimal
     company_absorbed_cost: Decimal
     expenses_total: Decimal
+    deliveries_total: Decimal
+    unassigned_delivery: Decimal
     net: Decimal
     parts: int
     partners: list[PartnerLine]
@@ -188,19 +191,29 @@ def monthly_split(
     company_cost = Decimal(0)
     sale_lines, pending, deliveries = [], [], []
 
+    deliveries_total = Decimal(0)
+    unassigned_delivery = Decimal(0)
+
     for sale in _delivered_sales(db, first, last):
-        if sale.delivery_by:
-            deliveries.append(DeliveryLine(id=sale.id, delivered_date=sale.delivered_date, client_name=sale.client_name,
-                                           delivery_by=sale.delivery_by, amount=sale.delivery_amount))
-            who = next((n for n in lines if n.lower() == sale.delivery_by.lower()), None)
-            if who:
-                lines[who].delivery_refund += sale.delivery_amount
         if sale.payment_method == UNCOLLECTED:
             pending.append(PendingLine(id=sale.id, delivered_date=sale.delivered_date, client_name=sale.client_name,
                                        price=sale.total_price))
             continue
 
         collected += sale.total_price
+        # Delivery: lo cobrado por el envío es de quien lo llevó.
+        if sale.shipping_cost > 0:
+            deliveries_total += sale.shipping_cost
+            deliveries.append(DeliveryLine(id=sale.id, delivered_date=sale.delivered_date, client_name=sale.client_name,
+                                           delivery_by=sale.delivery_by, amount=sale.shipping_cost))
+            if sale.delivery_by:
+                who = next((n for n in lines if n.lower() == sale.delivery_by.lower()), None)
+                if who is None:  # alguien que no está en la lista de socios
+                    who = sale.delivery_by
+                    lines[who] = PartnerLine(name=who)
+                lines[who].delivery_refund += sale.shipping_cost
+            else:
+                unassigned_delivery += sale.shipping_cost
         refunds: dict[str, Decimal] = {}
         sale_company_cost = Decimal(0)
         for oc in allocate_sale_costs(sale).owners:
@@ -230,7 +243,7 @@ def monthly_split(
             lines[who].expense_refund += e.amount
 
     partner_refunds = money(sum((l.cost_refund for l in lines.values()), Decimal(0)))
-    net = money(collected - partner_refunds - expenses_total)
+    net = money(collected - partner_refunds - deliveries_total - expenses_total)
     parts = len(names) + 1  # socios + Caja
     share = money(net / parts) if parts else Decimal(0)
     for name in [*names, CASH_BOX]:
@@ -239,7 +252,7 @@ def monthly_split(
         line.cost_refund = money(line.cost_refund)
         line.expense_refund = money(line.expense_refund)
         line.delivery_refund = money(line.delivery_refund)
-        line.total = money(line.share + line.cost_refund + line.expense_refund)
+        line.total = money(line.share + line.cost_refund + line.expense_refund + line.delivery_refund)
 
     return SplitResponse(
         month=f"{first:%Y-%m}",
@@ -247,6 +260,8 @@ def monthly_split(
         partner_cost_refunds=partner_refunds,
         company_absorbed_cost=money(company_cost),
         expenses_total=expenses_total,
+        deliveries_total=money(deliveries_total),
+        unassigned_delivery=money(unassigned_delivery),
         net=net,
         parts=parts,
         partners=list(lines.values()),

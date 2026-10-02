@@ -234,7 +234,7 @@ const quote = ref(null);
 const calculating = ref(false);
 const calcError = ref("");
 
-const breakdownLabels = ["Material", "Depreciación", "Energía", "Postprocesado", "Consumibles", "Envío"];
+const breakdownLabels = ["Material", "Depreciación", "Energía", "Postprocesado", "Consumibles", "Delivery"];
 const breakdownValues = computed(() => {
   if (!quote.value) return [];
   const b = quote.value.breakdown;
@@ -274,7 +274,7 @@ function validateJobInputs() {
   }
   if (!isValidOrEmpty(form.print_hours, { min: 0 })) return "Las horas de impresión no pueden ser negativas.";
   if (!isValidOrEmpty(form.postprocess_hours, { min: 0 })) return "Las horas de postprocesado no pueden ser negativas.";
-  if (!isValidOrEmpty(form.shipping_cost, { min: 0 })) return "El envío/embalaje no puede ser negativo.";
+  if (!isValidOrEmpty(form.shipping_cost, { min: 0 })) return "El delivery no puede ser negativo.";
   return platesError(extraPlates.value);
 }
 
@@ -773,7 +773,7 @@ onMounted(() => {
               <input v-model.number="form.postprocess_hours" type="number" min="0" step="0.1" />
             </div>
             <div class="field" style="grid-column: span 2">
-              <label>Envío / embalaje (CLP)</label>
+              <label>Delivery (CLP)</label>
               <input v-model.number="form.shipping_cost" type="number" min="0" step="1" />
             </div>
           </div>
@@ -859,7 +859,7 @@ onMounted(() => {
                   <tr><td>Consumibles</td><td class="text-right mono">{{ formatCurrency(quote.breakdown.supplies_cost) }}</td></tr>
                   <tr class="breakdown-group"><td colspan="2">Extras (se suman al final, sin margen)</td></tr>
                   <tr><td>Postprocesado</td><td class="text-right mono">{{ formatCurrency(quote.breakdown.postprocess_cost) }}</td></tr>
-                  <tr><td>Envío</td><td class="text-right mono">{{ formatCurrency(quote.breakdown.shipping_cost) }}</td></tr>
+                  <tr><td>Delivery</td><td class="text-right mono">{{ formatCurrency(quote.breakdown.shipping_cost) }}</td></tr>
                   <tr class="breakdown-group"><td colspan="2">Se cobra, no es costo</td></tr>
                   <tr>
                     <td>Riesgo de fallo ({{ riskLabel(quote.breakdown.risk_percent).toLowerCase() }}, {{ Number(quote.breakdown.risk_percent) }}%)</td>

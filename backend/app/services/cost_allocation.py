@@ -6,7 +6,8 @@ y filamento propio reparte así: la máquina al socio, el material a la Empresa.
 desde las líneas que ya guarda cada venta (no se guarda nada aparte), así que siempre
 coincide con la venta aunque se edite.
 
-El postprocesado y el envío no son de un recurso con dueño: quedan aparte (`shared`).
+El postprocesado no es de un recurso con dueño: queda aparte (`shared`). El delivery
+(shipping_cost) tampoco: es de quien lo llevó (Sale.delivery_by).
 """
 import uuid
 from dataclasses import dataclass, field
@@ -32,7 +33,7 @@ class OwnerCosts:
 @dataclass
 class SaleCostAllocation:
     owners: list[OwnerCosts] = field(default_factory=list)
-    shared: Decimal = Decimal(0)  # postprocesado + envío
+    shared: Decimal = Decimal(0)  # postprocesado (ganancia común)
 
 
 def allocate_sale_costs(sale: Sale) -> SaleCostAllocation:
@@ -73,4 +74,4 @@ def allocate_sale_costs(sale: Sale) -> SaleCostAllocation:
         if oc.total != 0:
             owners.append(oc)
     owners.sort(key=lambda o: (o.user_id != sale.user_id, o.username.lower()))
-    return SaleCostAllocation(owners=owners, shared=money(sale.postprocess_cost + sale.shipping_cost))
+    return SaleCostAllocation(owners=owners, shared=money(sale.postprocess_cost))

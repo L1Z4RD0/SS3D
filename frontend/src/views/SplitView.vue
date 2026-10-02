@@ -48,7 +48,6 @@ const refundNames = computed(() => {
   for (const s of report.value?.sales || []) Object.keys(s.refunds).forEach((n) => names.add(n));
   return [...names];
 });
-const deliveryTotal = computed(() => (report.value?.partners || []).reduce((sum, p) => sum + Number(p.delivery_refund), 0));
 const paymentLabel = { efectivo: "Efectivo", transferencia: "Transferencia", debito: "Débito", credito: "Crédito", cortesia: "Regalo" };
 
 /* -------- Gastos de la Empresa -------- */
@@ -123,7 +122,7 @@ async function removeExpense(e) {
       <div class="card">
         <div class="card-header">
           <h3>A cada uno</h3>
-          <span class="text-muted text-sm">Su parte + lo que puso de su bolsillo</span>
+          <span class="text-muted text-sm">Su parte + lo que puso de su bolsillo + sus deliveries</span>
         </div>
         <div class="table-wrap">
           <table>
@@ -133,8 +132,8 @@ async function removeExpense(e) {
                 <th class="text-right">Su parte</th>
                 <th class="text-right">Costos devueltos</th>
                 <th class="text-right">Gastos que pagó</th>
+                <th class="text-right">Deliveries</th>
                 <th class="text-right">Total a recibir</th>
-                <th class="text-right">Delivery (aparte)</th>
               </tr>
             </thead>
             <tbody>
@@ -146,8 +145,8 @@ async function removeExpense(e) {
                 <td class="text-right mono">{{ formatCurrency(p.share) }}</td>
                 <td class="text-right mono">{{ Number(p.cost_refund) ? formatCurrency(p.cost_refund) : "—" }}</td>
                 <td class="text-right mono">{{ Number(p.expense_refund) ? formatCurrency(p.expense_refund) : "—" }}</td>
+                <td class="text-right mono">{{ Number(p.delivery_refund) ? formatCurrency(p.delivery_refund) : "—" }}</td>
                 <td class="text-right mono"><strong>{{ formatCurrency(p.total) }}</strong></td>
-                <td class="text-right mono text-muted">{{ Number(p.delivery_refund) ? formatCurrency(p.delivery_refund) : "—" }}</td>
               </tr>
             </tbody>
           </table>
@@ -163,8 +162,11 @@ async function removeExpense(e) {
             insumos. El material de la Empresa (<strong>{{ formatCurrency(report.company_absorbed_cost) }}</strong>) no se
             devuelve: ya está en los gastos de la Empresa.
           </li>
-          <li>Postprocesado y envío son ganancia común. La reserva por riesgo de fallo también queda en la ganancia.</li>
-          <li v-if="deliveryTotal">El delivery se le devuelve a quien lo hizo y no entra en el reparto.</li>
+          <li>
+            El <strong>delivery</strong> lo paga el cliente y se le devuelve a quien lo llevó
+            (<strong>{{ formatCurrency(report.deliveries_total) }}</strong> este mes): no se reparte.
+          </li>
+          <li>El postprocesado y la reserva por riesgo de fallo son ganancia común.</li>
         </ul>
       </div>
 
@@ -254,9 +256,17 @@ async function removeExpense(e) {
         </div>
         <div class="card">
           <div class="card-header"><h3>Deliveries a devolver</h3></div>
-          <div v-if="!report.deliveries.length" class="text-muted text-sm">No hubo deliveries registrados este mes.</div>
+          <div v-if="Number(report.unassigned_delivery) > 0" class="alert alert-warning" style="margin-bottom: 8px">
+            {{ formatCurrency(report.unassigned_delivery) }} de delivery sin asignar: indica quién lo llevó en el estado de
+            cada pedido para que se le devuelva.
+          </div>
+          <div v-if="!report.deliveries.length" class="text-muted text-sm">No hubo deliveries cobrados este mes.</div>
           <div v-for="d in report.deliveries" :key="d.id" class="mini-line">
-            <span>{{ formatDate(d.delivered_date) }} · {{ d.client_name }} · {{ d.delivery_by }}</span>
+            <span>
+              {{ formatDate(d.delivered_date) }} · {{ d.client_name }} ·
+              <template v-if="d.delivery_by">{{ d.delivery_by }}</template>
+              <span v-else class="text-danger">sin asignar</span>
+            </span>
             <span class="mono">{{ formatCurrency(d.amount) }}</span>
           </div>
         </div>
@@ -338,5 +348,9 @@ async function removeExpense(e) {
   .expense-form {
     grid-template-columns: 1fr 1fr;
   }
+}
+
+.text-danger {
+  color: var(--danger);
 }
 </style>

@@ -31,7 +31,9 @@ class SaleCreateRequest(BaseModel):
     postprocess_hours: Decimal = Field(ge=0, default=0)
     # Precio que se le cobra al cliente: el de un escenario sugerido o uno puesto a mano.
     price: Decimal = Field(ge=0)
+    # Delivery: lo que paga el cliente por el envío (se le devuelve a quien lo lleve).
     shipping_cost: Decimal = Field(ge=0, default=0)
+    delivery_by: str | None = Field(default=None, max_length=60)
     supplies: list[SupplyUsageInput] = Field(default_factory=list)
     payment_method: str = Field(pattern="^(" + "|".join(PAYMENT_METHODS) + ")$")
     notes: str | None = None
@@ -62,6 +64,8 @@ class SaleUpdateRequest(BaseModel):
     notes: str | None = None
     # Solo en edición completa (Pendiente/Entregada): recalcula la reserva por riesgo.
     risk_level: Literal["bajo", "medio", "alto"] | None = None
+    # Quién lleva el delivery (se puede cambiar en cualquier estado abierto o entregado).
+    delivery_by: str | None = Field(default=None, max_length=60)
 
 
 class SaleStatusChangeRequest(BaseModel):
@@ -150,7 +154,7 @@ class OwnerCostResponse(BaseModel):
 
 
 class DeliveryRequest(BaseModel):
-    # Quién hizo el delivery (vacío = sin delivery) y cuánto se le devuelve.
+    # Quién lleva el pedido y cuánto paga el cliente por el delivery (vacío = sin delivery).
     delivery_by: str | None = Field(default=None, max_length=60)
     delivery_amount: Decimal = Field(default=Decimal(0), ge=0)
 
@@ -233,11 +237,11 @@ class SaleResponse(BaseModel):
     supplies_used: list[SaleSupplyResponse]
     # Algún insumo se usó sin stock: su costo (y la ganancia) es provisional hasta reponerlo.
     has_provisional_costs: bool = False
-    # Costos por dueño de recurso (máquina, material, insumos). El postprocesado y el envío
-    # no son de un recurso con dueño: van en shared_cost.
+    # Costos por dueño de recurso (máquina, material, insumos). El postprocesado no es de un
+    # recurso con dueño: va en shared_cost. El delivery es de quien lo llevó (delivery_by).
     cost_by_owner: list[OwnerCostResponse] = Field(default_factory=list)
     shared_cost: Decimal = Decimal(0)
-    # Delivery: registro de quién lo hizo y cuánto se le devuelve (no entra en las cifras).
+    # Delivery: quién lo llevó. El monto es el delivery cobrado al cliente (shipping_cost).
     delivery_by: str | None = None
     delivery_amount: Decimal = Decimal(0)
     # Riesgo de fallo cobrado en el precio (% y monto). No es un costo: es parte de la

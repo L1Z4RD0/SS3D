@@ -279,7 +279,7 @@ def to_sale_response(
         risk_percent=sale.risk_percent,
         risk_amount=sale.risk_amount,
         delivery_by=sale.delivery_by,
-        delivery_amount=sale.delivery_amount,
+        delivery_amount=sale.shipping_cost,
         **_cost_allocation_fields(sale),
         plates=[
             SalePlateResponse(
