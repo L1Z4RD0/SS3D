@@ -167,6 +167,11 @@ async function removeExpense(e) {
             (<strong>{{ formatCurrency(report.deliveries_total) }}</strong> este mes): no se reparte.
           </li>
           <li>El postprocesado y la reserva por riesgo de fallo son ganancia común.</li>
+          <li>
+            Los <strong>regalos</strong> quedan fuera del reparto: no entra dinero, así que su costo lo absorbe quien
+            regaló<template v-if="report.gifts?.length">
+              ({{ report.gifts.length }} este mes, {{ formatCurrency(report.gifts_cost) }})</template>.
+          </li>
         </ul>
       </div>
 
@@ -242,6 +247,22 @@ async function removeExpense(e) {
               </tr>
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <div v-if="report.gifts?.length" class="card">
+        <div class="card-header">
+          <h3>🎁 Regalos del mes</h3>
+          <span class="text-muted text-sm">Fuera del reparto: el costo lo absorbe quien regaló</span>
+        </div>
+        <div v-for="g in report.gifts" :key="g.id" class="mini-line">
+          <span>
+            {{ formatDate(g.delivered_date) }} · {{ g.client_name }} ·
+            <span class="text-muted">
+              {{ Object.entries(g.absorbed_by).map(([who, amount]) => `${who} ${formatCurrency(amount)}`).join(" · ") }}
+            </span>
+          </span>
+          <span class="mono">{{ formatCurrency(g.cost) }}</span>
         </div>
       </div>
 

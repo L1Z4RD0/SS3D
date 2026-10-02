@@ -234,3 +234,40 @@ def test_beta_access(client, make, biz, monkeypatch):
     assert (c["split"], c["investment"]) == (True, False)
     o = client.get("/api/beta/access", headers=make.headers(make.user(name="otro"))).json()
     assert (o["split"], o["investment"]) == (False, False)
+
+
+def test_gift_stays_out_of_the_split(client, biz, monkeypatch):
+    """Un regalo no reparte costos: lo absorbe quien regaló (antes se le devolvía a Diego y
+    se le restaba a todos)."""
+    monkeypatch.setattr(settings, "split_partners", f"{biz['diego'].username},{biz['sntg'].username},Omar")
+    D = biz["diego"].username
+    today = date.today()
+    month = today.strftime("%Y-%m")
+    h = biz["hd"]
+
+    sale = client.post("/api/sales", headers=h, json=sale_payload(biz["pd"], biz["fd"], 100, price=20000, shipping_cost=0)).json()
+    sale = deliver(client, h, sale["id"], today)
+    before = client.get("/api/beta/split", headers=h, params={"month": month}).json()
+
+    gift = client.post("/api/sales", headers=h, json=sale_payload(
+        biz["pd"], biz["fd"], 100, payment_method="cortesia", shipping_cost=0)).json()
+    gift = deliver(client, h, gift["id"], today)
+    after = client.get("/api/beta/split", headers=h, params={"month": month}).json()
+
+    # El reparto es exactamente el mismo que sin el regalo.
+    for key in ("collected_revenue", "partner_cost_refunds", "net"):
+        assert after[key] == before[key], key
+    assert [p["total"] for p in after["partners"]] == [p["total"] for p in before["partners"]]
+    # El regalo aparece aparte, con su costo a cuenta de Diego.
+    [g] = after["gifts"]
+    assert g["client_name"] == gift["client_name"]
+    assert Decimal(g["cost"]) == Decimal(gift["total_cost"]) == Decimal(after["gifts_cost"])
+    assert set(g["absorbed_by"]) == {D}
+    sale_ids = {s["id"] for s in after["sales"]}
+    assert sale["id"] in sale_ids and gift["id"] not in sale_ids
+
+    # Tampoco cuenta como inversión recuperada.
+    inv = client.get("/api/beta/investment", headers=h).json()
+    machine = Decimal(sale["depreciation_cost"]) + Decimal(sale["energy_cost"])
+    assert Decimal(inv["printers"][0]["recovered"]) == machine
+    assert Decimal(inv["filaments"]["recovered"]) == Decimal(sale["material_cost"])

@@ -6,6 +6,8 @@ gastos de la Empresa, que solo se usan aquí.
 
 Reglas (acordadas con los socios):
 - Solo cuentan los pedidos Entregados en el mes y ya cobrados (no "Por cobrar").
+- Los regalos (pago "Cortesía") quedan FUERA del reparto: no entra dinero, así que su costo
+  lo absorbe quien regaló (no se le devuelve ni se reparte entre los demás).
 - A cada socio se le devuelve lo que puso: máquina (depreciación + luz) de sus impresoras,
   y el material e insumos que eran suyos.
 - Lo que pone la Empresa (su filamento/insumos) no se devuelve: lo compró la Caja y ya está
@@ -42,6 +44,7 @@ router = APIRouter(prefix="/api/beta", tags=["beta"])
 
 CASH_BOX = "Caja"
 UNCOLLECTED = "por_cobrar"
+GIFT = "cortesia"
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +147,16 @@ class SplitSaleLine(BaseModel):
     company_cost: Decimal  # costo puesto por la Empresa (no se devuelve)
 
 
+class GiftLine(BaseModel):
+    """Regalo del mes: fuera del reparto. Su costo lo absorbe cada dueño de lo que se usó."""
+
+    id: uuid.UUID
+    delivered_date: date
+    client_name: str
+    cost: Decimal
+    absorbed_by: dict[str, Decimal]  # quién pone qué (no se le devuelve)
+
+
 class PendingLine(BaseModel):
     id: uuid.UUID
     delivered_date: date
@@ -173,6 +186,8 @@ class SplitResponse(BaseModel):
     sales: list[SplitSaleLine]
     pending: list[PendingLine]
     pending_total: Decimal
+    gifts: list[GiftLine] = []
+    gifts_cost: Decimal = Decimal(0)
     deliveries: list[DeliveryLine]
 
 
@@ -189,12 +204,21 @@ def monthly_split(
 
     collected = Decimal(0)
     company_cost = Decimal(0)
-    sale_lines, pending, deliveries = [], [], []
+    sale_lines, pending, deliveries, gifts = [], [], [], []
 
     deliveries_total = Decimal(0)
     unassigned_delivery = Decimal(0)
 
     for sale in _delivered_sales(db, first, last):
+        if sale.payment_method == GIFT:
+            # Regalo: no entró dinero. Nada se devuelve ni se reparte; cada dueño absorbe lo suyo.
+            absorbed = {}
+            for oc in allocate_sale_costs(sale).owners:
+                name = _partner_for_username(oc.username) or oc.username
+                absorbed[name] = absorbed.get(name, Decimal(0)) + oc.total
+            gifts.append(GiftLine(id=sale.id, delivered_date=sale.delivered_date, client_name=sale.client_name,
+                                  cost=money(sale.total_cost), absorbed_by=absorbed))
+            continue
         if sale.payment_method == UNCOLLECTED:
             pending.append(PendingLine(id=sale.id, delivered_date=sale.delivered_date, client_name=sale.client_name,
                                        price=sale.total_price))
@@ -268,6 +292,8 @@ def monthly_split(
         sales=sale_lines,
         pending=pending,
         pending_total=money(sum((p.price for p in pending), Decimal(0))),
+        gifts=gifts,
+        gifts_cost=money(sum((g.cost for g in gifts), Decimal(0))),
         deliveries=deliveries,
     )
 
@@ -389,7 +415,12 @@ def my_investment(db: Session = Depends(get_db), current_user: User = Depends(ge
     )
     material_recovered = Decimal(0)
 
-    sales = db.query(Sale).filter(Sale.status == STATUS_DELIVERED, Sale.payment_method != UNCOLLECTED).all()
+    # Solo lo cobrado recupera inversión: ni lo "Por cobrar" ni los regalos (no entra dinero).
+    sales = (
+        db.query(Sale)
+        .filter(Sale.status == STATUS_DELIVERED, Sale.payment_method.notin_([UNCOLLECTED, GIFT]))
+        .all()
+    )
     for sale in sales:
         plates_machine = Decimal(0)
         for plate in sale.plates:
