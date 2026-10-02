@@ -6,6 +6,7 @@ import AppSidebar from "./components/AppSidebar.vue";
 import AppTopbar from "./components/AppTopbar.vue";
 import ConfirmDialogHost from "./components/ConfirmDialogHost.vue";
 import SupplyDebtBanner from "./components/SupplyDebtBanner.vue";
+import WhatsNewModal from "./components/WhatsNewModal.vue";
 
 const route = useRoute();
 const auth = useAuthStore();
@@ -25,5 +26,6 @@ const showShell = computed(() => auth.isAuthenticated && !route.meta.public);
     </div>
   </div>
   <router-view v-else />
+  <WhatsNewModal v-if="showShell" />
   <ConfirmDialogHost />
 </template>

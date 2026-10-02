@@ -26,5 +26,8 @@ class User(UUIDMixin, TimestampMixin, Base):
     # Cuenta de la Empresa (Simple_Solutions3D): un observador que además tiene inventario
     # propio. Puede vender con la impresora de un socio usando su propio filamento.
     is_company: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    # Última ventana de "Novedades" que vio (id de la versión). Se guarda por usuario para que
+    # salga una sola vez aunque entre desde varios dispositivos.
+    last_seen_release: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     role: Mapped["Role"] = relationship(back_populates="users")

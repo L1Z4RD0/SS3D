@@ -1,6 +1,6 @@
 import uuid
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class LoginRequest(BaseModel):
@@ -26,5 +26,10 @@ class CurrentUserResponse(BaseModel):
     role: str
     is_active: bool
     is_company: bool = False
+    last_seen_release: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+class ReleaseSeenRequest(BaseModel):
+    release: str = Field(min_length=1, max_length=40)

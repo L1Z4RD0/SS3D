@@ -9,7 +9,7 @@ from app.dependencies import get_current_user, is_company, is_watcher
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.models.watcher_assignment import WatcherAssignment
-from app.schemas.auth import CurrentUserResponse, LoginRequest, ObservedUserResponse, TokenResponse
+from app.schemas.auth import CurrentUserResponse, LoginRequest, ObservedUserResponse, ReleaseSeenRequest, TokenResponse
 from app.security import (
     LOCKOUT_DURATION,
     MAX_FAILED_LOGIN_ATTEMPTS,
@@ -196,7 +196,19 @@ def me(current_user: User = Depends(get_current_user)):
         role=current_user.role.name,
         is_active=current_user.is_active,
         is_company=current_user.is_company,
+        last_seen_release=current_user.last_seen_release,
     )
+
+
+@router.post("/me/release-seen", status_code=status.HTTP_204_NO_CONTENT)
+def mark_release_seen(
+    payload: ReleaseSeenRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Marca la ventana de Novedades como vista por este usuario (no vuelve a salir)."""
+    current_user.last_seen_release = payload.release.strip()
+    db.commit()
 
 
 @router.get("/me/observed-users", response_model=list[ObservedUserResponse])
