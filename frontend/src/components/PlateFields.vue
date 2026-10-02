@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { GRAMS_MAX, isValidGrams, gramsErrorMessage } from "../utils/validation";
 import FilamentPickerModal from "./FilamentPickerModal.vue";
 import Icon from "./Icon.vue";
+import HoursMinutesInput from "./HoursMinutesInput.vue";
 
 // Datos de UNA plancha: nombre, impresora, horas y filamentos. El objeto se edita en el
 // lugar: { name, printer_id, print_hours, filaments: [{ filament_id, grams_used }] }.
@@ -62,8 +63,8 @@ function removeFilament(id) {
         </select>
       </div>
       <div class="field">
-        <label>Horas de impresión</label>
-        <input v-model.number="plate.print_hours" type="number" min="0" step="0.1" />
+        <label>Tiempo de impresión</label>
+        <HoursMinutesInput v-model="plate.print_hours" />
       </div>
     </div>
     <div class="field mt-2">
@@ -101,7 +102,7 @@ function removeFilament(id) {
 <style scoped>
 .plate-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.2fr) minmax(0, 0.8fr);
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.1fr) minmax(0, 1.1fr);
   gap: 10px;
 }
 

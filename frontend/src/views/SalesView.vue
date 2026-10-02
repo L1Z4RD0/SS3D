@@ -18,6 +18,7 @@ import Icon from "../components/Icon.vue";
 import FilamentPickerModal from "../components/FilamentPickerModal.vue";
 import ExtraPlatesEditor from "../components/ExtraPlatesEditor.vue";
 import RiskLevelPicker from "../components/RiskLevelPicker.vue";
+import HoursMinutesInput from "../components/HoursMinutesInput.vue";
 import AddPlateModal from "../components/AddPlateModal.vue";
 import { platesPayload, platesError } from "../utils/plates";
 import OrderStatusModal from "../components/OrderStatusModal.vue";
@@ -1025,8 +1026,8 @@ onMounted(async () => {
             </select>
           </div>
           <div class="field">
-            <label>Horas de impresión</label>
-            <input v-model.number="form.print_hours" type="number" min="0" step="0.1" :disabled="productionLocked" />
+            <label>Tiempo de impresión</label>
+            <HoursMinutesInput v-model="form.print_hours" :disabled="productionLocked" />
           </div>
           <div class="field">
             <label>Horas de postprocesado</label>

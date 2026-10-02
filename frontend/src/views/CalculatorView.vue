@@ -18,6 +18,7 @@ import QuoteDocument from "../components/QuoteDocument.vue";
 import FilamentPickerModal from "../components/FilamentPickerModal.vue";
 import ExtraPlatesEditor from "../components/ExtraPlatesEditor.vue";
 import RiskLevelPicker from "../components/RiskLevelPicker.vue";
+import HoursMinutesInput from "../components/HoursMinutesInput.vue";
 import { platesPayload, platesError } from "../utils/plates";
 import { useObservedUsers } from "../composables/useObservedUsers";
 
@@ -765,8 +766,8 @@ onMounted(() => {
 
           <div class="form-grid">
             <div class="field">
-              <label>Horas de impresión</label>
-              <input v-model.number="form.print_hours" type="number" min="0" step="0.1" />
+              <label>Tiempo de impresión</label>
+              <HoursMinutesInput v-model="form.print_hours" />
             </div>
             <div class="field">
               <label>Horas de postprocesado</label>

@@ -8,6 +8,39 @@
    Textos cortos y en el idioma de los usuarios (qué pueden hacer ahora), no técnicos. */
 export const RELEASES = [
   {
+    // Sale el mismo día que la anterior: repite sus puntos para quien todavía no la vio.
+    id: "2026-10-02.2",
+    date: "2 de octubre de 2026",
+    title: "Minutos de impresión, Cuenta Empresa y más",
+    items: [
+      {
+        icon: "⏱️",
+        title: "Horas y minutos",
+        text: "El tiempo de impresión ahora se ingresa en horas y minutos: ya no hay que convertir los minutos a mano.",
+      },
+      {
+        icon: "🎯",
+        title: "Riesgo de fallo",
+        text: "Al cotizar o vender eliges riesgo bajo, medio o alto (10/15/20 %). Se cobra aparte del margen. Los insumos ahora sí llevan margen.",
+      },
+      {
+        icon: "🏢",
+        title: "Cuenta Empresa",
+        text: "Olzer ahora es Simple_Solutions3D (misma contraseña), con inventario propio. Cada venta muestra cuánto pone cada uno.",
+      },
+      {
+        icon: "🛵",
+        title: "Delivery",
+        text: "«Envío» ahora se llama Delivery. Indica quién lo lleva: ese monto se le devuelve a esa persona.",
+      },
+      {
+        icon: "📊",
+        title: "Nuevo en beta: Reparto y Mi inversión",
+        text: "Una guía del reparto del mes y de cuánto lleva recuperado cada socio. Búscalas en el menú.",
+      },
+    ],
+  },
+  {
     id: "2026-10-02",
     date: "2 de octubre de 2026",
     title: "Cuenta Empresa, riesgo de fallo y Reparto",
