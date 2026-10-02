@@ -62,19 +62,19 @@ function removeFilament(id) {
           <option v-for="p in printers" :key="p.id" :value="p.id">{{ p.name }}</option>
         </select>
       </div>
-      <div class="field">
+      <div class="field plate-time">
         <label>Tiempo de impresión</label>
         <HoursMinutesInput v-model="plate.print_hours" />
       </div>
     </div>
     <div class="field mt-2">
       <label>Filamentos de esta plancha</label>
-      <div class="flex gap-2">
+      <div class="flex gap-2 plate-filament-row">
         <button type="button" class="btn btn-secondary plate-picker-btn" @click="showPicker = true">
           <span v-if="pickedId">{{ filamentLabel(pickedId, filaments) }}</span>
           <span v-else class="text-muted">Selecciona un filamento</span>
         </button>
-        <input v-model.number="grams" type="number" min="0.01" :max="GRAMS_MAX" step="0.01" placeholder="Gramos" style="width: 90px" />
+        <input v-model.number="grams" class="plate-grams" type="number" min="0.01" :max="GRAMS_MAX" step="0.01" placeholder="Gramos" />
         <button type="button" class="btn btn-secondary btn-sm" @click="addFilament">Agregar</button>
       </div>
       <div v-if="rowError" class="alert alert-danger mt-2">{{ rowError }}</div>
@@ -100,10 +100,22 @@ function removeFilament(id) {
 </template>
 
 <style scoped>
+/* Nombre e impresora arriba; el tiempo en su propia fila para que horas y minutos tengan
+   espacio de sobra (en la ventana de venta la plancha es angosta). */
 .plate-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.1fr) minmax(0, 1.1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.plate-time {
+  grid-column: 1 / -1;
+  max-width: 340px;
+}
+
+.plate-grams {
+  width: 120px;
+  flex-shrink: 0;
 }
 
 .plate-picker-btn {
@@ -130,6 +142,24 @@ function removeFilament(id) {
 @media (max-width: 640px) {
   .plate-grid {
     grid-template-columns: 1fr;
+  }
+
+  .plate-time {
+    max-width: none;
+  }
+
+  /* En celular el filamento va en su propia línea y debajo los gramos + Agregar. */
+  .plate-filament-row {
+    flex-wrap: wrap;
+  }
+
+  .plate-picker-btn {
+    flex-basis: 100%;
+  }
+
+  .plate-grams {
+    width: auto;
+    flex: 1;
   }
 }
 </style>

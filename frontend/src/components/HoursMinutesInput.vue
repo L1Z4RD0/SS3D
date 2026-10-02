@@ -89,13 +89,27 @@ function normalize() {
 
 .hm-part input {
   width: 100%;
-  padding-right: 40px;
+  min-width: 0;
+  padding-right: 34px;
+  /* Sin flechitas: en casillas angostas se comían el espacio de los números. */
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.hm-part input::-webkit-outer-spin-button,
+.hm-part input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.hm-part:first-child input {
+  padding-right: 24px;
 }
 
 .hm-part span {
   position: absolute;
   top: 50%;
-  right: 12px;
+  right: 10px;
   transform: translateY(-50%);
   color: var(--text-muted);
   font-size: 0.85rem;
