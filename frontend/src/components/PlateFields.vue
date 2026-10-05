@@ -12,6 +12,8 @@ defineProps({
   printers: { type: Array, required: true },
   filaments: { type: Array, required: true },
   namePlaceholder: { type: String, default: "Ej: Llaveros" },
+  // { owner_id: nombre } — para la Empresa, que combina recursos de varios socios.
+  ownerNames: { type: Object, default: () => ({}) },
 });
 
 const showPicker = ref(false);
@@ -59,7 +61,9 @@ function removeFilament(id) {
         <label>Impresora</label>
         <select v-model="plate.printer_id" required>
           <option value="" disabled>Selecciona</option>
-          <option v-for="p in printers" :key="p.id" :value="p.id">{{ p.name }}</option>
+          <option v-for="p in printers" :key="p.id" :value="p.id">
+            {{ ownerNames[p.owner_id] ? `${p.name} — de ${ownerNames[p.owner_id]}` : p.name }}
+          </option>
         </select>
       </div>
       <div class="field plate-time">
@@ -92,6 +96,7 @@ function removeFilament(id) {
       v-if="showPicker"
       :filaments="filaments"
       :exclude-ids="plate.filaments.map((r) => r.filament_id)"
+      :owner-names="ownerNames"
       title="Filamento de la plancha"
       @select="(f) => { pickedId = f.id; showPicker = false; }"
       @close="showPicker = false"

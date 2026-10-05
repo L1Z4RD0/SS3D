@@ -11,7 +11,12 @@ from app.models.filament import Filament
 
 @pytest.fixture
 def biz(db, make):
+    from app.models.user import User
+
     diego, sntg = make.user(name="diego"), make.user(name="sntg")
+    # En producción hay una sola cuenta Empresa: las de otros tests no deben entrar en el
+    # Reparto de este (sumaría sus ventas a los totales).
+    db.query(User).filter(User.is_company.is_(True)).update({User.is_company: False})
     company = make.user("watcher", "empresa")
     company.is_company = True
     db.commit()
@@ -74,15 +79,67 @@ def test_company_sells_with_partner_printer_and_own_filament(client, db, biz):
     assert db.get(Filament, fc["id"]).available_g == Decimal(900)
 
 
-def test_mixing_rules(client, biz):
+def test_company_mixes_materials_of_both_partners(client, db, make, biz, monkeypatch):
+    """La Empresa combina materiales de Diego y Sntg: se descuenta a cada dueño y cada costo
+    queda a cuenta de quien puso el recurso."""
+    from app.models.supply import Supply
+
+    monkeypatch.setattr(settings, "split_partners", f"{biz['diego'].username},{biz['sntg'].username},Omar")
+    D, S = biz["diego"].username, biz["sntg"].username
+    sd = make.supply(biz["diego"], qty=50, unit_cost=100)
+    # Impresora de Diego + filamento de Sntg + insumos de Diego.
+    body = sale_payload(biz["pd"], biz["fs"], 120, supply=sd, qty=4, owner_id=biz["diego"].id, price=20000, shipping_cost=0)
+    r = client.post("/api/sales", headers=biz["hc"], json=body)
+    assert r.status_code == 201, r.text
+    sale = r.json()
+    owners = {o["username"]: o for o in sale["cost_by_owner"]}
+    assert set(owners) == {D, S}
+    assert Decimal(owners[D]["machine"]) == Decimal(sale["depreciation_cost"]) + Decimal(sale["energy_cost"])
+    assert Decimal(owners[D]["supplies"]) == 400 and Decimal(owners[D]["material"]) == 0
+    assert Decimal(owners[S]["material"]) == Decimal(sale["material_cost"]) and Decimal(owners[S]["machine"]) == 0
+    # El stock se descuenta a cada dueño.
+    db.expire_all()
+    assert db.get(Filament, biz["fs"].id).available_g == Decimal(880)
+    assert db.get(Supply, sd.id).quantity_available == Decimal(46)
+    # En el Reparto, a cada uno se le devuelve lo suyo.
+    deliver(client, biz["hc"], sale["id"], date.today())
+    rep = client.get("/api/beta/split", headers=biz["hc"], params={"month": date.today().strftime("%Y-%m")}).json()
+    [line] = [x for x in rep["sales"] if x["id"] == sale["id"]]
+    assert Decimal(line["refunds"][S]) == Decimal(owners[S]["total"])
+    assert Decimal(line["refunds"][D]) == Decimal(owners[D]["total"])
+
+    # Una plancha en la impresora de Sntg dentro de esa venta de Diego también se permite.
+    other = client.post("/api/sales", headers=biz["hc"], json={**body, "extra_plates": [
+        {"name": "Base", "printer_id": str(biz["ps"].id), "print_hours": 1,
+         "filaments": [{"filament_id": str(biz["fd"].id), "grams_used": 10}]}]})
+    assert other.status_code == 201, other.text
+    names = {o["username"] for o in other.json()["cost_by_owner"]}
+    assert names == {D, S}
+
+
+def test_mixing_rules(client, make, biz):
     fc = _company_filament(client, biz)
-    # Impresora de Diego + filamento de Sntg: no (los socios no se mezclan entre sí).
-    body = sale_payload(biz["pd"], biz["fs"], 50, owner_id=biz["diego"].id)
-    assert client.post("/api/sales", headers=biz["hc"], json=body).status_code == 404
-    # Diego no puede usar el filamento de la Empresa en su propia venta.
+    # Los socios siguen sin mezclar: Diego no usa filamento de Sntg ni de la Empresa.
+    assert client.post("/api/sales", headers=biz["hd"], json=sale_payload(biz["pd"], biz["fs"], 50)).status_code == 404
     body = sale_payload(biz["pd"])
     body["filaments"] = [{"filament_id": fc["id"], "grams_used": 50}]
     assert client.post("/api/sales", headers=biz["hd"], json=body).status_code == 404
+    # La Empresa solo combina lo de los socios que observa: no lo de otro usuario.
+    stranger = make.user(name="ajeno")
+    foreign = make.filament(stranger)
+    body = sale_payload(biz["pd"], foreign, 50, owner_id=biz["diego"].id)
+    assert client.post("/api/sales", headers=biz["hc"], json=body).status_code == 404
+
+
+def test_company_calculator_mixes_partners(client, biz):
+    body = {"printer_id": str(biz["pd"].id), "filaments": [{"filament_id": str(biz["fs"].id), "grams_used": 80}],
+            "print_hours": 2, "sale_date": str(date.today()), "client_name": "Mixto",
+            "payment_method": "efectivo", "chosen_margin_percent": 140}
+    r = client.post("/api/calculator/quote/save-as-sale", headers=biz["hc"], json=body)
+    assert r.status_code == 201, r.text
+    assert {o["username"] for o in r.json()["cost_by_owner"]} == {biz["diego"].username, biz["sntg"].username}
+    # Un socio no puede guardar así.
+    assert client.post("/api/calculator/quote/save-as-sale", headers=biz["hd"], json=body).status_code in (400, 404)
 
 
 def test_company_calculator_sale_and_plates_with_own_filament(client, biz):

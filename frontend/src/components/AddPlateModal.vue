@@ -14,6 +14,7 @@ const props = defineProps({
   sale: { type: Object, required: true },
   printers: { type: Array, required: true },
   filaments: { type: Array, required: true },
+  ownerNames: { type: Object, default: () => ({}) },
 });
 const emit = defineEmits(["close", "saved"]);
 
@@ -91,7 +92,7 @@ async function save() {
         </label>
       </div>
 
-      <PlateFields v-model="plate" :printers="printers" :filaments="filaments" class="mt-4" />
+      <PlateFields v-model="plate" :printers="printers" :filaments="filaments" :owner-names="ownerNames" class="mt-4" />
 
       <div v-if="plateCost !== null" class="alert alert-info mt-4">
         <span>

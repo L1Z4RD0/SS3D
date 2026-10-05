@@ -8,6 +8,33 @@
    Textos cortos y en el idioma de los usuarios (qué pueden hacer ahora), no técnicos. */
 export const RELEASES = [
   {
+    id: "2026-10-05",
+    date: "5 de octubre de 2026",
+    title: "La Empresa combina materiales de los socios",
+    items: [
+      {
+        icon: "🧩",
+        title: "Materiales de varios socios",
+        text: "Simple_Solutions3D puede vender usando la impresora, el filamento y los insumos de Diego y Sntg a la vez (y los propios).",
+      },
+      {
+        icon: "⚖️",
+        title: "Cada costo a su dueño",
+        text: "Se descuenta del inventario de cada uno y la máquina, el material y los insumos quedan a cuenta de quien los puso. La ganancia se reparte como siempre.",
+      },
+      {
+        icon: "⚠️",
+        title: "Siempre con aviso",
+        text: "Al mezclar dueños verás un aviso y una confirmación al guardar, y la venta queda marcada como «Materiales mixtos».",
+      },
+      {
+        icon: "🎁",
+        title: "Regalos fuera del reparto",
+        text: "Un regalo ya no reparte sus costos entre todos: lo absorbe quien regaló.",
+      },
+    ],
+  },
+  {
     // Sale el mismo día que la anterior: repite sus puntos para quien todavía no la vio.
     id: "2026-10-02.2",
     date: "2 de octubre de 2026",

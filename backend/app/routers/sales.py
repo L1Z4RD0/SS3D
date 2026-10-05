@@ -290,9 +290,9 @@ def create_sale(
     # La venta usa solo el inventario de un dueño: el propio usuario, o el usuario
     # asignado que eligió el observador. Así los inventarios nunca se mezclan.
     owner_id = resolve_sale_owner(db, current_user, payload.owner_id)
-    # La impresora es del dueño de la venta; filamentos, insumos y planchas pueden ser
-    # también de la Empresa si es ella quien registra la venta.
-    resource_owners = sale_resource_owner_ids(owner_id, current_user)
+    # La impresora es del dueño de la venta; si vende la Empresa, filamentos, insumos y
+    # planchas pueden ser de cualquiera de los socios que observa o propios.
+    resource_owners = sale_resource_owner_ids(db, owner_id, current_user)
     printer = resolve_printer(db, current_user, payload.printer_id, [owner_id])
     resolved_filaments = resolve_filaments(db, current_user, payload.filaments, resource_owners)
     resolved_supplies = resolve_supplies(db, current_user, payload.supplies, resource_owners)
@@ -479,7 +479,7 @@ def _update_full(db: Session, sale: Sale, payload: SaleUpdateRequest, changes: d
     """Edición completa (Pendiente y Entregada): igual que siempre, devuelve lo que usaba
     la venta y vuelve a descontar lo nuevo, recalculando costos."""
     # El dueño de una venta no cambia al editarla: sus recursos siguen siendo los suyos.
-    owner_ids = sale_resource_owner_ids(sale.user_id, sale.created_by)
+    owner_ids = sale_resource_owner_ids(db, sale.user_id, sale.created_by)
 
     old_printer = sale.printer
     old_filament_rows = list(sale.filaments_used)
@@ -733,7 +733,7 @@ def add_sale_plate(
     sale = _get_editable_sale(db, sale_id, current_user)
     _check_plates_editable(sale)
     [plate] = resolve_plates(
-        db, current_user, [payload], sale_resource_owner_ids(sale.user_id, sale.created_by), is_reprint=payload.is_reprint
+        db, current_user, [payload], sale_resource_owner_ids(db, sale.user_id, sale.created_by), is_reprint=payload.is_reprint
     )
     exhausted = add_plate(db, sale, plate)
     log_event(

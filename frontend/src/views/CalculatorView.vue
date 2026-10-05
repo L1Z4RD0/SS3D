@@ -10,6 +10,7 @@ import { BUSINESS_NAME, BUSINESS_LOGO_URL } from "../utils/business";
 import { formatCurrency, todayISO } from "../utils/format";
 import { GRAMS_MAX, isValidGrams, isValidNumber, gramsErrorMessage, extractApiError } from "../utils/validation";
 import { promptExhaustedFilaments } from "../utils/exhaustedFilaments";
+import { confirmAction } from "../composables/useConfirm";
 import { useAuthStore } from "../stores/auth";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
@@ -25,7 +26,7 @@ import { useObservedUsers } from "../composables/useObservedUsers";
 const auth = useAuthStore();
 // Observador: cotiza con recursos de varios usuarios (puede mezclarlos), así que cada
 // impresora/filamento/insumo muestra de quién es. Para los demás roles no aparece nada.
-const { namesById, loadObservedUsers, ownerName } = useObservedUsers();
+const { namesById, loadObservedUsers, ownerName, observedUsers } = useObservedUsers();
 
 function withOwner(label, ownerId, sep = " — ") {
   const owner = ownerName(ownerId);
@@ -227,6 +228,14 @@ const resourceOwners = computed(() => {
     const s = supplies.value.find((x) => x.id === row.supply_id);
     if (s) lines.push({ kind: "Insumo", label: `${s.name} × ${row.quantity}`, owner: ownerName(s.owner_id) });
   }
+  for (const p of extraPlates.value) {
+    const pr = printers.value.find((x) => x.id === p.printer_id);
+    if (pr) lines.push({ kind: "Impresora", label: `${pr.name} (${p.name})`, owner: ownerName(pr.owner_id) });
+    for (const r of p.filaments) {
+      const f = filaments.value.find((x) => x.id === r.filament_id);
+      if (f) lines.push({ kind: "Filamento", label: `${filamentLabel(f)} (${r.grams_used}g, ${p.name})`, owner: ownerName(f.owner_id) });
+    }
+  }
   return lines;
 });
 
@@ -373,13 +382,28 @@ const manualPriceBreakdown = computed(() => {
    recursos de varios usuarios, pero para guardar como venta todo debe ser del dueño de
    la impresora. Para los demás roles todo es propio y esto no aplica. */
 const saleOwnerId = computed(() => printers.value.find((p) => p.id === form.printer_id)?.owner_id || null);
+// Dueños distintos en la cotización (solo la Empresa puede guardarla así): se avisa y se
+// confirma al guardar, para que no haya confusiones con a quién va cada costo.
+const mixedOwnerNames = computed(() => [...new Set(resourceOwners.value.map((r) => r.owner).filter(Boolean))]);
+const mixedOwnersText = computed(() =>
+  mixedOwnerNames.value
+    .map((name) => {
+      const kinds = [...new Set(resourceOwners.value.filter((r) => r.owner === name).map((r) => r.kind.toLowerCase()))];
+      return `${name} (${kinds.join(", ")})`;
+    })
+    .join(" · ")
+);
+const plateOwnerNames = computed(() =>
+  auth.isWatcher ? Object.fromEntries(observedUsers.value.map((u) => [u.id, u.username])) : {}
+);
+const companyMixed = computed(() => auth.isCompany && mixedOwnerNames.value.length > 1);
+
 const saleOwnerMismatch = computed(() => {
-  if (!auth.isWatcher || !saleOwnerId.value) return false;
+  // La Empresa puede combinar materiales de cualquiera de los socios que observa y los suyos.
+  if (!auth.isWatcher || auth.isCompany || !saleOwnerId.value) return false;
   const filamentOwners = buildFilamentsPayload().map((u) => filaments.value.find((f) => f.id === u.filament_id)?.owner_id);
   const supplyOwners = supplyRows.value.map((r) => supplies.value.find((s) => s.id === r.supply_id)?.owner_id);
-  // La Empresa puede combinar su propio filamento e insumos con la impresora del socio.
-  const allowed = new Set([saleOwnerId.value, ...(auth.isCompany ? [auth.user?.id] : [])]);
-  return [...filamentOwners, ...supplyOwners].some((id) => id && !allowed.has(id));
+  return [...filamentOwners, ...supplyOwners].some((id) => id && id !== saleOwnerId.value);
 });
 
 function openSaveModal(scenario) {
@@ -403,6 +427,16 @@ async function confirmSaveAsSale() {
   if (!saveIsGift.value && useManualPrice.value && !isValidNumber(manualPrice.value, { min: 0, allowZero: false })) {
     saveError.value = "Ingresa un precio válido, mayor a 0.";
     return;
+  }
+  if (companyMixed.value) {
+    const ok = await confirmAction({
+      title: "Materiales de distintos dueños",
+      message:
+        `Esta venta usa recursos de ${mixedOwnerNames.value.length} dueños: ${mixedOwnersText.value}. ` +
+        "Se descontará del inventario de cada uno y cada costo quedará a cuenta de su dueño. ¿Guardarla así?",
+      confirmLabel: "Sí, guardar",
+    });
+    if (!ok) return;
   }
   saving.value = true;
   saveError.value = "";
@@ -785,6 +819,7 @@ onMounted(() => {
             v-model="extraPlates"
             :printers="printers"
             :filaments="selectableFilaments"
+            :owner-names="plateOwnerNames"
             :default-printer-id="form.printer_id"
           />
 
@@ -1003,6 +1038,11 @@ onMounted(() => {
           <div v-if="saleOwnerMismatch" class="alert alert-danger" style="margin-bottom: 14px">
             Esta cotización mezcla recursos de distintos usuarios. Para guardarla como venta, la impresora, los
             filamentos y los insumos deben ser del mismo usuario<template v-if="auth.isCompany"> (o de la Empresa)</template>.
+          </div>
+          <div v-else-if="companyMixed" class="alert alert-warning" style="margin-bottom: 14px">
+            <strong>⚠️ Materiales de {{ mixedOwnerNames.length }} dueños distintos:</strong> {{ mixedOwnersText }}. Se
+            descuenta del inventario de cada uno y cada costo queda a cuenta de su dueño. La venta queda a nombre de
+            <strong>{{ ownerName(saleOwnerId) }}</strong> (dueño de la impresora), registrada por ti.
           </div>
           <div v-else class="alert alert-info" style="margin-bottom: 14px">
             Venta para <strong>{{ ownerName(saleOwnerId) }}</strong>: se descuenta de su inventario y quedará registrada

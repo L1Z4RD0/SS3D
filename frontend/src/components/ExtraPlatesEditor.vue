@@ -9,6 +9,7 @@ const props = defineProps({
   printers: { type: Array, required: true },
   filaments: { type: Array, required: true },
   defaultPrinterId: { type: String, default: "" },
+  ownerNames: { type: Object, default: () => ({}) },
   disabled: { type: Boolean, default: false },
 });
 
@@ -47,7 +48,7 @@ function removePlate(key) {
           <Icon name="trash" :size="14" />
         </button>
       </div>
-      <PlateFields v-model="plates[i]" :printers="printers" :filaments="filaments" />
+      <PlateFields v-model="plates[i]" :printers="printers" :filaments="filaments" :owner-names="ownerNames" />
     </div>
   </div>
 </template>

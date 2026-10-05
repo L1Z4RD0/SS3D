@@ -113,8 +113,8 @@ def save_quote_as_sale(
     # que ser de ese mismo dueño (un observador puede cotizar mezclando, pero no vender así).
     printer = resolve_printer(db, current_user, payload.printer_id)
     owner_id = resolve_sale_owner(db, current_user, printer.user_id)
-    # Recursos del dueño de la impresora y, si vende la Empresa, también de la Empresa.
-    allowed = sale_resource_owner_ids(owner_id, current_user)
+    # Recursos del dueño de la impresora; si vende la Empresa, de cualquier socio o propios.
+    allowed = sale_resource_owner_ids(db, owner_id, current_user)
     resolved_filaments = resolve_filaments(db, current_user, payload.filaments)
     resolved_supplies = resolve_supplies(db, current_user, payload.supplies)
     resolved_plates = resolve_plates(db, current_user, payload.extra_plates)
@@ -127,8 +127,8 @@ def save_quote_as_sale(
     if foreign:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "Para guardar como venta, la impresora, los filamentos y los insumos deben ser del mismo usuario"
-            " (o de la Empresa, si vendes desde su cuenta).",
+            "Para guardar como venta, la impresora, los filamentos y los insumos deben ser del mismo usuario."
+            " Solo la cuenta de la Empresa puede combinar materiales de distintos socios.",
         )
 
     breakdown = build_cost_breakdown(

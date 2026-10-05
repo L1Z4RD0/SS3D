@@ -64,12 +64,13 @@ betaApi
 
 // Planchas de un pedido ya registrado (desde el detalle de costos).
 const plateSale = ref(null);
-const saleOwnerPrinters = (sale) => printers.value.filter((p) => !auth.isWatcher || p.owner_id === sale.owner_id);
+const saleOwnerPrinters = (sale) =>
+  printers.value.filter((p) => !auth.isWatcher || auth.isCompany || p.owner_id === sale.owner_id);
 const saleOwnerFilaments = (sale) =>
   filaments.value.filter(
     (f) =>
       Number(f.available_g) > 0 &&
-      (!auth.isWatcher || f.owner_id === sale.owner_id || (auth.isCompany && f.owner_id === auth.user?.id))
+      (!auth.isWatcher || auth.isCompany || f.owner_id === sale.owner_id)
   );
 const canManagePlates = (sale) => sale.can_edit && OPEN_STATUSES.includes(sale.status) && !sale.warehouse_item_id;
 
@@ -247,11 +248,39 @@ const saleOwnerId = computed(() => (auth.isWatcher ? form.owner_id : null));
 function ownedBySaleOwner(item) {
   return !auth.isWatcher || item.owner_id === saleOwnerId.value;
 }
-// La Empresa además puede usar su propio filamento e insumos con la impresora del socio
-// (la máquina queda a cuenta del socio y el material a cuenta de la Empresa).
+// La Empresa puede combinar materiales de todos los socios que observa y los propios (ej.
+// impresora de Diego + filamento de Sntg). Cada costo queda a cuenta de su dueño.
 function usableInSale(item) {
-  return ownedBySaleOwner(item) || (auth.isCompany && !!saleOwnerId.value && item.owner_id === auth.user?.id);
+  return ownedBySaleOwner(item) || (auth.isCompany && !!saleOwnerId.value);
 }
+
+// De quién es cada recurso de la venta. Si hay más de un dueño se avisa (y se confirma al
+// guardar) para que después no haya confusiones con los costos.
+const resourceOwnerSummary = computed(() => {
+  if (!auth.isCompany) return [];
+  const byOwner = new Map();
+  const add = (ownerId, what) => {
+    if (!ownerId) return;
+    const name = ownerName(ownerId) || "otro usuario";
+    if (!byOwner.has(name)) byOwner.set(name, new Set());
+    byOwner.get(name).add(what);
+  };
+  const findIn = (list, id) => list.value.find((x) => x.id === id);
+  add(findIn(printers, form.printer_id)?.owner_id, "impresora");
+  filamentRows.value.forEach((r) => add(findIn(filaments, r.filament_id)?.owner_id, "filamento"));
+  supplyRows.value.forEach((r) => add(findIn(supplies, r.supply_id)?.owner_id, "insumos"));
+  if (!editingId.value) {
+    extraPlates.value.forEach((p) => {
+      add(findIn(printers, p.printer_id)?.owner_id, "impresora");
+      p.filaments.forEach((r) => add(findIn(filaments, r.filament_id)?.owner_id, "filamento"));
+    });
+  }
+  return [...byOwner].map(([name, what]) => ({ name, what: [...what] }));
+});
+const mixedOwners = computed(() => resourceOwnerSummary.value.length > 1);
+const mixedOwnersText = computed(() =>
+  resourceOwnerSummary.value.map((o) => `${o.name} (${o.what.join(", ")})`).join(" · ")
+);
 const ownerPrinters = computed(() => printers.value.filter(ownedBySaleOwner));
 // La Empresa mezcla su filamento con el del socio: el selector muestra de quién es cada uno.
 const pickerOwnerNames = computed(() =>
@@ -623,6 +652,16 @@ async function handleSubmit() {
     formError.value = validationError;
     return;
   }
+  if (mixedOwners.value) {
+    const ok = await confirmAction({
+      title: "Materiales de distintos dueños",
+      message:
+        `Esta venta usa recursos de ${resourceOwnerSummary.value.length} dueños: ${mixedOwnersText.value}. ` +
+        "Se descontará del inventario de cada uno y cada costo quedará a cuenta de su dueño. ¿Registrarla así?",
+      confirmLabel: "Sí, registrar",
+    });
+    if (!ok) return;
+  }
   saving.value = true;
   formError.value = "";
   try {
@@ -819,6 +858,12 @@ onMounted(async () => {
                   <strong>{{ s.client_name }}</strong>
                   <span v-if="s.warehouse_item_id" class="badge piece-en_almacen" style="margin-left: 6px">Pieza del Almacén</span>
                   <span v-if="s.payment_method === GIFT_PAYMENT_METHOD" class="badge badge-gift" style="margin-left: 6px">🎁 Regalo</span>
+                  <span
+                    v-if="s.cost_by_owner?.length > 1"
+                    class="badge badge-mixed"
+                    style="margin-left: 6px"
+                    :title="`Costos: ${s.cost_by_owner.map((o) => o.username).join(', ')}`"
+                  >Materiales mixtos</span>
                   <div v-if="s.buyer_name" class="text-muted text-sm">{{ s.buyer_name }}</div>
                 </td>
                 <td v-if="auth.isWatcher">{{ s.owner_username }}</td>
@@ -1085,7 +1130,7 @@ onMounted(async () => {
           <div class="flex gap-2">
             <select v-model="newSupplyId" style="flex: 1" :disabled="productionLocked">
               <option value="" disabled>Selecciona un insumo</option>
-              <option v-for="s in ownerSupplies" :key="s.id" :value="s.id">{{ s.name }}</option>
+              <option v-for="s in ownerSupplies" :key="s.id" :value="s.id">{{ auth.isCompany ? withOwner(s.name, s.owner_id) : s.name }}</option>
             </select>
             <input v-model.number="newSupplyQty" type="number" min="0" step="1" placeholder="Cant." style="width: 70px" :disabled="productionLocked" />
             <button type="button" class="btn btn-secondary btn-sm" :disabled="productionLocked" @click="addSupplyRow">Agregar</button>
@@ -1112,11 +1157,16 @@ onMounted(async () => {
           v-if="!editingId"
           v-model="extraPlates"
           class="mt-2"
-          :printers="ownerPrinters"
+          :printers="auth.isCompany ? printers : ownerPrinters"
           :filaments="selectableFilaments"
+          :owner-names="pickerOwnerNames"
           :default-printer-id="form.printer_id"
           :disabled="auth.isWatcher && !form.owner_id"
         />
+        <div v-if="mixedOwners" class="alert alert-warning mixed-owners mt-2" role="alert">
+          <strong>⚠️ Materiales de {{ resourceOwnerSummary.length }} dueños distintos:</strong> {{ mixedOwnersText }}.
+          Se descuenta del inventario de cada uno y cada costo queda a cuenta de su dueño.
+        </div>
         <div v-else-if="editingSale?.plates?.length" class="alert alert-info mt-2">
           Este pedido tiene {{ editingSale.plates.length }} plancha(s) adicional(es) (ya incluidas en el costo). Se agregan
           o quitan desde el detalle de costos en la lista de ventas.
@@ -1214,6 +1264,7 @@ onMounted(async () => {
       :sale="plateSale"
       :printers="saleOwnerPrinters(plateSale)"
       :filaments="saleOwnerFilaments(plateSale)"
+      :owner-names="pickerOwnerNames"
       @close="plateSale = null"
       @saved="onPlateSaved"
     />
@@ -1450,5 +1501,13 @@ tr.row-expanded td {
   padding-bottom: 8px;
   margin-bottom: 4px;
   border-bottom: 1px dashed var(--border);
+}
+
+.badge-mixed {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.mixed-owners {
+  display: block;
 }
 </style>

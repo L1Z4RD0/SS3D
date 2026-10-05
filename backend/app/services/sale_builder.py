@@ -61,13 +61,16 @@ def can_edit_sale(sale: Sale, viewer: User | None) -> bool:
     return sale.user_id == viewer.id
 
 
-def sale_resource_owner_ids(owner_id: uuid.UUID, seller: User | None) -> list[uuid.UUID]:
-    """De quién pueden ser los recursos de una venta: del dueño de la impresora y, si la
-    registra la Empresa, también de la Empresa (ej. impresora de un socio + filamento de la
-    Empresa). Fuera de eso, los inventarios no se mezclan."""
+def sale_resource_owner_ids(db: Session, owner_id: uuid.UUID, seller: User | None) -> list[uuid.UUID]:
+    """De quién pueden ser los recursos (filamentos, insumos, planchas) de una venta.
+
+    - Un socio vende solo con lo suyo: no se mezclan inventarios.
+    - La Empresa puede combinar lo de todos los socios que observa y lo propio (ej. impresora
+      de Diego + filamento de Sntg + insumos de la Empresa). Cada costo queda a cuenta del dueño
+      de cada recurso (ver cost_allocation) y la app avisa que se mezclan dueños."""
     ids = [owner_id]
-    if is_company(seller) and seller.id != owner_id:
-        ids.append(seller.id)
+    if is_company(seller):
+        ids += [uid for uid in readable_user_ids(db, seller) if uid != owner_id]
     return ids
 
 
