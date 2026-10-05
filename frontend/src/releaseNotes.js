@@ -8,6 +8,34 @@
    Textos cortos y en el idioma de los usuarios (qué pueden hacer ahora), no técnicos. */
 export const RELEASES = [
   {
+    // Sale el mismo día que la anterior: repite sus puntos para quien todavía no la vio.
+    id: "2026-10-05.2",
+    date: "5 de octubre de 2026",
+    title: "Nombres de color propios y materiales de varios socios",
+    items: [
+      {
+        icon: "🎨",
+        title: "Tú pones el nombre del color",
+        text: "Al agregar un filamento escribe el nombre que quieras (Burdeo, Verde transparente...). La paleta y el selector RGB solo eligen el tono.",
+      },
+      {
+        icon: "🧩",
+        title: "Materiales de varios socios",
+        text: "Simple_Solutions3D puede vender usando impresora, filamento e insumos de Diego y Sntg a la vez. Cada costo queda a cuenta de su dueño.",
+      },
+      {
+        icon: "⚠️",
+        title: "Siempre con aviso",
+        text: "Al mezclar dueños verás un aviso y una confirmación al guardar, y la venta queda marcada como «Materiales mixtos».",
+      },
+      {
+        icon: "🎁",
+        title: "Regalos fuera del reparto",
+        text: "Un regalo ya no reparte sus costos entre todos: lo absorbe quien regaló.",
+      },
+    ],
+  },
+  {
     id: "2026-10-05",
     date: "5 de octubre de 2026",
     title: "La Empresa combina materiales de los socios",

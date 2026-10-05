@@ -128,17 +128,15 @@ const emptyFilamentForm = () => ({
 const filamentForm = reactive(emptyFilamentForm());
 const customBrandText = ref("");
 const customMaterialText = ref("");
-const customColorText = ref("");
 
-/* Color: los del catálogo son atajos (nombre + tono); el selector RGB ajusta el tono exacto. */
+/* Color: el nombre lo escribe el usuario; la paleta y el selector RGB solo eligen el tono. */
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
-function pickCatalogColor(c) {
-  filamentForm.color = c.name;
+// La paleta solo elige el TONO: el nombre del color lo escribe siempre el usuario (ej.
+// "Burdeo", "Verde transparente"), nunca se asume desde la paleta.
+function pickCatalogTone(c) {
   filamentForm.color_hex = c.hex_color;
 }
-function pickCustomColor() {
-  filamentForm.color = CUSTOM;
-}
+const isSelectedTone = (c) => (filamentForm.color_hex || "").toLowerCase() === (c.hex_color || "").toLowerCase();
 // Campo de texto para pegar un código (#RRGGBB); solo se aplica cuando está completo.
 const hexText = ref("");
 watch(
@@ -163,7 +161,6 @@ function openCreateFilament() {
   filamentForm.type = catalog.value.materials.some((m) => m.name === "PLA") ? "PLA" : "";
   customBrandText.value = "";
   customMaterialText.value = "";
-  customColorText.value = "";
   multiRoll.value = false;
   multiRollCount.value = 2;
   filamentError.value = "";
@@ -174,11 +171,10 @@ function openEditFilament(f) {
   editingFilamentId.value = f.id;
   const brandMatch = catalog.value.brands.some((b) => b.name === f.brand);
   const materialMatch = catalog.value.materials.some((m) => m.name === f.type);
-  const colorMatch = catalog.value.colors.some((c) => c.name === f.color);
   Object.assign(filamentForm, {
     brand: brandMatch ? f.brand : CUSTOM,
     type: materialMatch ? f.type : CUSTOM,
-    color: colorMatch ? f.color : CUSTOM,
+    color: f.color,
     color_hex: f.color_hex || catalogHexFor(f.color) || NEUTRAL_SWATCH,
     sku: f.sku || "",
     entry_date: f.entry_date,
@@ -189,14 +185,14 @@ function openEditFilament(f) {
   });
   customBrandText.value = brandMatch ? "" : f.brand;
   customMaterialText.value = materialMatch ? "" : f.type;
-  customColorText.value = colorMatch ? "" : f.color;
+
   filamentError.value = "";
   showFilamentModal.value = true;
 }
 
 function validateFilamentForm() {
-  if (!filamentForm.color || (filamentForm.color === CUSTOM && !customColorText.value.trim())) {
-    return "Elige un color del catálogo o escribe el nombre de tu color.";
+  if (!filamentForm.color?.trim()) {
+    return "Escribe el nombre del color (ej. Burdeo, Verde transparente).";
   }
   if (!HEX_RE.test(filamentForm.color_hex || "")) {
     return "El tono exacto debe tener el formato #RRGGBB (ej. #1ABC9C).";
@@ -235,7 +231,7 @@ async function submitFilament() {
     ...filamentForm,
     brand: filamentForm.brand === CUSTOM ? customBrandText.value : filamentForm.brand,
     type: filamentForm.type === CUSTOM ? customMaterialText.value : filamentForm.type,
-    color: filamentForm.color === CUSTOM ? customColorText.value : filamentForm.color,
+    color: filamentForm.color.trim(),
     sku: baseSku || null,
   };
   let createdCount = 0;
@@ -707,7 +703,20 @@ async function deleteSupply(s) {
             <input v-if="filamentForm.type === CUSTOM" v-model="customMaterialText" placeholder="Nombre del material" class="mt-2" required />
           </div>
           <div class="field" style="grid-column: span 2">
-            <label>Color</label>
+            <label for="filament-color-name">Nombre del color</label>
+            <input
+              id="filament-color-name"
+              v-model="filamentForm.color"
+              list="filament-color-names"
+              maxlength="60"
+              placeholder="Ej: Burdeo, Verde transparente, Beige"
+              required
+            />
+            <datalist id="filament-color-names">
+              <option v-for="c in catalog.colors" :key="c.id" :value="c.name" />
+            </datalist>
+            <span class="field-hint">Escríbelo como lo llaman ustedes. Abajo eliges el tono con que se mostrará.</span>
+            <label class="mt-2">Tono</label>
             <div class="color-editor">
               <div class="color-preview" :title="`Vista previa: ${filamentForm.color_hex}`">
                 <FilamentSpoolIcon :color="filamentForm.color_hex" :size="72" />
@@ -719,18 +728,11 @@ async function deleteSupply(s) {
                     :key="c.id"
                     type="button"
                     class="color-swatch"
-                    :class="{ selected: filamentForm.color === c.name }"
+                    :class="{ selected: isSelectedTone(c) }"
                     :style="{ background: c.hex_color }"
-                    :title="c.name"
-                    @click="pickCatalogColor(c)"
+                    :title="`Tono ${c.name.toLowerCase()} (no cambia el nombre)`"
+                    @click="pickCatalogTone(c)"
                   ></button>
-                  <button
-                    type="button"
-                    class="color-swatch color-swatch-custom"
-                    :class="{ selected: filamentForm.color === CUSTOM }"
-                    title="Otro color"
-                    @click="pickCustomColor"
-                  >+</button>
                 </div>
                 <div class="color-exact">
                   <label class="color-exact-picker" title="Elegir el tono exacto">
@@ -748,10 +750,7 @@ async function deleteSupply(s) {
                 </div>
               </div>
             </div>
-            <span v-if="filamentForm.color && filamentForm.color !== CUSTOM" class="field-hint">
-              Seleccionado: {{ filamentForm.color }} · puedes ajustar el tono con el selector RGB.
-            </span>
-            <input v-if="filamentForm.color === CUSTOM" v-model="customColorText" placeholder="Nombre del color (ej. Verde agua)" class="mt-2" required />
+            <span class="field-hint">Tonos rápidos o el selector RGB para el tono exacto.</span>
           </div>
           <div class="field" style="grid-column: span 2">
             <label>SKU / Identificador (opcional)</label>
@@ -932,14 +931,6 @@ async function deleteSupply(s) {
   box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--primary);
 }
 
-.color-swatch-custom {
-  background: var(--surface-alt);
-  color: var(--text-muted);
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
 
 .color-editor {
   display: flex;
