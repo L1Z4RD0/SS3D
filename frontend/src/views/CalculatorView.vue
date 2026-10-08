@@ -381,7 +381,11 @@ const manualPriceBreakdown = computed(() => {
 /* Una venta usa solo el inventario de un dueño. El observador puede cotizar mezclando
    recursos de varios usuarios, pero para guardar como venta todo debe ser del dueño de
    la impresora. Para los demás roles todo es propio y esto no aplica. */
-const saleOwnerId = computed(() => printers.value.find((p) => p.id === form.printer_id)?.owner_id || null);
+const printerOwnerId = computed(() => printers.value.find((p) => p.id === form.printer_id)?.owner_id || null);
+// La Empresa no tiene impresora: usa la de un socio y elige a nombre de quién queda la venta
+// (por defecto, la Empresa). Para los demás, la venta es del dueño de la impresora.
+const companySaleOwnerId = ref("");
+const saleOwnerId = computed(() => (auth.isCompany ? companySaleOwnerId.value || null : printerOwnerId.value));
 // Dueños distintos en la cotización (solo la Empresa puede guardarla así): se avisa y se
 // confirma al guardar, para que no haya confusiones con a quién va cada costo.
 const mixedOwnerNames = computed(() => [...new Set(resourceOwners.value.map((r) => r.owner).filter(Boolean))]);
@@ -416,6 +420,9 @@ function openSaveModal(scenario) {
       : null;
   saveError.value = "";
   saveSuccess.value = "";
+  if (auth.isCompany && !companySaleOwnerId.value) {
+    companySaleOwnerId.value = observedUsers.value.find((u) => u.is_self)?.id || auth.user?.id || "";
+  }
   showSaveModal.value = true;
 }
 
@@ -450,6 +457,7 @@ async function confirmSaveAsSale() {
       payment_method: saveForm.payment_method,
       notes: saveForm.notes || null,
       chosen_margin_percent: selectedScenario.value.margin_percent,
+      ...(auth.isCompany && companySaleOwnerId.value ? { owner_id: companySaleOwnerId.value } : {}),
       // Regalo: el servidor lo registra en $0 e ignora escenario y precio manual.
       manual_price: !saveIsGift.value && useManualPrice.value ? Number(manualPrice.value) : null,
     });
@@ -1039,11 +1047,27 @@ onMounted(() => {
             Esta cotización mezcla recursos de distintos usuarios. Para guardarla como venta, la impresora, los
             filamentos y los insumos deben ser del mismo usuario<template v-if="auth.isCompany"> (o de la Empresa)</template>.
           </div>
-          <div v-else-if="companyMixed" class="alert alert-warning" style="margin-bottom: 14px">
-            <strong>⚠️ Materiales de {{ mixedOwnerNames.length }} dueños distintos:</strong> {{ mixedOwnersText }}. Se
-            descuenta del inventario de cada uno y cada costo queda a cuenta de su dueño. La venta queda a nombre de
-            <strong>{{ ownerName(saleOwnerId) }}</strong> (dueño de la impresora), registrada por ti.
-          </div>
+          <template v-else-if="auth.isCompany">
+            <div class="field" style="margin-bottom: 10px">
+              <label>Venta a nombre de</label>
+              <select v-model="companySaleOwnerId" required>
+                <option v-for="u in observedUsers" :key="u.id" :value="u.id">
+                  {{ u.is_self ? `${u.username} (Empresa)` : u.username }}
+                </option>
+              </select>
+            </div>
+            <div class="alert" :class="companyMixed ? 'alert-warning' : 'alert-info'" style="margin-bottom: 14px">
+              <template v-if="companyMixed">
+                <strong>⚠️ Materiales de {{ mixedOwnerNames.length }} dueños distintos:</strong> {{ mixedOwnersText }}.
+              </template>
+              La venta queda a nombre de <strong>{{ ownerName(saleOwnerId) || "la Empresa" }}</strong>, registrada por ti.
+              <template v-if="printerOwnerId">
+                La impresora es de <strong>{{ ownerName(printerOwnerId) }}</strong>: la depreciación y la luz quedan a su
+                cuenta.
+              </template>
+              Se descuenta del inventario de cada dueño y cada costo queda a cuenta de quien puso el recurso.
+            </div>
+          </template>
           <div v-else class="alert alert-info" style="margin-bottom: 14px">
             Venta para <strong>{{ ownerName(saleOwnerId) }}</strong>: se descuenta de su inventario y quedará registrada
             como hecha por ti ({{ auth.user?.username }}).

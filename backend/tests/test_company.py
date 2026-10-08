@@ -328,3 +328,82 @@ def test_gift_stays_out_of_the_split(client, biz, monkeypatch):
     machine = Decimal(sale["depreciation_cost"]) + Decimal(sale["energy_cost"])
     assert Decimal(inv["printers"][0]["recovered"]) == machine
     assert Decimal(inv["filaments"]["recovered"]) == Decimal(sale["material_cost"])
+
+
+# ---------------------------------------------------------------------------
+# La Empresa no tiene impresora: usa la de un socio y la venta queda a su nombre
+# ---------------------------------------------------------------------------
+
+
+def _machine_by_owner(sale):
+    """Dueños a los que se les carga máquina (depreciación + luz)."""
+    return {o["username"]: Decimal(o["machine"]) for o in sale["cost_by_owner"] if Decimal(o["machine"]) > 0}
+
+
+def test_company_sale_in_own_name_with_partner_printer(client, db, biz):
+    from app.models.printer import Printer
+
+    body = sale_payload(biz["pd"], biz["fs"], 100, owner_id=biz["company"].id, price=15000)
+    r = client.post("/api/sales", headers=biz["hc"], json=body)
+    assert r.status_code == 201, r.text
+    sale = r.json()
+    assert sale["owner_id"] == str(biz["company"].id)  # la venta queda en la Empresa
+    owners = {o["username"]: o for o in sale["cost_by_owner"]}
+    # Depreciación + luz al dueño de la impresora (Diego); el filamento al suyo (Sntg).
+    assert Decimal(owners[biz["diego"].username]["machine"]) == Decimal(sale["depreciation_cost"]) + Decimal(sale["energy_cost"])
+    assert Decimal(owners[biz["sntg"].username]["material"]) == Decimal(sale["material_cost"])
+    assert biz["company"].username not in owners  # la Empresa no puso nada
+    db.expire_all()
+    assert db.get(Printer, biz["pd"].id).hours_used == Decimal(2)  # las horas van a la impresora de Diego
+    assert db.get(Filament, biz["fs"].id).available_g == Decimal(900)
+
+
+def test_company_can_switch_to_the_other_partner_printer(client, db, biz):
+    from app.models.printer import Printer
+
+    sale = client.post("/api/sales", headers=biz["hc"],
+                       json=sale_payload(biz["pd"], owner_id=biz["company"].id)).json()
+    r = client.put(f"/api/sales/{sale['id']}", headers=biz["hc"], json={"printer_id": str(biz["ps"].id)})
+    assert r.status_code == 200, r.text
+    assert r.json()["printer_name"] == "Ender Sntg"
+    assert set(_machine_by_owner(r.json())) == {biz["sntg"].username}
+    db.expire_all()
+    assert db.get(Printer, biz["pd"].id).hours_used == 0 and db.get(Printer, biz["ps"].id).hours_used == Decimal(2)
+
+
+def test_partner_cannot_use_another_partners_printer(client, biz):
+    r = client.post("/api/sales", headers=biz["hd"], json=sale_payload(biz["ps"]))
+    assert r.status_code == 404
+
+
+def test_plain_watcher_still_sells_only_with_the_owner_printer(client, make, biz):
+    w = make.user("watcher", "obs")
+    make.assign(w, biz["diego"])
+    make.assign(w, biz["sntg"])
+    r = client.post("/api/sales", headers=make.headers(w), json=sale_payload(biz["ps"], owner_id=biz["diego"].id))
+    assert r.status_code == 404
+
+
+def test_calculator_company_sale_defaults_to_company_with_partner_printer(client, biz):
+    body = {"printer_id": str(biz["pd"].id), "filaments": [{"filament_id": str(biz["fs"].id), "grams_used": 50}],
+            "print_hours": 1, "postprocess_hours": 0, "shipping_cost": 0, "supplies": [],
+            "sale_date": str(date.today()), "client_name": "X", "payment_method": "efectivo",
+            "chosen_margin_percent": 140}
+    r = client.post("/api/calculator/quote/save-as-sale", headers=biz["hc"], json=body)
+    assert r.status_code == 201, r.text
+    sale = r.json()
+    assert sale["owner_id"] == str(biz["company"].id)
+    assert set(_machine_by_owner(sale)) == {biz["diego"].username}
+    # Un socio desde la Calculadora sigue vendiendo solo lo suyo (la venta es del dueño de la impresora).
+    r = client.post("/api/calculator/quote/save-as-sale", headers=biz["hd"],
+                    json={**body, "filaments": [{"filament_id": str(biz["fd"].id), "grams_used": 50}]})
+    assert r.status_code == 201 and r.json()["owner_id"] == str(biz["diego"].id)
+
+
+def test_printer_owner_recovers_investment_from_company_sales(client, biz):
+    sale = client.post("/api/sales", headers=biz["hc"],
+                       json=sale_payload(biz["pd"], owner_id=biz["company"].id, price=15000)).json()
+    deliver(client, biz["hc"], sale["id"])
+    inv = client.get("/api/beta/investment", headers=biz["hd"]).json()
+    recovered = {p["name"]: Decimal(p["recovered"]) for p in inv["printers"]}
+    assert recovered["A1 Diego"] == Decimal(sale["depreciation_cost"]) + Decimal(sale["energy_cost"])

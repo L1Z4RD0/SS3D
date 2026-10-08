@@ -282,6 +282,9 @@ const mixedOwnersText = computed(() =>
   resourceOwnerSummary.value.map((o) => `${o.name} (${o.what.join(", ")})`).join(" · ")
 );
 const ownerPrinters = computed(() => printers.value.filter(ownedBySaleOwner));
+// Impresora principal de la venta. La Empresa no tiene impresora propia: puede usar la de
+// cualquier socio (la depreciación y la luz quedan a cuenta del dueño de esa impresora).
+const salePrinters = computed(() => (auth.isCompany ? printers.value.filter(usableInSale) : ownerPrinters.value));
 // La Empresa mezcla su filamento con el del socio: el selector muestra de quién es cada uno.
 const pickerOwnerNames = computed(() =>
   auth.isCompany ? Object.fromEntries(observedUsers.value.map((u) => [u.id, u.username])) : {}
@@ -1018,11 +1021,14 @@ onMounted(async () => {
               {{ u.is_self ? `${u.username} (Empresa)` : u.username }}
             </option>
           </select>
-          <span class="field-hint">
-            Solo se usan la impresora, los filamentos y los insumos de este usuario<template v-if="auth.isCompany">
-              (o el filamento e insumos de la Empresa: la máquina queda a cuenta del dueño de la impresora y el
-              material a cuenta de la Empresa)</template>. La venta aparecerá en su registro indicando que la hiciste
-            tú ({{ auth.user?.username }}).
+          <span v-if="auth.isCompany" class="field-hint">
+            La venta queda a nombre de este usuario. Puedes usar la impresora, los filamentos y los insumos de
+            cualquier socio o de la Empresa: cada costo queda a cuenta de su dueño (la depreciación y la luz, del dueño
+            de la impresora) y se descuenta de su inventario.
+          </span>
+          <span v-else class="field-hint">
+            Solo se usan la impresora, los filamentos y los insumos de este usuario. La venta aparecerá en su registro
+            indicando que la hiciste tú ({{ auth.user?.username }}).
           </span>
         </div>
         <div v-if="fromWarehouse" class="alert alert-warning" style="margin-bottom: 14px">
@@ -1067,7 +1073,9 @@ onMounted(async () => {
             <label>Impresora</label>
             <select v-model="form.printer_id" required :disabled="productionLocked || (auth.isWatcher && !form.owner_id)">
               <option value="" disabled>{{ auth.isWatcher && !form.owner_id ? "Primero elige el usuario" : "Selecciona" }}</option>
-              <option v-for="p in ownerPrinters" :key="p.id" :value="p.id">{{ p.name }}</option>
+              <option v-for="p in salePrinters" :key="p.id" :value="p.id">
+                {{ auth.isCompany ? withOwner(p.name, p.owner_id) : p.name }}
+              </option>
             </select>
           </div>
           <div class="field">

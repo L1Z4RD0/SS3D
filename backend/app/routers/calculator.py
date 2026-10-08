@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.constants import ELECTRICITY_RATE, LABOR_RATE_PER_HOUR, MARGIN_SCENARIO_PERCENTS
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, is_company
 from app.models.sale import Sale
 from app.models.sale_supply import SaleSupply
 from app.models.user import User
@@ -109,12 +109,18 @@ def save_quote_as_sale(
     if manual_price is None and payload.chosen_margin_percent not in MARGIN_SCENARIO_PERCENTS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Escenario de margen inválido")
 
-    # La venta es del dueño de la impresora. Para vender, los filamentos e insumos tienen
-    # que ser de ese mismo dueño (un observador puede cotizar mezclando, pero no vender así).
+    # La venta es del dueño de la impresora y los filamentos e insumos tienen que ser de ese
+    # mismo dueño (un observador puede cotizar mezclando, pero no vender así). La Empresa no
+    # tiene impresora: usa la de un socio, la venta queda a su nombre (o de quien elija) y
+    # puede combinar recursos de todos; cada costo queda a cuenta de su dueño.
     printer = resolve_printer(db, current_user, payload.printer_id)
-    owner_id = resolve_sale_owner(db, current_user, printer.user_id)
-    # Recursos del dueño de la impresora; si vende la Empresa, de cualquier socio o propios.
+    if is_company(current_user):
+        owner_id = resolve_sale_owner(db, current_user, payload.owner_id or current_user.id)
+    else:
+        owner_id = resolve_sale_owner(db, current_user, printer.user_id)
     allowed = sale_resource_owner_ids(db, owner_id, current_user)
+    if printer.user_id not in allowed:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Impresora no encontrada")
     resolved_filaments = resolve_filaments(db, current_user, payload.filaments)
     resolved_supplies = resolve_supplies(db, current_user, payload.supplies)
     resolved_plates = resolve_plates(db, current_user, payload.extra_plates)

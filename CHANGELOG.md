@@ -331,3 +331,13 @@
 **¿Generó migración de Alembic?:** No — se hizo directamente en Supabase (SQL Editor y ajustes del Data API). **Pendiente:** el repo no refleja el RLS de las 20 tablas antiguas. Si algún día se recrea la base desde cero con `alembic upgrade head`, esas tablas quedarían sin RLS; conviene agregar una migración `0016` que lo active (en Supabase no cambiaría nada, porque ya está aplicado).
 
 **Cambios grandes o riesgosos:** Ninguno para la app: ni el frontend ni el backend usan el Data API, y `discord_messages` y `sale_plates` ya funcionaban en producción con RLS, lo que confirmaba que el backend no se ve afectado. El uso de logs de este ciclo no se "recupera" (es un contador que se reinicia el 4 de octubre) y no hubo cobro. Verificado: los errores `pg_pgrst_no_exposed_schemas` dejaron de aparecer en los Logs de Supabase después del cambio.
+
+## [2026-10-08] - Cuenta Empresa: usar la impresora de un socio en sus ventas
+
+**Qué se hizo:** La cuenta Empresa (Simple_Solutions3D) ahora puede elegir la impresora de cualquiera de los socios que observa (Diego o Sntg) al crear o editar una venta en Nueva Venta, y al guardar una cotización como venta desde la Calculadora. La venta queda a nombre de la Empresa (en la Calculadora se agregó el selector "Venta a nombre de", que por defecto es la Empresa) y la depreciación y la luz quedan a cuenta del dueño de la impresora, igual que ya pasaba con filamentos e insumos. En los selectores, la Empresa ve cada impresora con el nombre de su dueño. Antes la impresora tenía que ser del dueño de la venta, y desde la Calculadora la venta quedaba a nombre del dueño de la impresora en vez de la Empresa.
+
+**Por qué:** La Empresa no tiene impresoras propias, así que no podía registrar ventas a su nombre aunque ya podía combinar los inventarios de los socios.
+
+**¿Generó migración de Alembic?:** No. Solo cambió la validación de `POST/PUT /api/sales` y `POST /api/calculator/quote/save-as-sale` (este último acepta un `owner_id` opcional, solo para la Empresa).
+
+**Cambios grandes o riesgosos:** Ninguno. Un socio sigue vendiendo solo con su propia impresora y un observador común sigue usando la del dueño de la venta. El Reparto y la Inversión recuperada ya asignaban la máquina por dueño de impresora, así que la recuperación de inversión se suma al socio dueño. Verificado con 6 tests nuevos en `tests/test_company.py` (131 tests en total, todos OK) y build del frontend sin errores, contra la base local desechable; no se tocó producción.

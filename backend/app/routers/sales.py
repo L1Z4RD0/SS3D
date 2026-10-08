@@ -290,10 +290,11 @@ def create_sale(
     # La venta usa solo el inventario de un dueño: el propio usuario, o el usuario
     # asignado que eligió el observador. Así los inventarios nunca se mezclan.
     owner_id = resolve_sale_owner(db, current_user, payload.owner_id)
-    # La impresora es del dueño de la venta; si vende la Empresa, filamentos, insumos y
-    # planchas pueden ser de cualquiera de los socios que observa o propios.
+    # Un socio vende solo con lo suyo. Si vende la Empresa, la impresora, los filamentos,
+    # los insumos y las planchas pueden ser de cualquiera de los socios que observa o
+    # propios (la Empresa no tiene impresora): cada costo queda a cuenta de su dueño.
     resource_owners = sale_resource_owner_ids(db, owner_id, current_user)
-    printer = resolve_printer(db, current_user, payload.printer_id, [owner_id])
+    printer = resolve_printer(db, current_user, payload.printer_id, resource_owners)
     resolved_filaments = resolve_filaments(db, current_user, payload.filaments, resource_owners)
     resolved_supplies = resolve_supplies(db, current_user, payload.supplies, resource_owners)
     resolved_plates = resolve_plates(db, current_user, payload.extra_plates, resource_owners)
@@ -505,7 +506,8 @@ def _update_full(db: Session, sale: Sale, payload: SaleUpdateRequest, changes: d
     new_filaments = payload.filaments if "filaments" in payload.model_fields_set else None
     new_supplies = payload.supplies if "supplies" in payload.model_fields_set else None
 
-    printer = resolve_printer(db, current_user, new_printer_id, [sale.user_id])
+    # Mismos dueños posibles que al crearla (la Empresa: impresora de cualquier socio).
+    printer = resolve_printer(db, current_user, new_printer_id, owner_ids)
     resolved_supplies = (
         resolve_supplies(db, current_user, new_supplies, owner_ids)
         if new_supplies is not None
