@@ -1,0 +1,21 @@
+# Mantiene despierto el backend en Render (plan gratis): Render lo apaga tras 15 minutos sin
+# visitas y volver a encenderlo tarda 30-60 s. Esta tarea lo visita cada 10 minutos.
+# Gratis en repositorios públicos. GitHub puede atrasar algunas ejecuciones unos minutos,
+# y pausa las tareas programadas si el repositorio pasa 60 días sin commits (avisa por correo).
+name: Mantener backend despierto
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: # también se puede ejecutar a mano desde la pestaña Actions
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Visitar /api/health
+        run: |
+          curl --fail --silent --show-error --max-time 90 --retry 2 --retry-delay 10 \
+            -o /dev/null -w "HTTP %{http_code} en %{time_total}s\n" \
+            https://ss3d-yyub.onrender.com/api/health
