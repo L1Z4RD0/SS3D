@@ -21,7 +21,11 @@ const showShell = computed(() => auth.isAuthenticated && !route.meta.public);
       <AppTopbar />
       <div class="app-content">
         <SupplyDebtBanner />
-        <router-view />
+        <router-view v-slot="{ Component, route: current }">
+          <Transition name="page">
+            <component :is="Component" :key="current.path" />
+          </Transition>
+        </router-view>
       </div>
     </div>
   </div>

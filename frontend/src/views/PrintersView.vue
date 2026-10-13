@@ -8,6 +8,7 @@ import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
 import { useAuthStore } from "../stores/auth";
 import { useObservedUsers } from "../composables/useObservedUsers";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 
 // La Empresa ve las impresoras de los socios (para vender con ellas) pero solo administra
 // las suyas. Para un usuario normal todas son propias.
@@ -120,7 +121,7 @@ onMounted(() => {
     </div>
 
     <div class="card">
-      <div v-if="loading" class="empty-state">Cargando...</div>
+      <LoadingSkeleton v-if="loading && !printers.length" />
       <div v-else-if="!printers.length" class="empty-state">
         <h3>Aún no tienes impresoras</h3>
         <p>Agrega tu primera impresora para empezar a calcular depreciación y costos.</p>

@@ -6,6 +6,7 @@ import { isValidNumber, extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
 import StatCard from "../components/StatCard.vue";
 import Icon from "../components/Icon.vue";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 
 /* Reparto del mes (BETA): una guía de lo que le correspondería a cada socio. Solo lee
    ventas e inventario; lo único que se guarda aquí son los gastos de la Empresa. */
@@ -109,7 +110,7 @@ async function removeExpense(e) {
     </div>
 
     <div v-if="error" class="alert alert-danger">{{ error }}</div>
-    <div v-if="loading && !report" class="card empty-state">Calculando...</div>
+    <div v-if="loading && !report" class="card"><LoadingSkeleton :lines="6" /></div>
 
     <template v-if="report">
       <div class="grid grid-cols-4 stats">

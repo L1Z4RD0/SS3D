@@ -22,6 +22,7 @@ import RiskLevelPicker from "../components/RiskLevelPicker.vue";
 import HoursMinutesInput from "../components/HoursMinutesInput.vue";
 import { platesPayload, platesError } from "../utils/plates";
 import { useObservedUsers } from "../composables/useObservedUsers";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 
 const auth = useAuthStore();
 // Observador: cotiza con recursos de varios usuarios (puede mezclarlos), así que cada
@@ -573,6 +574,9 @@ function printQuote() {
   window.print();
 }
 
+// Tras la primera carga, el formulario queda a la vista aunque se vuelva a consultar el
+// inventario (ej. después de guardar una venta).
+const catalogLoaded = ref(false);
 async function loadCatalog() {
   loadingCatalog.value = true;
   try {
@@ -584,6 +588,7 @@ async function loadCatalog() {
     printers.value = p;
     filaments.value = f;
     supplies.value = s;
+    catalogLoaded.value = true;
   } finally {
     loadingCatalog.value = false;
   }
@@ -716,7 +721,7 @@ onMounted(() => {
       <p v-else class="page-subtitle">Calcula el costo real de un trabajo, guárdalo como venta o agrégalo a una cotización</p>
     </div>
 
-    <div v-if="loadingCatalog" class="empty-state">Cargando...</div>
+    <LoadingSkeleton v-if="loadingCatalog && !catalogLoaded" />
 
     <div v-else class="grid calculator-grid">
       <div class="card">

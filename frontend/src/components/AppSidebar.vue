@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import * as betaApi from "../api/beta";
 import { useRoute } from "vue-router";
 import { useAuthStore } from "../stores/auth";
@@ -54,6 +54,25 @@ watch(
   () => route.fullPath,
   () => mobileNav.close()
 );
+
+// Fondo de la sección activa que se desliza de una opción a otra.
+const navEl = ref(null);
+const indicator = ref({ top: 0, height: 0, visible: false });
+function moveIndicator() {
+  const active = navEl.value?.querySelector(".nav-item.router-link-active");
+  indicator.value = active
+    ? { top: active.offsetTop, height: active.offsetHeight, visible: true }
+    : { ...indicator.value, visible: false };
+}
+watch(
+  () => [route.fullPath, beta.value.split, beta.value.investment, auth.isAdmin],
+  () => nextTick(moveIndicator)
+);
+onMounted(() => {
+  nextTick(moveIndicator);
+  window.addEventListener("resize", moveIndicator);
+});
+onBeforeUnmount(() => window.removeEventListener("resize", moveIndicator));
 </script>
 
 <template>
@@ -68,7 +87,13 @@ watch(
       </button>
     </div>
 
-    <nav class="sidebar-nav">
+    <nav ref="navEl" class="sidebar-nav" :class="{ 'has-indicator': indicator.visible }">
+      <div
+        class="nav-indicator"
+        :class="{ visible: indicator.visible }"
+        :style="{ transform: `translateY(${indicator.top}px)`, height: `${indicator.height}px` }"
+        aria-hidden="true"
+      ></div>
       <router-link v-for="link in links" :key="link.to" :to="link.to" class="nav-item">
         <Icon :name="link.icon" :size="20" />
         <span>{{ link.label }}</span>
@@ -192,6 +217,47 @@ watch(
 .nav-item.router-link-active {
   background: var(--sidebar-active-bg);
   color: var(--sidebar-text-active);
+}
+
+.sidebar-nav {
+  position: relative;
+}
+
+.nav-item {
+  position: relative;
+  z-index: 1;
+}
+
+/* Con el indicador listo, el fondo activo lo dibuja el indicador (que se desliza). */
+.sidebar-nav.has-indicator .nav-item.router-link-active {
+  background: transparent;
+}
+
+.nav-indicator {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  border-radius: 10px;
+  background: var(--sidebar-active-bg);
+  opacity: 0;
+  transition: transform 0.4s var(--ease-out), height 0.3s var(--ease-out), opacity 0.2s;
+  pointer-events: none;
+}
+
+.nav-indicator.visible {
+  opacity: 1;
+}
+
+.nav-indicator::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 3px;
+  background: linear-gradient(var(--primary), var(--accent));
 }
 
 .sidebar-footer {

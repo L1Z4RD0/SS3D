@@ -1,4 +1,5 @@
 import axios from "axios";
+import { requestFinished, requestStarted } from "../composables/useRequestActivity";
 
 const baseURL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -19,6 +20,7 @@ export function setUnauthorizedHandler(handler) {
 }
 
 client.interceptors.request.use((config) => {
+  requestStarted();
   if (accessToken) {
     config.headers.Authorization = `Bearer ${accessToken}`;
   }
@@ -28,8 +30,14 @@ client.interceptors.request.use((config) => {
 let refreshPromise = null;
 
 client.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    requestFinished();
+    return response;
+  },
   async (error) => {
+    // Si la petición nunca llegó a enviarse (error en el interceptor de salida) no hay nada
+    // que descontar; en cualquier otro caso esta petición terminó.
+    if (error.config) requestFinished();
     const original = error.config;
     const status = error.response?.status;
 

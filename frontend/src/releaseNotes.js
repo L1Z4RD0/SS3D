@@ -8,6 +8,28 @@
    Textos cortos y en el idioma de los usuarios (qué pueden hacer ahora), no técnicos. */
 export const RELEASES = [
   {
+    id: "2026-10-13",
+    date: "13 de octubre de 2026",
+    title: "Más fluida y sin parpadeos",
+    items: [
+      {
+        icon: "⚡",
+        title: "Sin parpadeos al actualizar",
+        text: "Al cambiar un estado o guardar, la información ya no desaparece: se actualiza en su lugar. Una barra fina arriba indica que está trabajando.",
+      },
+      {
+        icon: "✨",
+        title: "Animaciones nuevas",
+        text: "Las páginas, tarjetas, ventanas y el menú se mueven con más fluidez, y los números del Dashboard cuentan hasta su valor.",
+      },
+      {
+        icon: "🔆",
+        title: "Se ve qué cambió",
+        text: "En Ventas, el pedido que acabas de modificar se ilumina un instante.",
+      },
+    ],
+  },
+  {
     // Sale el mismo día que la anterior: repite sus puntos para quien todavía no la vio.
     id: "2026-10-05.2",
     date: "5 de octubre de 2026",

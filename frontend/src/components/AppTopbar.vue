@@ -1,5 +1,6 @@
 <script setup>
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
+import { useRequestActivity } from "../composables/useRequestActivity";
 import { useRoute, useRouter } from "vue-router";
 import { useAuthStore } from "../stores/auth";
 import { useTheme } from "../composables/useTheme";
@@ -29,6 +30,17 @@ const titles = {
 
 const title = computed(() => titles[route.name] || "Zola");
 
+// Barra fina mientras se actualizan datos. Solo aparece si la espera supera 250 ms, para
+// que las respuestas rápidas no la hagan parpadear.
+const { pending } = useRequestActivity();
+const refreshing = ref(false);
+let refreshTimer = null;
+watch(pending, (count) => {
+  clearTimeout(refreshTimer);
+  if (count > 0) refreshTimer = setTimeout(() => (refreshing.value = true), 250);
+  else refreshing.value = false;
+});
+
 async function handleLogout() {
   await auth.logout();
   router.push({ name: "login" });
@@ -52,6 +64,7 @@ async function handleLogout() {
         <span class="logout-label">Cerrar sesión</span>
       </button>
     </div>
+    <div class="refresh-bar" :class="{ on: refreshing }" aria-hidden="true"></div>
   </header>
 </template>
 

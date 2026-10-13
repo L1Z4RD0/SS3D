@@ -4,6 +4,7 @@ import * as historyApi from "../api/history";
 import { formatCurrency, formatNumber, formatPercent } from "../utils/format";
 import StatCard from "../components/StatCard.vue";
 import MonthlyTrendChart from "../components/MonthlyTrendChart.vue";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 
 const months = ref([]);
 const selectedKeys = ref([]);
@@ -66,7 +67,7 @@ function isSelected(m) {
       <p class="page-subtitle">Estadísticas de tu negocio agrupadas por mes — selecciona uno para verlo en detalle, o varios para comparar su evolución. Cuenta los pedidos Entregados, en el mes de su entrega.</p>
     </div>
 
-    <div v-if="loading" class="empty-state">Cargando...</div>
+    <LoadingSkeleton v-if="loading && !months.length" />
 
     <template v-else>
       <div class="card" style="margin-bottom: 20px">

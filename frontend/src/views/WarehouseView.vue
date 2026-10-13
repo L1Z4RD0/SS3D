@@ -9,6 +9,7 @@ import { useAuthStore } from "../stores/auth";
 import { useObservedUsers } from "../composables/useObservedUsers";
 import Modal from "../components/Modal.vue";
 import OrderStatusModal from "../components/OrderStatusModal.vue";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 
 /* Almacén: piezas de pedidos cancelados que siguen en nuestro poder. Se pueden vender
    (crea un pedido que nace Lista, sin descontar material), editar y descartar (el costo
@@ -251,7 +252,7 @@ const ownerLabel = computed(() => observedUsers.value.find((u) => u.id === owner
       </div>
 
       <div v-if="error" class="alert alert-danger">{{ error }}</div>
-      <div v-else-if="loading" class="empty-state">Cargando...</div>
+      <LoadingSkeleton v-else-if="loading && !pieces.length" />
       <div v-else-if="!pieces.length" class="empty-state">
         <h3>Sin piezas</h3>
         <p>Las piezas llegan aquí al cancelar un pedido En producción o Lista y elegir guardarlas en el Almacén.</p>

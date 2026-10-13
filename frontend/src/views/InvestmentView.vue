@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from "vue";
 import * as betaApi from "../api/beta";
 import { formatCurrency } from "../utils/format";
 import { extractApiError } from "../utils/validation";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 
 /* Mi inversión (BETA): cuánto lleva recuperado cada socio de lo que puso en impresoras y
    filamento, según lo que se cobró en los pedidos entregados. */
@@ -37,7 +38,7 @@ const total = computed(() =>
     </div>
 
     <div v-if="error" class="alert alert-danger">{{ error }}</div>
-    <div v-if="loading" class="card empty-state">Calculando...</div>
+    <div v-if="loading" class="card"><LoadingSkeleton :lines="6" /></div>
 
     <template v-if="data">
       <div class="card total-card">

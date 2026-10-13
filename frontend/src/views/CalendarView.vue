@@ -446,9 +446,11 @@ function onChanged() {
   box-shadow: var(--shadow-sm);
 }
 
+/* Mientras se actualiza, el calendario sigue a la vista (antes se atenuaba al 55 % y
+   "parpadeaba" en cada cambio de estado). */
 .is-loading {
-  opacity: 0.55;
-  transition: opacity 0.15s;
+  opacity: 0.9;
+  transition: opacity 0.2s;
 }
 
 /* ---------- Mes ---------- */

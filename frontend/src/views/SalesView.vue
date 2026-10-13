@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, onMounted, computed, watch } from "vue";
+import { ref, reactive, onMounted, computed, watch, nextTick } from "vue";
 import * as salesApi from "../api/sales";
 import * as calculatorApi from "../api/calculator";
 import * as betaApi from "../api/beta";
@@ -23,6 +23,7 @@ import AddPlateModal from "../components/AddPlateModal.vue";
 import { platesPayload, platesError } from "../utils/plates";
 import OrderStatusModal from "../components/OrderStatusModal.vue";
 import { STATUS_LABELS, NEXT_ACTION, OPEN_STATUSES, statusClass, isOverdue } from "../utils/orderStatus";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 
 const auth = useAuthStore();
 const today = todayISO();
@@ -74,9 +75,23 @@ const saleOwnerFilaments = (sale) =>
   );
 const canManagePlates = (sale) => sale.can_edit && OPEN_STATUSES.includes(sale.status) && !sale.warehouse_item_id;
 
+// La fila que acaba de cambiar se ilumina un instante (ver .row-flash en motion.css).
+const flashedId = ref(null);
+let flashTimer = null;
+function flashRow(id) {
+  if (!id) return;
+  clearTimeout(flashTimer);
+  flashedId.value = null;
+  nextTick(() => {
+    flashedId.value = id;
+    flashTimer = setTimeout(() => (flashedId.value = null), 1500);
+  });
+}
+
 function replaceSale(updated) {
   const i = sales.value.findIndex((x) => x.id === updated.id);
   if (i !== -1) sales.value[i] = updated;
+  flashRow(updated.id);
 }
 async function onPlateSaved(updated) {
   plateSale.value = null;
@@ -673,6 +688,7 @@ async function handleSubmit() {
       : await salesApi.createSale(buildPayload());
     showModal.value = false;
     await loadSales();
+    flashRow(sale.id);
     await loadCatalog();
     await promptExhaustedFilaments(sale.exhausted_filaments);
     await loadCatalog();
@@ -726,6 +742,7 @@ async function advance(sale) {
   try {
     await salesApi.changeSaleStatus(sale.id, { status: next.status, today });
     await loadSales();
+    flashRow(sale.id);
   } catch (err) {
     await confirmAction({
       title: "No se pudo cambiar el estado",
@@ -811,7 +828,7 @@ onMounted(async () => {
     </div>
 
     <div class="card">
-      <div v-if="loading" class="empty-state">Cargando...</div>
+      <LoadingSkeleton v-if="loading && !sales.length" />
       <div v-else-if="!sales.length" class="empty-state">
         <h3>No hay ventas</h3>
         <p>Ajusta los filtros o crea una venta nueva.</p>
@@ -837,7 +854,7 @@ onMounted(async () => {
             </thead>
             <tbody>
               <template v-for="s in sales" :key="s.id">
-              <tr :class="{ 'row-expanded': expandedCostId === s.id }">
+              <tr :class="{ 'row-expanded': expandedCostId === s.id, 'row-flash': flashedId === s.id }">
                 <td>
                   {{ formatDate(s.sale_date) }}
                   <div class="text-sm" :class="isOverdue(s, today) ? 'overdue-text' : 'text-muted'">{{ deliveryLabel(s) }}</div>
@@ -1264,7 +1281,7 @@ onMounted(async () => {
       v-if="statusModalSaleId"
       :sale-id="statusModalSaleId"
       @close="statusModalSaleId = null"
-      @changed="loadSales"
+      @changed="(s) => loadSales().then(() => flashRow(s?.id))"
     />
 
     <AddPlateModal

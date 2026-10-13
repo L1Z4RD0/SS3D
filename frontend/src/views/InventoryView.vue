@@ -12,6 +12,7 @@ import { todayISO } from "../utils/format";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
 import FilamentSpoolIcon from "../components/FilamentSpoolIcon.vue";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 
 const auth = useAuthStore();
 
@@ -515,7 +516,7 @@ async function deleteSupply(s) {
         </div>
       </div>
 
-      <div v-if="loadingFilaments" class="empty-state">Cargando...</div>
+      <LoadingSkeleton v-if="loadingFilaments && !filaments.length" />
       <div v-else-if="!ownerFilaments.length" class="empty-state">
         <h3>Sin filamentos registrados</h3>
         <p v-if="auth.isWatcher">Este usuario no tiene filamentos{{ showExhausted ? "" : " con stock" }}.</p>
@@ -575,7 +576,7 @@ async function deleteSupply(s) {
         <span style="flex: 1">{{ restockResult }}</span>
         <button type="button" class="btn btn-icon btn-ghost btn-sm" aria-label="Cerrar" @click="restockResult = ''">✕</button>
       </div>
-      <div v-if="loadingSupplies" class="empty-state">Cargando...</div>
+      <LoadingSkeleton v-if="loadingSupplies && !supplies.length" />
       <div v-else-if="!ownerSupplies.length" class="empty-state">
         <h3>Sin insumos registrados</h3>
         <p v-if="auth.isWatcher">Este usuario no tiene insumos registrados.</p>

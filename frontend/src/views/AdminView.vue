@@ -7,6 +7,7 @@ import { confirmAction } from "../composables/useConfirm";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
 import PasswordInput from "../components/PasswordInput.vue";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 
 const tab = ref("users");
 
@@ -190,7 +191,7 @@ onMounted(() => {
         </button>
       </div>
 
-      <div v-if="loadingUsers" class="empty-state">Cargando...</div>
+      <LoadingSkeleton v-if="loadingUsers && !users.length" />
       <div v-else class="table-wrap">
         <table>
           <thead>
@@ -274,7 +275,7 @@ onMounted(() => {
         <button class="btn btn-secondary btn-sm" @click="resetLogFilters">Limpiar</button>
       </div>
 
-      <div v-if="loadingLogs" class="empty-state">Cargando...</div>
+      <LoadingSkeleton v-if="loadingLogs && !logs.length" />
       <div v-else-if="!logs.length" class="empty-state">Sin eventos para este filtro.</div>
       <template v-else>
         <div class="table-wrap">

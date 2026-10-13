@@ -8,6 +8,7 @@ import StatCard from "../components/StatCard.vue";
 import DoughnutChart from "../components/DoughnutChart.vue";
 import Icon from "../components/Icon.vue";
 import { useAuthStore } from "../stores/auth";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 
 const auth = useAuthStore();
 
@@ -113,7 +114,7 @@ onMounted(loadAll);
       </div>
     </div>
 
-    <div v-if="loading" class="empty-state">Cargando...</div>
+    <LoadingSkeleton v-if="loading && !summary" />
 
     <template v-else-if="summary">
       <div class="grid grid-cols-4" style="margin-bottom: 20px">

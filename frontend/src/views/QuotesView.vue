@@ -4,6 +4,7 @@ import * as quotesApi from "../api/quotes";
 import { formatCurrency, formatDate } from "../utils/format";
 import { extractApiError } from "../utils/validation";
 import Modal from "../components/Modal.vue";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 
 const quotes = ref([]);
 const total = ref(0);
@@ -65,7 +66,7 @@ onMounted(load);
       <p class="page-subtitle">Respaldo de todas las cotizaciones que generaste, con su comprobante</p>
     </div>
 
-    <div v-if="loading" class="empty-state">Cargando...</div>
+    <LoadingSkeleton v-if="loading && !quotes.length" />
     <div v-else-if="loadError" class="alert alert-danger">{{ loadError }}</div>
     <div v-else-if="!quotes.length" class="card empty-state">
       <h3>Todavía no generaste cotizaciones</h3>

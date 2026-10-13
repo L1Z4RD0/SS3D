@@ -5,6 +5,7 @@ import App from "./App.vue";
 import router from "./router";
 import { useAuthStore } from "./stores/auth";
 import "./assets/main.css";
+import "./assets/motion.css";
 
 // Actualización de la PWA. Antes el service worker se registraba con el script por
 // defecto, que descarga la versión nueva en segundo plano pero nunca recarga la página:

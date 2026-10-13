@@ -8,6 +8,7 @@ import { confirmAction } from "../composables/useConfirm";
 import { STATUS_LABELS, OPEN_STATUSES, statusClass, statusOptions, isOverdue } from "../utils/orderStatus";
 import Modal from "./Modal.vue";
 import CancelOrderModal from "./CancelOrderModal.vue";
+import LoadingSkeleton from "./LoadingSkeleton.vue";
 
 /* Detalle de un pedido: datos clave, línea de tiempo de estados (cuándo se creó, cómo
    avanzó y quién lo movió) y botones para cambiar de estado. Se usa en Ventas y en el
@@ -159,7 +160,7 @@ onMounted(load);
 
 <template>
   <Modal :title="sale ? sale.client_name : 'Pedido'" subtitle="Estado y línea de tiempo del pedido" width="560px" @close="emit('close')">
-    <div v-if="loading" class="empty-state">Cargando...</div>
+    <LoadingSkeleton v-if="loading && !sale" />
     <div v-else-if="!sale" class="alert alert-danger">{{ error }}</div>
     <template v-else>
       <div class="order-summary">

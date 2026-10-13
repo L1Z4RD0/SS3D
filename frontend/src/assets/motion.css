@@ -1,0 +1,241 @@
+/* ============================================================================
+   Animaciones de Zola
+   Todas viven aquí para poder revisarlas o desactivarlas de una vez (quitando el
+   import en main.js). Duran entre 0,2 y 0,5 s y usan los colores de la marca.
+   Con "reducir movimiento" activado en el sistema se apagan (al final del archivo).
+   ============================================================================ */
+
+:root {
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+@keyframes zola-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------- 1. Entrada de cada página (App.vue: <Transition name="page">) ---------- */
+.page-enter-active {
+  animation: zola-rise 0.45s var(--ease-out);
+}
+/* Al salir no se anima: la página nueva entra apenas se elige. */
+.page-leave-active {
+  display: none;
+}
+
+/* Tarjetas de cifras y filas de tablas entran en cascada, solo al aparecer (al
+   actualizar datos las filas ya existentes no se vuelven a animar). */
+.stat-card {
+  animation: zola-rise 0.45s var(--ease-out) both;
+}
+.grid > .stat-card:nth-child(2) { animation-delay: 0.05s; }
+.grid > .stat-card:nth-child(3) { animation-delay: 0.1s; }
+.grid > .stat-card:nth-child(4) { animation-delay: 0.15s; }
+.grid > .stat-card:nth-child(5) { animation-delay: 0.2s; }
+.grid > .stat-card:nth-child(6) { animation-delay: 0.25s; }
+.grid > .stat-card:nth-child(n + 7) { animation-delay: 0.3s; }
+
+.table-wrap tbody tr {
+  animation: zola-rise 0.4s var(--ease-out) both;
+}
+.table-wrap tbody tr:nth-child(2) { animation-delay: 0.03s; }
+.table-wrap tbody tr:nth-child(3) { animation-delay: 0.06s; }
+.table-wrap tbody tr:nth-child(4) { animation-delay: 0.09s; }
+.table-wrap tbody tr:nth-child(5) { animation-delay: 0.12s; }
+.table-wrap tbody tr:nth-child(6) { animation-delay: 0.15s; }
+.table-wrap tbody tr:nth-child(7) { animation-delay: 0.18s; }
+.table-wrap tbody tr:nth-child(8) { animation-delay: 0.21s; }
+.table-wrap tbody tr:nth-child(n + 9) { animation-delay: 0.24s; }
+
+/* ---------- 2. Tarjetas y botones ---------- */
+.stat-card {
+  transition: transform 0.25s var(--ease-out), box-shadow 0.25s var(--ease-out), border-color 0.25s;
+}
+.stat-card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-md);
+  border-color: color-mix(in srgb, var(--primary) 25%, var(--border));
+}
+
+.btn {
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.25s var(--ease-out),
+    transform 0.15s var(--ease-out);
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.btn-primary {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 70%, #a855f7));
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--primary) 28%, transparent);
+}
+.btn-primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, var(--primary-hover), color-mix(in srgb, var(--primary-hover) 70%, #a855f7));
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--primary) 38%, transparent);
+}
+.btn-primary:active:not(:disabled) {
+  transform: scale(0.97);
+}
+/* Brillo que recorre el botón al pasar el mouse */
+.btn-primary::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -60%;
+  width: 45%;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.28), transparent);
+  pointer-events: none;
+}
+.btn-primary:hover:not(:disabled)::after {
+  left: 120%;
+  transition: left 0.75s var(--ease-out);
+}
+
+/* ---------- 3. Actualizar sin recargar ---------- */
+/* Barra fina bajo la barra superior mientras hay peticiones en curso (AppTopbar). */
+.refresh-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 3px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s;
+}
+.refresh-bar.on {
+  opacity: 1;
+}
+.refresh-bar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -40%;
+  width: 40%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, transparent, var(--primary), var(--accent), transparent);
+  animation: zola-slide 1.1s var(--ease-out) infinite;
+}
+@keyframes zola-slide {
+  to {
+    left: 100%;
+  }
+}
+
+/* La fila que cambió se ilumina un instante y su estado hace un "pulso". */
+@keyframes zola-flash {
+  from {
+    background-color: var(--primary-soft);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+@keyframes zola-ring {
+  from {
+    opacity: 0.8;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.35);
+  }
+}
+.row-flash > td {
+  animation: zola-flash 1.4s var(--ease-out);
+}
+/* Solo la etiqueta de estado (status-*), no la de pago u otras de la fila. */
+.row-flash .badge[class*="status-"] {
+  position: relative;
+}
+.row-flash .badge[class*="status-"]::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 999px;
+  border: 2px solid currentColor;
+  animation: zola-ring 0.9s var(--ease-out) 2;
+  pointer-events: none;
+  opacity: 0;
+}
+
+/* ---------- 4. Ventanas emergentes ---------- */
+@keyframes zola-backdrop-in {
+  from {
+    background-color: rgba(10, 10, 20, 0);
+    backdrop-filter: blur(0);
+  }
+}
+@keyframes zola-pop {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes zola-sheet {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+.modal-backdrop {
+  backdrop-filter: blur(3px);
+  animation: zola-backdrop-in 0.3s ease;
+}
+.modal {
+  animation: zola-pop 0.42s var(--ease-spring);
+}
+@media (max-width: 480px) {
+  /* En celular la ventana sube desde abajo */
+  .modal {
+    animation: zola-sheet 0.38s var(--ease-out);
+  }
+}
+
+/* ---------- 5. Primera carga: esqueleto con brillo (LoadingSkeleton.vue) ---------- */
+@keyframes zola-shimmer {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+.skeleton-line {
+  height: 14px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--surface-alt) 0%, var(--border) 40%, var(--surface-alt) 80%);
+  background-size: 200% 100%;
+  animation: zola-shimmer 1.2s linear infinite;
+}
+
+/* ---------- Respetar "reducir movimiento" del sistema ---------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0s !important;
+    transition-duration: 0.01ms !important;
+  }
+}
