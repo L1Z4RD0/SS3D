@@ -9,6 +9,34 @@
 export const RELEASES = [
   {
     // Sale el mismo día que la anterior: repite sus puntos para quien todavía no la vio.
+    id: "2026-10-20.3",
+    date: "20 de octubre de 2026",
+    title: "Colores de filamento confiables y gráficos con vida",
+    items: [
+      {
+        icon: "🎨",
+        title: "El color del carrete siempre se ve",
+        text: "La foto del carrete se pinta del tono elegido en todos los navegadores, también en el celular. Si la foto tardara en cargar, ves un círculo del color en vez de un espacio vacío.",
+      },
+      {
+        icon: "💾",
+        title: "El tono queda como lo dejaste",
+        text: "Editar un filamento ya no le cambia el color a gris por error.",
+      },
+      {
+        icon: "🧮",
+        title: "Calculadora animada",
+        text: "Al calcular, el desglose de costos se dibuja por partes y los escenarios muestran en barras cuánto es costo y cuánto ganancia.",
+      },
+      {
+        icon: "📈",
+        title: "Historial y Dashboard",
+        text: "Los gráficos crecen y se dibujan al aparecer, y cada mes del Historial trae su mini tendencia.",
+      },
+    ],
+  },
+  {
+    // Sale el mismo día que la anterior: repite sus puntos para quien todavía no la vio.
     id: "2026-10-20.2",
     date: "20 de octubre de 2026",
     title: "Gráficos con vida",

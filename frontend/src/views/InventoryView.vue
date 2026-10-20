@@ -106,7 +106,7 @@ onMounted(() => {
   if (auth.isWatcher) loadOwners();
   loadFilaments();
   loadSupplies();
-  ensureFilamentCatalog();
+  ensureFilamentCatalog().catch(() => {});
 });
 
 /* -------- Filaments -------- */
@@ -158,6 +158,7 @@ const multiRollCount = ref(2);
 
 function openCreateFilament() {
   editingFilamentId.value = null;
+  placeholderHex = null;
   Object.assign(filamentForm, emptyFilamentForm());
   filamentForm.type = catalog.value.materials.some((m) => m.name === "PLA") ? "PLA" : "";
   customBrandText.value = "";
@@ -168,7 +169,14 @@ function openCreateFilament() {
   showFilamentModal.value = true;
 }
 
-function openEditFilament(f) {
+// Tono que se mostró al abrir la edición cuando el filamento no tenía uno propio ni había
+// tono de catálogo (gris de relleno): si el usuario no lo cambia, no se guarda ese gris.
+let placeholderHex = null;
+
+async function openEditFilament(f) {
+  // El tono de los filamentos antiguos sale del catálogo: se espera a que esté cargado,
+  // si no se mostraría (y guardaría) gris.
+  await ensureFilamentCatalog().catch(() => {});
   editingFilamentId.value = f.id;
   const brandMatch = catalog.value.brands.some((b) => b.name === f.brand);
   const materialMatch = catalog.value.materials.some((m) => m.name === f.type);
@@ -184,6 +192,7 @@ function openEditFilament(f) {
     min_alert_g: Number(f.min_alert_g),
     spool_price: Number(f.spool_price),
   });
+  placeholderHex = !f.color_hex && !catalogHexFor(f.color) ? filamentForm.color_hex : null;
   customBrandText.value = brandMatch ? "" : f.brand;
   customMaterialText.value = materialMatch ? "" : f.type;
 
@@ -235,6 +244,7 @@ async function submitFilament() {
     color: filamentForm.color.trim(),
     sku: baseSku || null,
   };
+  if (editingFilamentId.value && placeholderHex && payload.color_hex === placeholderHex) delete payload.color_hex;
   let createdCount = 0;
   try {
     if (editingFilamentId.value) {

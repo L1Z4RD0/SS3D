@@ -32,8 +32,11 @@ export function useFilamentCatalog() {
   function ensureFilamentCatalog() {
     if (loaded) return Promise.resolve(catalog.value);
     if (!loadPromise) {
+      // Si falla (ej. el servidor recién despertando) se reintenta una vez: sin catálogo los
+      // filamentos antiguos (sin tono propio) se verían grises.
       loadPromise = catalogApi
         .getFilamentCatalog()
+        .catch(() => new Promise((r) => setTimeout(r, 2500)).then(() => catalogApi.getFilamentCatalog()))
         .then((data) => {
           catalog.value = data;
           loaded = true;
