@@ -8,6 +8,39 @@
    Textos cortos y en el idioma de los usuarios (qué pueden hacer ahora), no técnicos. */
 export const RELEASES = [
   {
+    // Sale el mismo día que la anterior: repite sus puntos para quien todavía no la vio.
+    id: "2026-10-20.2",
+    date: "20 de octubre de 2026",
+    title: "Gráficos con vida",
+    items: [
+      {
+        icon: "🧮",
+        title: "Calculadora animada",
+        text: "Al calcular, el desglose de costos se dibuja por partes y los escenarios muestran en barras cuánto es costo y cuánto ganancia. El precio manual se mueve mientras lo escribes.",
+      },
+      {
+        icon: "📈",
+        title: "Historial y Dashboard",
+        text: "Los gráficos crecen y se dibujan al aparecer, y cada mes del Historial trae su mini tendencia. Toca una parte de la dona para ver su detalle.",
+      },
+      {
+        icon: "🌈",
+        title: "Dashboard renovado",
+        text: "Arriba ves tu ganancia con su tendencia, un gráfico de ganancia mensual y qué impresoras están Ocupadas o Libres.",
+      },
+      {
+        icon: "📱",
+        title: "Barra inferior en el celular",
+        text: "Inicio, Ventas y Agenda a mano del pulgar; el botón + registra una venta nueva y \"Más\" abre el menú completo.",
+      },
+      {
+        icon: "✨",
+        title: "Tú decides cuánto se mueve",
+        text: "El botón con estrellitas de la barra superior reduce las animaciones si prefieres una app más quieta.",
+      },
+    ],
+  },
+  {
     id: "2026-10-20",
     date: "20 de octubre de 2026",
     title: "Zola con nuevo movimiento",

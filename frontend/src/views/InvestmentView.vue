@@ -1,19 +1,25 @@
 <script setup>
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, nextTick, onMounted } from "vue";
 import * as betaApi from "../api/beta";
 import { formatCurrency } from "../utils/format";
 import { extractApiError } from "../utils/validation";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
+import CountUp from "../components/CountUp.vue";
 
 /* Mi inversión (BETA): cuánto lleva recuperado cada socio de lo que puso en impresoras y
    filamento, según lo que se cobró en los pedidos entregados. */
 const data = ref(null);
 const error = ref("");
 const loading = ref(true);
+const filled = ref(false);
+const pctText = (v) => `${v.toLocaleString("es-CL", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
 
 onMounted(async () => {
   try {
     data.value = await betaApi.getMyInvestment();
+    // Las barras y el anillo arrancan vacíos y se llenan apenas se pintan.
+    await nextTick();
+    requestAnimationFrame(() => requestAnimationFrame(() => (filled.value = true)));
   } catch (err) {
     error.value = extractApiError(err, "No se pudo calcular tu inversión.");
   } finally {
@@ -41,27 +47,53 @@ const total = computed(() =>
     <div v-if="loading" class="card"><LoadingSkeleton :lines="6" /></div>
 
     <template v-if="data">
-      <div class="card total-card">
-        <div class="inv-head">
+      <div class="card total-card glow">
+        <svg class="inv-ring" viewBox="0 0 120 120" aria-hidden="true">
+          <defs>
+            <linearGradient id="inv-grad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="var(--primary)" />
+              <stop offset="1" stop-color="var(--accent)" />
+            </linearGradient>
+          </defs>
+          <circle cx="60" cy="60" r="50" class="track" />
+          <circle
+            cx="60"
+            cy="60"
+            r="50"
+            pathLength="100"
+            class="val"
+            :style="{ strokeDashoffset: filled ? 100 - pct(total) : 100 }"
+          />
+        </svg>
+        <div class="inv-total-text">
           <strong>Total recuperado</strong>
+          <div class="inv-pct"><CountUp :value="pct(total)" :format="pctText" :duration="1400" :delay="200" /></div>
           <span class="mono">
-            <strong>{{ formatCurrency(total.recovered) }}</strong> de {{ formatCurrency(total.invested) }}
+            <strong><CountUp :value="Number(total.recovered)" :format="formatCurrency" :duration="1400" :delay="200" /></strong>
+            de {{ formatCurrency(total.invested) }}
           </span>
         </div>
-        <div class="bar bar-lg"><div class="bar-fill" :style="{ width: `${pct(total)}%` }"></div></div>
-        <div class="inv-pct">{{ pct(total).toFixed(1) }}%</div>
       </div>
 
       <div class="grid grid-cols-2 inv-grid">
-        <div v-for="item in items" :key="item.name" class="card">
+        <div v-for="(item, i) in items" :key="item.name" v-reveal="i * 0.06" class="card glow">
           <div class="inv-head">
             <strong>{{ item.name }}</strong>
             <span class="text-muted text-sm">{{ item.name === "Filamentos" ? "carretes comprados" : "valor de compra" }}</span>
           </div>
-          <div class="bar"><div class="bar-fill" :class="{ done: pct(item) >= 100 }" :style="{ width: `${pct(item)}%` }"></div></div>
+          <div class="bar">
+            <div
+              class="bar-fill"
+              :class="{ done: pct(item) >= 100 }"
+              :style="{ width: filled ? `${pct(item)}%` : 0, transitionDelay: `${0.3 + i * 0.1}s` }"
+            ></div>
+          </div>
           <div class="inv-foot">
             <span class="mono">{{ formatCurrency(item.recovered) }} de {{ formatCurrency(item.invested) }}</span>
-            <strong>{{ pct(item).toFixed(1) }}%</strong>
+            <strong class="inv-item-pct">
+              <span v-if="pct(item) >= 100" class="inv-done">✓</span>
+              <CountUp :value="pct(item)" :format="pctText" :duration="1200" :delay="300 + i * 100" />
+            </strong>
           </div>
         </div>
       </div>
@@ -108,6 +140,38 @@ const total = computed(() =>
   font-size: 0.88rem;
 }
 
+.total-card {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.inv-ring {
+  width: 132px;
+  height: 132px;
+  flex-shrink: 0;
+  transform: rotate(-90deg);
+}
+.inv-ring circle {
+  fill: none;
+  stroke-width: 12;
+}
+.inv-ring .track {
+  stroke: var(--surface-alt);
+}
+.inv-ring .val {
+  stroke: url(#inv-grad);
+  stroke-linecap: round;
+  stroke-dasharray: 100;
+  transition: stroke-dashoffset 1.4s var(--ease-out) 0.2s;
+}
+
+.inv-total-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .bar {
   height: 12px;
   margin-top: 12px;
@@ -116,25 +180,55 @@ const total = computed(() =>
   overflow: hidden;
 }
 
-.bar-lg {
-  height: 18px;
-}
-
 .bar-fill {
+  position: relative;
   height: 100%;
   border-radius: 999px;
   background: linear-gradient(90deg, var(--primary), var(--accent));
-  transition: width 0.4s ease;
+  transition: width 1.2s var(--ease-out);
+  overflow: hidden;
+}
+/* Brillo que recorre la barra de vez en cuando. */
+.bar-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, 0.4) 50%, transparent 70%);
+  transform: translateX(-100%);
+  animation: inv-shine 3.5s var(--ease-out) 1.6s infinite;
+}
+@keyframes inv-shine {
+  40%,
+  100% {
+    transform: translateX(100%);
+  }
 }
 
 .bar-fill.done {
   background: var(--success);
 }
 
+.inv-item-pct {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.inv-done {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--success);
+  color: #fff;
+  font-size: 0.7rem;
+  animation: zola-pop-in 0.45s var(--ease-spring) 1.4s both;
+}
+
 .inv-pct {
-  margin-top: 8px;
-  font-size: 1.6rem;
+  font-size: 2rem;
   font-weight: 800;
+  line-height: 1.1;
 }
 
 .inv-grid {

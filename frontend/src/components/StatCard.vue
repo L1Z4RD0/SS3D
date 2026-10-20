@@ -93,7 +93,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame));
     <span v-else class="stat-value">{{ display }}</span>
     <span v-if="meta" class="stat-meta">{{ meta }}</span>
     <svg v-if="line" class="stat-spark" viewBox="0 0 200 34" preserveAspectRatio="none" aria-hidden="true">
-      <path class="draw-line" pathLength="1" :d="line.d" :style="{ stroke: color }" />
+      <path :key="line.d" class="draw-line" pathLength="1" :d="line.d" :style="{ stroke: color }" />
     </svg>
   </div>
 </template>

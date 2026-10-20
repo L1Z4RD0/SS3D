@@ -68,3 +68,22 @@ export function sparkPath(values, w, h, pad = 4) {
   }
   return { d, last: pts[pts.length - 1] };
 }
+
+// Llama a cb la primera vez que el elemento se ve en pantalla (o de inmediato si el
+// navegador no sabe detectarlo). Devuelve una función para dejar de observar.
+export function whenVisible(el, cb) {
+  if (!el || typeof IntersectionObserver === "undefined") {
+    cb();
+    return () => {};
+  }
+  const io = new IntersectionObserver(
+    (entries) => {
+      if (!entries.some((e) => e.isIntersecting)) return;
+      io.disconnect();
+      cb();
+    },
+    { threshold: 0.25 }
+  );
+  io.observe(el);
+  return () => io.disconnect();
+}

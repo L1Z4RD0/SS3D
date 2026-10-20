@@ -15,6 +15,7 @@ import { useAuthStore } from "../stores/auth";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
 import DoughnutChart from "../components/DoughnutChart.vue";
+import PriceLadder from "../components/PriceLadder.vue";
 import QuoteDocument from "../components/QuoteDocument.vue";
 import FilamentPickerModal from "../components/FilamentPickerModal.vue";
 import ExtraPlatesEditor from "../components/ExtraPlatesEditor.vue";
@@ -898,7 +899,7 @@ onMounted(() => {
               </ul>
             </div>
             <div class="grid grid-cols-2" style="align-items: center">
-              <DoughnutChart :labels="breakdownLabels" :values="breakdownValues" />
+              <DoughnutChart :labels="breakdownLabels" :values="breakdownValues" center-label="Costo base" />
               <table style="min-width: unset">
                 <tbody>
                   <tr class="breakdown-group"><td colspan="2">Con margen (90 / 140 / 190%)</td></tr>
@@ -927,6 +928,10 @@ onMounted(() => {
                 Definir yo el precio final
               </label>
             </div>
+            <PriceLadder
+              :cost="Number(quote.breakdown.total_cost)"
+              :scenarios="customScenario ? [...quote.scenarios, customScenario] : quote.scenarios"
+            />
             <div class="table-wrap">
               <table>
                 <thead>

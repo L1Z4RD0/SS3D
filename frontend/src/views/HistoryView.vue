@@ -47,6 +47,16 @@ const marginSeries = computed(() => [
   { name: "Margen promedio (%)", data: selectedMonths.value.map((m) => Number(m.avg_margin_percent)) },
 ]);
 
+// Mini gráficos del mes elegido: su valor y los meses anteriores con datos (hasta 8).
+const sparkFor = (field) => {
+  if (!singleMonth.value) return null;
+  const upTo = months.value
+    .filter((m) => m.year * 12 + m.month <= singleMonth.value.year * 12 + singleMonth.value.month)
+    .sort((a, b) => a.year - b.year || a.month - b.month)
+    .slice(-8);
+  return upTo.length >= 2 ? upTo.map((m) => Number(m[field])) : null;
+};
+
 function toggleMonth(m) {
   const key = monthKey(m);
   const idx = selectedKeys.value.indexOf(key);
@@ -100,12 +110,17 @@ function isSelected(m) {
 
       <template v-else-if="singleMonth">
         <div class="grid grid-cols-4" style="margin-bottom: 20px">
-          <StatCard label="Trabajos" :value="formatNumber(singleMonth.total_jobs, 0)" />
-          <StatCard label="Ingresos" :value="formatCurrency(singleMonth.total_revenue)" />
-          <StatCard label="Ganancia" :value="formatCurrency(singleMonth.total_profit)" />
-          <StatCard label="Margen promedio" :value="formatPercent(singleMonth.avg_margin_percent)" />
+          <StatCard label="Trabajos" :value="formatNumber(singleMonth.total_jobs, 0)" :spark="sparkFor('total_jobs')" />
+          <StatCard label="Ingresos" :value="formatCurrency(singleMonth.total_revenue)" :spark="sparkFor('total_revenue')" color="var(--accent)" />
+          <StatCard label="Ganancia" :value="formatCurrency(singleMonth.total_profit)" :spark="sparkFor('total_profit')" color="var(--success)" />
+          <StatCard
+            label="Margen promedio"
+            :value="formatPercent(singleMonth.avg_margin_percent)"
+            :ring="Number(singleMonth.avg_margin_percent)"
+            color="var(--warning)"
+          />
           <StatCard label="Costo total" :value="formatCurrency(singleMonth.total_cost)" />
-          <StatCard label="Horas impresas" :value="formatNumber(singleMonth.total_print_hours, 1)" />
+          <StatCard label="Horas impresas" :value="formatNumber(singleMonth.total_print_hours, 1)" :spark="sparkFor('total_print_hours')" color="var(--info)" />
           <StatCard label="Filamento usado" :value="`${formatNumber(singleMonth.total_filament_used_g, 0)} g`" />
         </div>
       </template>

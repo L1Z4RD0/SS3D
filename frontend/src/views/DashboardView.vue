@@ -308,7 +308,7 @@ onMounted(() => {
           </div>
           <div v-if="!byPayment.length" class="empty-state">Sin datos en este rango.</div>
           <div v-else class="grid grid-cols-2" style="align-items: center">
-            <DoughnutChart :labels="byPayment.map((p) => paymentLabel(p.payment_method))" :values="byPayment.map((p) => Number(p.revenue))" />
+            <DoughnutChart :labels="byPayment.map((p) => paymentLabel(p.payment_method))" :values="byPayment.map((p) => Number(p.revenue))" center-label="Ingresos" />
             <table style="min-width: unset">
               <tbody>
                 <tr v-for="p in byPayment" :key="p.payment_method">
@@ -343,7 +343,14 @@ onMounted(() => {
                   <span v-if="f.sku" class="badge badge-neutral" style="margin-left: 6px">{{ f.sku }}</span>
                 </td>
                 <td class="text-right mono">{{ formatNumber(f.available_g, 0) }} g</td>
-                <td class="text-right mono">{{ formatPercent(f.stock_percent) }}</td>
+                <td class="text-right mono">
+                  <div class="stock-cell">
+                    <span class="stock-meter" :class="f.status">
+                      <i :style="{ width: `${Math.min(100, Math.max(0, Number(f.stock_percent)))}%` }"></i>
+                    </span>
+                    {{ formatPercent(f.stock_percent) }}
+                  </div>
+                </td>
                 <td>
                   <span class="badge" :class="statusBadge[f.status]">
                     <Icon v-if="f.status !== 'disponible'" name="alert" :size="11" />
@@ -360,6 +367,38 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* ---------- Medidor de stock: se llena cuando la tarjeta aparece ---------- */
+.stock-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.stock-meter {
+  width: 70px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--surface-alt);
+  overflow: hidden;
+}
+.stock-meter i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--success);
+  transform-origin: left;
+  transition: transform 1s var(--ease-out) 0.3s;
+}
+.stock-meter.alerta i {
+  background: var(--warning);
+}
+.stock-meter.critico i,
+.stock-meter.vacio i {
+  background: var(--danger);
+}
+.reveal:not(.in) .stock-meter i {
+  transform: scaleX(0);
+}
+
 /* ---------- Banner de ganancia ---------- */
 .hero {
   position: relative;

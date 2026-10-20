@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, watch, onMounted } from "vue";
+import { ref, reactive, computed, watch, nextTick, onMounted } from "vue";
 import * as betaApi from "../api/beta";
 import { formatCurrency, formatDate, todayISO } from "../utils/format";
 import { isValidNumber, extractApiError } from "../utils/validation";
@@ -7,6 +7,8 @@ import { confirmAction } from "../composables/useConfirm";
 import StatCard from "../components/StatCard.vue";
 import Icon from "../components/Icon.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
+import CountUp from "../components/CountUp.vue";
+import { CHART_PALETTE } from "../utils/chartTheme";
 
 /* Reparto del mes (BETA): una guía de lo que le correspondería a cada socio. Solo lee
    ventas e inventario; lo único que se guarda aquí son los gastos de la Empresa. */
@@ -24,6 +26,7 @@ async function load() {
     const [rep, exps] = await Promise.all([betaApi.getMonthlySplit(month.value), betaApi.listExpenses(month.value)]);
     report.value = rep;
     expenses.value = exps;
+    redrawSplit();
   } catch (err) {
     error.value = extractApiError(err, "No se pudo calcular el reparto.");
   } finally {
@@ -49,6 +52,23 @@ const refundNames = computed(() => {
   for (const s of report.value?.sales || []) Object.keys(s.refunds).forEach((n) => names.add(n));
   return [...names];
 });
+// Barra "A cada uno": qué parte del total a repartir recibe cada uno. Se llena de nuevo al
+// cambiar de mes o de datos.
+const splitParts = computed(() => {
+  const list = (report.value?.partners || []).map((p, i) => ({
+    name: p.name,
+    total: Math.max(0, Number(p.total) || 0),
+    color: CHART_PALETTE[i % CHART_PALETTE.length],
+  }));
+  const sum = list.reduce((acc, p) => acc + p.total, 0);
+  return sum > 0 ? list.map((p) => ({ ...p, pct: (p.total / sum) * 100 })) : [];
+});
+const splitDrawn = ref(false);
+function redrawSplit() {
+  splitDrawn.value = false;
+  nextTick(() => requestAnimationFrame(() => requestAnimationFrame(() => (splitDrawn.value = true))));
+}
+
 const paymentLabel = { efectivo: "Efectivo", transferencia: "Transferencia", debito: "Débito", credito: "Crédito", cortesia: "Regalo" };
 
 /* -------- Gastos de la Empresa -------- */
@@ -124,6 +144,25 @@ async function removeExpense(e) {
         <div class="card-header">
           <h3>A cada uno</h3>
           <span class="text-muted text-sm">Su parte + lo que puso de su bolsillo + sus deliveries</span>
+        </div>
+        <div v-if="splitParts.length" class="split-viz" :class="{ drawn: splitDrawn }">
+          <div class="split-bar">
+            <div
+              v-for="(p, i) in splitParts"
+              :key="p.name"
+              class="split-seg"
+              :style="{ width: splitDrawn ? `${p.pct}%` : 0, background: p.color, transitionDelay: `${0.1 + i * 0.12}s` }"
+              :title="`${p.name}: ${formatCurrency(p.total)}`"
+            ></div>
+          </div>
+          <div class="split-legend">
+            <div v-for="(p, i) in splitParts" :key="p.name" class="split-key" :style="{ '--d': `${0.2 + i * 0.08}s` }">
+              <i :style="{ background: p.color }"></i>
+              <span>{{ p.name }}</span>
+              <strong class="mono"><CountUp :value="p.total" :format="formatCurrency" :delay="150 + i * 120" /></strong>
+              <span class="text-muted">{{ Math.round(p.pct) }}%</span>
+            </div>
+          </div>
         </div>
         <div class="table-wrap">
           <table>
@@ -337,6 +376,50 @@ async function removeExpense(e) {
 .card + .grid,
 .grid + .card {
   margin-top: 16px;
+}
+
+.split-viz {
+  margin-bottom: 16px;
+}
+
+.split-bar {
+  display: flex;
+  gap: 3px;
+  height: 16px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface-alt);
+}
+
+.split-seg {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.9s var(--ease-out);
+}
+.split-viz:not(.drawn) .split-seg {
+  transition: none;
+}
+
+.split-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 10px;
+  font-size: 0.85rem;
+}
+
+.split-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0;
+  animation: zola-rise 0.4s var(--ease-out) var(--d) forwards;
+}
+
+.split-key i {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
 }
 
 .split-notes {
