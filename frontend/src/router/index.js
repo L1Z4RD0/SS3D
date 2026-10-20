@@ -1,5 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
+import { nextTick } from "vue";
 import { useAuthStore } from "../stores/auth";
+import { prefersReducedMotion } from "../composables/useMotion";
 
 const routes = [
   {
@@ -105,6 +107,43 @@ router.beforeEach((to) => {
     return { name: "inventory" };
   }
   return true;
+});
+
+// Cambio de sección con View Transitions: el navegador toma una foto de la página que sale
+// y la funde con la que entra (estilos en motion.css). Navegadores sin soporte, el botón de
+// "movimiento reducido" o entrar/salir del login: cambio normal, sin esperar nada.
+let finishTransition = null;
+let navigationDone = false;
+router.beforeResolve((to, from) => {
+  const sameShell = from.matched.length && !from.meta.public && !to.meta.public;
+  if (!document.startViewTransition || !sameShell || to.path === from.path || prefersReducedMotion()) return true;
+  navigationDone = false;
+  return new Promise((resolve) => {
+    document.documentElement.classList.add("vt-nav");
+    const transition = document.startViewTransition(() =>
+      // Si la navegación ya terminó por el plazo de abajo, no hay nada que esperar.
+      navigationDone
+        ? undefined
+        : new Promise((done) => {
+            finishTransition = done;
+            resolve(true);
+          })
+    );
+    transition.finished.finally(() => document.documentElement.classList.remove("vt-nav"));
+    // Por si el navegador demora la foto (pestaña en segundo plano): la navegación no espera.
+    setTimeout(() => resolve(true), 400);
+  });
+});
+router.afterEach((to, from) => {
+  // El contenido se desplaza dentro de .app-main (no la ventana): al cambiar de sección
+  // vuelve arriba, si no la página nueva aparecía a media altura.
+  if (to.path !== from.path) document.querySelector(".app-main")?.scrollTo(0, 0);
+  navigationDone = true;
+  if (!finishTransition) return;
+  const done = finishTransition;
+  finishTransition = null;
+  // Espera a que Vue pinte la página nueva antes de que el navegador tome la segunda foto.
+  nextTick(done);
 });
 
 export default router;

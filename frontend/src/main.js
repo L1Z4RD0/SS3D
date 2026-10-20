@@ -6,6 +6,7 @@ import router from "./router";
 import { useAuthStore } from "./stores/auth";
 import "./assets/main.css";
 import "./assets/motion.css";
+import { reveal, trackGlow } from "./utils/motion";
 
 // Actualización de la PWA. Antes el service worker se registraba con el script por
 // defecto, que descarga la versión nueva en segundo plano pero nunca recarga la página:
@@ -27,6 +28,8 @@ registerSW({
 
 const app = createApp(App);
 app.use(createPinia());
+app.directive("reveal", reveal);
+trackGlow();
 
 const authStore = useAuthStore();
 authStore.init().finally(() => {

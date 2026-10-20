@@ -4,14 +4,14 @@ import { useRequestActivity } from "../composables/useRequestActivity";
 import { useRoute, useRouter } from "vue-router";
 import { useAuthStore } from "../stores/auth";
 import { useTheme } from "../composables/useTheme";
-import { useMobileNav } from "../composables/useMobileNav";
+import { useMotion } from "../composables/useMotion";
 import Icon from "./Icon.vue";
 
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 const { theme, toggle } = useTheme();
-const mobileNav = useMobileNav();
+const { motion, toggle: toggleMotion } = useMotion();
 
 const titles = {
   dashboard: "Dashboard",
@@ -50,12 +50,17 @@ async function handleLogout() {
 <template>
   <header class="topbar">
     <div class="topbar-left">
-      <button type="button" class="btn btn-icon btn-ghost menu-btn" @click="mobileNav.toggle()">
-        <Icon name="menu" :size="20" />
-      </button>
       <h1 class="topbar-title">{{ title }}</h1>
     </div>
     <div class="topbar-actions">
+      <button
+        class="btn btn-icon btn-ghost motion-btn"
+        :class="{ off: motion === 'reduced' }"
+        @click="toggleMotion"
+        :title="motion === 'reduced' ? 'Movimiento: reducido (activar animaciones)' : 'Movimiento: completo (reducir animaciones)'"
+      >
+        <Icon name="sparkle" :size="18" />
+      </button>
       <button class="btn btn-icon btn-ghost" @click="toggle" :title="theme === 'dark' ? 'Modo claro' : 'Modo oscuro'">
         <Icon :name="theme === 'dark' ? 'sun' : 'moon'" :size="18" />
       </button>
@@ -75,8 +80,11 @@ async function handleLogout() {
   justify-content: space-between;
   gap: 12px;
   padding: 18px 32px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  /* Translúcida: deja ver el fondo de colores (aurora) que hay detrás. */
+  background: color-mix(in srgb, var(--surface) 62%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -89,16 +97,30 @@ async function handleLogout() {
   min-width: 0;
 }
 
-.menu-btn {
-  display: none;
-  flex-shrink: 0;
-}
-
 .topbar-title {
   font-size: 1.1rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.motion-btn {
+  color: var(--primary);
+}
+
+/* Tachado cuando las animaciones están reducidas */
+.motion-btn.off {
+  color: var(--text-faint);
+  position: relative;
+}
+.motion-btn.off::after {
+  content: "";
+  position: absolute;
+  width: 20px;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+  transform: rotate(-45deg);
 }
 
 .topbar-actions {
@@ -111,9 +133,6 @@ async function handleLogout() {
 @media (max-width: 640px) {
   .topbar {
     padding: 14px 16px;
-  }
-  .menu-btn {
-    display: flex;
   }
 }
 

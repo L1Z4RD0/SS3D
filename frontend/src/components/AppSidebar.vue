@@ -144,6 +144,29 @@ onBeforeUnmount(() => window.removeEventListener("resize", moveIndicator));
   flex-direction: column;
   padding: 20px 14px;
   overflow: hidden;
+  position: relative;
+  isolation: isolate;
+}
+
+/* Brillo de la marca que "respira" detrás del logo */
+.sidebar::before {
+  content: "";
+  position: absolute;
+  left: -90px;
+  top: -110px;
+  width: 260px;
+  height: 260px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(91, 75, 245, 0.45), transparent 65%);
+  animation: sidebar-breathe 7s ease-in-out infinite;
+  pointer-events: none;
+  z-index: -1;
+}
+@keyframes sidebar-breathe {
+  50% {
+    transform: translate(30px, 20px) scale(1.15);
+    opacity: 0.7;
+  }
 }
 
 .sidebar-brand {
@@ -241,7 +264,7 @@ onBeforeUnmount(() => window.removeEventListener("resize", moveIndicator));
   border-radius: 10px;
   background: var(--sidebar-active-bg);
   opacity: 0;
-  transition: transform 0.4s var(--ease-out), height 0.3s var(--ease-out), opacity 0.2s;
+  transition: transform 0.45s var(--ease-spring), height 0.3s var(--ease-out), opacity 0.2s;
   pointer-events: none;
 }
 

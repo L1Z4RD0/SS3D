@@ -228,7 +228,135 @@
   animation: zola-shimmer 1.2s linear infinite;
 }
 
-/* ---------- Respetar "reducir movimiento" del sistema ---------- */
+/* ---------- 6. Fondo "aurora" detrás del encabezado (App.vue) ---------- */
+.app-main {
+  position: relative;
+}
+.aurora {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 340px;
+  overflow: hidden;
+  pointer-events: none;
+  /* Detrás de todo el contenido sin crear capas nuevas: las ventanas (.modal-backdrop)
+     no se teletransportan al <body>, así que el contenido no debe tener z-index propio. */
+  z-index: -1;
+}
+.aurora i {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(60px);
+  opacity: 0.45;
+}
+.aurora i:nth-child(1) { width: 420px; height: 420px; left: 5%; top: -230px; background: #8f84ff; animation: zola-drift-a 18s ease-in-out infinite; }
+.aurora i:nth-child(2) { width: 360px; height: 360px; right: 8%; top: -210px; background: #3fd8c6; animation: zola-drift-b 22s ease-in-out infinite; }
+.aurora i:nth-child(3) { width: 300px; height: 300px; left: 45%; top: -240px; background: #c4a9ff; animation: zola-drift-a 26s ease-in-out infinite reverse; }
+[data-theme="dark"] .aurora i { opacity: 0.22; }
+.aurora::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, transparent 40%, var(--bg));
+}
+@keyframes zola-drift-a { 50% { transform: translate(120px, 60px) scale(1.15); } }
+@keyframes zola-drift-b { 50% { transform: translate(-140px, 50px) scale(0.9); } }
+@media (max-width: 640px) {
+  .aurora { height: 260px; }
+  .aurora i { filter: blur(45px); }
+  /* Espacio para la barra inferior (MobileTabBar) */
+  .app-content { padding-bottom: calc(110px + env(safe-area-inset-bottom)); }
+}
+
+/* ---------- 7. Aparecer al bajar (v-reveal) y luz que sigue al mouse (.glow) ---------- */
+.reveal {
+  opacity: 0;
+  transform: translateY(18px) scale(0.98);
+  transition: opacity 0.6s var(--ease-out), transform 0.6s var(--ease-out);
+  transition-delay: var(--reveal-delay, 0s);
+}
+.reveal.in {
+  opacity: 1;
+  transform: none;
+}
+@media (hover: hover) {
+  .glow {
+    position: relative;
+  }
+  .glow::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s;
+    background: radial-gradient(260px circle at var(--mx, 50%) var(--my, 50%), color-mix(in srgb, var(--primary) 11%, transparent), transparent 60%);
+  }
+  .glow:hover::before {
+    opacity: 1;
+  }
+}
+
+/* Trazos que se dibujan (mini gráficos, check del aviso) */
+@keyframes zola-draw {
+  to { stroke-dashoffset: 0; }
+}
+@keyframes zola-pop-in {
+  from { opacity: 0; transform: scale(0); }
+  to { opacity: 1; transform: scale(1); }
+}
+.draw-line {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: zola-draw 1.6s var(--ease-out) 0.3s forwards;
+}
+
+/* Pulso de "ocupada" (impresoras con un pedido en producción) */
+@keyframes zola-ping {
+  from { opacity: 0.8; transform: scale(1); }
+  to { opacity: 0; transform: scale(1.35); }
+}
+
+/* La etiqueta de estado "salta" cuando el pedido cambia (Ventas) */
+@keyframes zola-bump {
+  40% { transform: scale(1.18); }
+}
+.row-flash .badge[class*="status-"] {
+  animation: zola-bump 0.5s var(--ease-spring);
+}
+
+/* ---------- 8. Cambio de sección (View Transitions; ver router/index.js) ---------- */
+/* Solo se anima el contenido; menú y barra superior quedan quietos. El nombre se pone
+   solo mientras dura el cambio (clase vt-nav), porque crea una capa propia que dejaría
+   las ventanas emergentes de la página por debajo de la barra superior. */
+html.vt-nav .app-content {
+  view-transition-name: page-content;
+}
+::view-transition-old(page-content) {
+  animation: zola-vt-out 0.2s ease both;
+}
+::view-transition-new(page-content) {
+  animation: zola-vt-in 0.45s var(--ease-out) both;
+}
+@keyframes zola-vt-out { to { opacity: 0; transform: translateY(-8px); filter: blur(4px); } }
+@keyframes zola-vt-in { from { opacity: 0; transform: translateY(14px); filter: blur(4px); } }
+/* Con View Transitions ya hay entrada; la de Vue (.page-enter-active) no se suma. */
+html.vt-nav .page-enter-active {
+  animation: none;
+}
+
+/* ---------- Respetar "reducir movimiento" (sistema o botón de la barra superior) ---------- */
+html.reduced-motion *,
+html.reduced-motion *::before,
+html.reduced-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  animation-delay: 0s !important;
+  transition-duration: 0.01ms !important;
+  transition-delay: 0s !important;
+}
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -237,5 +365,6 @@
     animation-iteration-count: 1 !important;
     animation-delay: 0s !important;
     transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
   }
 }

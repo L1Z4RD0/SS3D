@@ -24,6 +24,8 @@ import { platesPayload, platesError } from "../utils/plates";
 import OrderStatusModal from "../components/OrderStatusModal.vue";
 import { STATUS_LABELS, NEXT_ACTION, OPEN_STATUSES, statusClass, isOverdue } from "../utils/orderStatus";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
+import { showToast } from "../composables/useToast";
+import { useRoute, useRouter } from "vue-router";
 
 const auth = useAuthStore();
 const today = todayISO();
@@ -187,6 +189,24 @@ async function loadSales() {
 function applyFilters() {
   offset.value = 0;
   loadSales();
+}
+
+// Accesos rápidos de estado (píldora deslizante). Usan el mismo filtro "Estado" de abajo.
+const QUICK_STATUS = [
+  { value: "", label: "Todas" },
+  { value: "abiertos", label: "Abiertas" },
+  { value: "entregada", label: "Entregadas" },
+];
+const quickEl = ref(null);
+const quickPill = ref({ left: 0, width: 0, visible: false });
+function moveQuickPill() {
+  const btn = quickEl.value?.querySelector("button.on");
+  quickPill.value = btn ? { left: btn.offsetLeft, width: btn.offsetWidth, visible: true } : { ...quickPill.value, visible: false };
+}
+watch(() => filters.status, () => nextTick(moveQuickPill));
+function setQuickStatus(value) {
+  filters.status = value;
+  applyFilters();
 }
 
 function resetFilters() {
@@ -686,9 +706,14 @@ async function handleSubmit() {
     const sale = editingId.value
       ? await salesApi.updateSale(editingId.value, buildPayload())
       : await salesApi.createSale(buildPayload());
+    const wasNew = !editingId.value;
     showModal.value = false;
     await loadSales();
     flashRow(sale.id);
+    showToast(wasNew ? "Venta registrada" : "Venta actualizada", {
+      detail: sale.client_name,
+      celebrate: wasNew,
+    });
     await loadCatalog();
     await promptExhaustedFilaments(sale.exhausted_filaments);
     await loadCatalog();
@@ -743,6 +768,7 @@ async function advance(sale) {
     await salesApi.changeSaleStatus(sale.id, { status: next.status, today });
     await loadSales();
     flashRow(sale.id);
+    showToast(`Pedido: ${STATUS_LABELS[next.status]}`, { detail: sale.client_name });
   } catch (err) {
     await confirmAction({
       title: "No se pudo cambiar el estado",
@@ -765,8 +791,21 @@ const pageLabel = computed(() => {
   return `${from}-${to} de ${total.value}`;
 });
 
+// Botón + de la barra inferior del celular: llega como /ventas?nueva=1.
+const route = useRoute();
+const router = useRouter();
+function openCreateFromQuery() {
+  if (!route.query.nueva) return;
+  const { nueva, ...rest } = route.query;
+  router.replace({ query: rest });
+  if (!(auth.isWatcher && !observedUsers.value.length)) openCreate();
+}
+watch(() => route.query.nueva, openCreateFromQuery);
+
 onMounted(async () => {
+  nextTick(moveQuickPill);
   await Promise.all([loadCatalog(), loadObservedUsers()]);
+  openCreateFromQuery();
   await loadSales();
 });
 </script>
@@ -781,6 +820,26 @@ onMounted(async () => {
       <p v-else class="page-subtitle">Historial de trabajos vendidos, con costos y ganancia calculados automáticamente</p>
       <button class="btn btn-primary" :disabled="auth.isWatcher && !observedUsers.length" @click="openCreate">
         <Icon name="plus" :size="16" /> Nueva venta
+      </button>
+    </div>
+
+    <div ref="quickEl" class="quick-status" role="tablist" aria-label="Estado de los pedidos">
+      <span
+        class="quick-pill"
+        :class="{ visible: quickPill.visible }"
+        :style="{ transform: `translateX(${quickPill.left}px)`, width: `${quickPill.width}px` }"
+        aria-hidden="true"
+      ></span>
+      <button
+        v-for="q in QUICK_STATUS"
+        :key="q.value"
+        type="button"
+        role="tab"
+        :class="{ on: filters.status === q.value }"
+        :aria-selected="filters.status === q.value"
+        @click="setQuickStatus(q.value)"
+      >
+        {{ q.label }}
       </button>
     </div>
 
@@ -1307,6 +1366,54 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.quick-status {
+  position: relative;
+  display: inline-flex;
+  margin-bottom: 12px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.quick-status button {
+  position: relative;
+  z-index: 1;
+  padding: 7px 16px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.25s;
+}
+.quick-status button.on {
+  color: #fff;
+}
+.quick-pill {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 0;
+  border-radius: 9px;
+  background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 70%, #a855f7));
+  opacity: 0;
+  transition: transform 0.4s var(--ease-spring), width 0.4s var(--ease-spring), opacity 0.2s;
+}
+.quick-pill.visible {
+  opacity: 1;
+}
+@media (max-width: 640px) {
+  .quick-status {
+    display: flex;
+  }
+  .quick-status button {
+    flex: 1;
+  }
+}
+
 .overdue-text {
   color: var(--danger);
   font-weight: 700;

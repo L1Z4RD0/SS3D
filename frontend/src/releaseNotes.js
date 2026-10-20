@@ -8,6 +8,33 @@
    Textos cortos y en el idioma de los usuarios (qué pueden hacer ahora), no técnicos. */
 export const RELEASES = [
   {
+    id: "2026-10-20",
+    date: "20 de octubre de 2026",
+    title: "Zola con nuevo movimiento",
+    items: [
+      {
+        icon: "🌈",
+        title: "Dashboard renovado",
+        text: "Arriba ves tu ganancia con su tendencia de los últimos meses, un gráfico de ganancia mensual y qué impresoras están Ocupadas (con un pedido En producción) o Libres.",
+      },
+      {
+        icon: "📱",
+        title: "Barra inferior en el celular",
+        text: "Inicio, Ventas y Agenda quedan a mano del pulgar, y el botón + registra una venta nueva. \"Más\" abre el menú completo.",
+      },
+      {
+        icon: "✅",
+        title: "Confirmación al guardar",
+        text: "Al registrar una venta o cambiar un estado aparece un aviso abajo. En Ventas puedes filtrar rápido entre Todas, Abiertas y Entregadas.",
+      },
+      {
+        icon: "✨",
+        title: "Tú decides cuánto se mueve",
+        text: "El botón con estrellitas de la barra superior reduce las animaciones si prefieres una app más quieta.",
+      },
+    ],
+  },
+  {
     id: "2026-10-13",
     date: "13 de octubre de 2026",
     title: "Más fluida y sin parpadeos",
