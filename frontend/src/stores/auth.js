@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import * as authApi from "../api/auth";
-import { setAccessToken, setUnauthorizedHandler } from "../api/client";
+import { isSessionEndedError, refreshSession, setAccessToken, setUnauthorizedHandler } from "../api/client";
 import { extractApiError } from "../utils/validation";
 
 export const useAuthStore = defineStore("auth", {
@@ -44,12 +44,15 @@ export const useAuthStore = defineStore("auth", {
     },
     async tryRestoreSession() {
       try {
-        const { access_token } = await authApi.refresh();
-        setAccessToken(access_token);
+        await refreshSession();
         this.user = await authApi.fetchMe();
-      } catch {
-        setAccessToken(null);
-        this.user = null;
+      } catch (err) {
+        // Solo un 401/403 cierra la sesión. Un fallo pasajero (sin red, backend despertando)
+        // deja al usuario como estaba, en vez de sacarlo al login con la sesión aún válida.
+        if (isSessionEndedError(err) || !this.user) {
+          setAccessToken(null);
+          this.user = null;
+        }
       } finally {
         this.ready = true;
       }

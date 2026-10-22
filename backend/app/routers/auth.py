@@ -26,7 +26,12 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 REFRESH_COOKIE_NAME = "refresh_token"
 REFRESH_COOKIE_PATH = "/api/auth"
-REFRESH_GRACE = timedelta(seconds=60)
+
+# Un refresh token recién rotado se sigue aceptando unos segundos. Sin esto, dos pedidos
+# que salen casi a la vez con la misma cookie (dos pestañas recargadas juntas por la
+# actualización de la PWA, o una respuesta perdida por un corte de red) dejan a uno de
+# ellos con 401 y al usuario de vuelta en el login aunque su sesión sea válida.
+ROTATION_GRACE = timedelta(seconds=30)
 
 
 def _client_ip(request: Request) -> str | None:
@@ -147,12 +152,11 @@ def refresh(request: Request, response: Response, db: Session = Depends(get_db))
     row = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
     now = datetime.now(timezone.utc)
 
-    # Cada renovación reemplaza la cookie. Si la respuesta no llega al navegador (servidor
-    # despertando, se cortó la conexión, dos pestañas renovando a la vez) el navegador se
-    # queda con la cookie anterior ya reemplazada y la sesión se perdía. Se acepta esa
-    # cookie anterior durante un minuto después de reemplazada.
-    recently_rotated = row is not None and row.revoked_at is not None and now - row.revoked_at <= REFRESH_GRACE
-    if row is None or (row.revoked_at is not None and not recently_rotated) or row.expires_at < now:
+    if row is None or row.expires_at < now:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Sesión inválida o expirada")
+    # El logout además vence el token (expires_at), así que esto solo deja pasar tokens
+    # revocados por rotación, nunca uno de una sesión cerrada.
+    if row.revoked_at is not None and now - row.revoked_at > ROTATION_GRACE:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Sesión inválida o expirada")
 
     user = db.query(User).options(joinedload(User.role)).get(row.user_id)
@@ -194,10 +198,18 @@ def logout(
     if raw_token:
         token_hash = hash_refresh_token(raw_token)
         row = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
-        if row and row.revoked_at is None:
-            # Fecha anterior al margen de un minuto de /refresh: tras cerrar sesión esta
-            # cookie no vuelve a servir ni un segundo.
-            row.revoked_at = datetime.now(timezone.utc) - 2 * REFRESH_GRACE
+        if row and row.expires_at > datetime.now(timezone.utc):
+            now = datetime.now(timezone.utc)
+            if row.revoked_at is None:
+                row.revoked_at = now
+            # Vencerlo (a él y a los que se rotaron hace instantes) también los deja fuera
+            # de la ventana de gracia de /refresh: una sesión cerrada no revive.
+            row.expires_at = now
+            db.query(RefreshToken).filter(
+                RefreshToken.user_id == row.user_id,
+                RefreshToken.revoked_at >= now - ROTATION_GRACE,
+                RefreshToken.expires_at > now,
+            ).update({RefreshToken.expires_at: now}, synchronize_session=False)
             user_id = row.user_id
 
     if user_id is not None:

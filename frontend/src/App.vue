@@ -1,6 +1,6 @@
 <script setup>
-import { computed } from "vue";
-import { useRoute } from "vue-router";
+import { computed, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { useAuthStore } from "./stores/auth";
 import AppSidebar from "./components/AppSidebar.vue";
 import AppTopbar from "./components/AppTopbar.vue";
@@ -11,9 +11,22 @@ import SupplyDebtBanner from "./components/SupplyDebtBanner.vue";
 import WhatsNewModal from "./components/WhatsNewModal.vue";
 
 const route = useRoute();
+const router = useRouter();
 const auth = useAuthStore();
 
 const showShell = computed(() => auth.isAuthenticated && !route.meta.public);
+
+// Si la sesión termina con la app abierta (refresh rechazado), el guard del router no se
+// vuelve a ejecutar: sin esto la vista quedaba sin barra lateral ni encabezado hasta que el
+// usuario recargaba. Se lo lleva al login, conservando a dónde volver.
+watch(
+  () => auth.isAuthenticated,
+  (isAuthenticated) => {
+    if (!isAuthenticated && !route.meta.public) {
+      router.replace({ name: "login", query: { redirect: route.fullPath } });
+    }
+  }
+);
 </script>
 
 <template>

@@ -1,4 +1,4 @@
-import { createApp, watch } from "vue";
+import { createApp } from "vue";
 import { createPinia } from "pinia";
 import { registerSW } from "virtual:pwa-register";
 import App from "./App.vue";
@@ -35,16 +35,6 @@ const authStore = useAuthStore();
 authStore.init().finally(() => {
   app.use(router);
   app.mount("#app");
-  // Si la sesión expira mientras se usa la app (el servidor rechaza renovarla), se lleva al
-  // login de inmediato y se vuelve a la misma sección al entrar, en vez de dejar la pantalla
-  // a medio cargar.
-  watch(
-    () => authStore.isAuthenticated,
-    (ok) => {
-      const current = router.currentRoute.value;
-      if (!ok && !current.meta.public) router.push({ name: "login", query: { redirect: current.fullPath } });
-    }
-  );
 });
 
 // If the browser restores this page from back/forward cache (bfcache) -- e.g. hitting
