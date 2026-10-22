@@ -1,6 +1,7 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
@@ -25,6 +26,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 REFRESH_COOKIE_NAME = "refresh_token"
 REFRESH_COOKIE_PATH = "/api/auth"
+REFRESH_GRACE = timedelta(seconds=60)
 
 
 def _client_ip(request: Request) -> str | None:
@@ -52,6 +54,19 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
         .filter(User.username == payload.username)
         .first()
     )
+    if user is None:
+        # En el celular el teclado suele poner la primera letra en mayúscula ("diego" ->
+        # "Diego" o al revés): se acepta el usuario sin distinguir mayúsculas, solo si no hay
+        # dos usuarios que se diferencien únicamente en eso.
+        matches = (
+            db.query(User)
+            .options(joinedload(User.role))
+            .filter(func.lower(User.username) == payload.username.strip().lower())
+            .limit(2)
+            .all()
+        )
+        if len(matches) == 1:
+            user = matches[0]
 
     if user is None:
         log_event(
@@ -132,14 +147,20 @@ def refresh(request: Request, response: Response, db: Session = Depends(get_db))
     row = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
     now = datetime.now(timezone.utc)
 
-    if row is None or row.revoked_at is not None or row.expires_at < now:
+    # Cada renovación reemplaza la cookie. Si la respuesta no llega al navegador (servidor
+    # despertando, se cortó la conexión, dos pestañas renovando a la vez) el navegador se
+    # queda con la cookie anterior ya reemplazada y la sesión se perdía. Se acepta esa
+    # cookie anterior durante un minuto después de reemplazada.
+    recently_rotated = row is not None and row.revoked_at is not None and now - row.revoked_at <= REFRESH_GRACE
+    if row is None or (row.revoked_at is not None and not recently_rotated) or row.expires_at < now:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Sesión inválida o expirada")
 
     user = db.query(User).options(joinedload(User.role)).get(row.user_id)
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Usuario no válido")
 
-    row.revoked_at = now
+    if row.revoked_at is None:
+        row.revoked_at = now
     new_raw = generate_refresh_token()
     db.add(
         RefreshToken(
@@ -174,7 +195,9 @@ def logout(
         token_hash = hash_refresh_token(raw_token)
         row = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
         if row and row.revoked_at is None:
-            row.revoked_at = datetime.now(timezone.utc)
+            # Fecha anterior al margen de un minuto de /refresh: tras cerrar sesión esta
+            # cookie no vuelve a servir ni un segundo.
+            row.revoked_at = datetime.now(timezone.utc) - 2 * REFRESH_GRACE
             user_id = row.user_id
 
     if user_id is not None:

@@ -9,6 +9,7 @@ const username = ref("");
 const password = ref("");
 const submitting = ref(false);
 const errorMessage = ref("");
+const slow = ref(false);
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -17,6 +18,8 @@ const route = useRoute();
 async function handleSubmit() {
   errorMessage.value = "";
   submitting.value = true;
+  // Si el servidor estaba dormido la primera respuesta tarda: se avisa para que no se reintente.
+  const slowTimer = setTimeout(() => (slow.value = true), 4000);
   try {
     await auth.login(username.value.trim(), password.value);
     router.push(route.query.redirect || { name: "dashboard" });
@@ -26,10 +29,18 @@ async function handleSubmit() {
       errorMessage.value = extractApiError(err, "Cuenta bloqueada temporalmente.");
     } else if (status === 403) {
       errorMessage.value = "Esta cuenta está desactivada.";
-    } else {
+    } else if (status === 401) {
       errorMessage.value = extractApiError(err, "Usuario o contraseña incorrectos.");
+    } else if (status === 422) {
+      errorMessage.value = "Escribe tu usuario y tu contraseña.";
+    } else {
+      // Antes cualquier falla (servidor despertando, sin internet, error del servidor) se
+      // mostraba como "contraseña incorrecta" aunque estuviera bien escrita.
+      errorMessage.value = "No se pudo conectar con el servidor. Tu contraseña no se revisó: intenta de nuevo en unos segundos.";
     }
   } finally {
+    clearTimeout(slowTimer);
+    slow.value = false;
     submitting.value = false;
   }
 }
@@ -47,7 +58,17 @@ async function handleSubmit() {
       <form class="login-form" @submit.prevent="handleSubmit">
         <div class="field">
           <label for="username">Usuario</label>
-          <input id="username" v-model="username" type="text" autocomplete="username" required autofocus />
+          <input
+            id="username"
+            v-model="username"
+            type="text"
+            autocomplete="username"
+            autocapitalize="none"
+            autocorrect="off"
+            spellcheck="false"
+            required
+            autofocus
+          />
         </div>
         <div class="field">
           <label for="password">Contraseña</label>
@@ -55,6 +76,7 @@ async function handleSubmit() {
         </div>
 
         <div v-if="errorMessage" class="alert alert-danger">{{ errorMessage }}</div>
+        <div v-else-if="slow" class="alert alert-info">El servidor está despertando, puede tardar hasta un minuto. No cierres la página.</div>
 
         <button class="btn btn-primary w-full" type="submit" :disabled="submitting" style="margin-top: 6px; padding: 11px">
           <span v-if="submitting" class="spinner" />

@@ -4,6 +4,11 @@ import { VitePWA } from 'vite-plugin-pwa'
 
 // https://vite.dev/config/
 export default defineConfig({
+  // "npm run preview" imita a Vercel (vercel.json): /api va al backend local, en el mismo
+  // dominio que la app, igual que en producción.
+  preview: {
+    proxy: { '/api': 'http://localhost:8000' },
+  },
   plugins: [
     vue(),
     VitePWA({

@@ -8,6 +8,28 @@
    Textos cortos y en el idioma de los usuarios (qué pueden hacer ahora), no técnicos. */
 export const RELEASES = [
   {
+    id: "2026-10-22",
+    date: "22 de octubre de 2026",
+    title: "Conexión más estable",
+    items: [
+      {
+        icon: "🔐",
+        title: "Tu sesión ya no se corta",
+        text: "Se acabaron los avisos de \"Not Found\" al usar la Calculadora o Ventas después de un rato, y la sesión se mantiene al recargar, también en iPhone.",
+      },
+      {
+        icon: "💬",
+        title: "Mensajes claros al entrar",
+        text: "Si el servidor está despertando o no hay conexión, el login lo dice en vez de marcar la contraseña como incorrecta. El usuario se acepta con o sin mayúsculas.",
+      },
+      {
+        icon: "🔗",
+        title: "Los enlaces abren directo",
+        text: "Recargar una sección o abrir un enlace del aviso de Discord ya no muestra una página de error.",
+      },
+    ],
+  },
+  {
     // Sale el mismo día que la anterior: repite sus puntos para quien todavía no la vio.
     id: "2026-10-20.3",
     date: "20 de octubre de 2026",
