@@ -10,6 +10,7 @@ import { useObservedUsers } from "../composables/useObservedUsers";
 import Modal from "../components/Modal.vue";
 import OrderStatusModal from "../components/OrderStatusModal.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
+import SaleSourcePicker from "../components/SaleSourcePicker.vue";
 
 /* Almacén: piezas de pedidos cancelados que siguen en nuestro poder. Se pueden vender
    (crea un pedido que nace Lista, sin descontar material), editar y descartar (el costo
@@ -80,6 +81,7 @@ function openSell(p) {
     buyer_name: "",
     promised_delivery_date: todayISO(),
     payment_method: "efectivo",
+    sale_source: "",
     price: Number(p.price),
     notes: "",
   });
@@ -91,6 +93,10 @@ const sellPrice = computed(() => (sellIsGift.value ? 0 : Number(sellForm.price))
 const sellProfit = computed(() => (sellTarget.value ? sellPrice.value - Number(sellTarget.value.cost) : 0));
 
 async function confirmSell() {
+  if (!sellForm.sale_source) {
+    sellError.value = "Elige la fuente de venta: Instagram, Facebook o Personal.";
+    return;
+  }
   if (!sellIsGift.value && !isValidNumber(sellForm.price, { min: 0 })) {
     sellError.value = "Ingresa un precio válido.";
     return;
@@ -103,6 +109,7 @@ async function confirmSell() {
       buyer_name: sellForm.buyer_name || null,
       promised_delivery_date: sellForm.promised_delivery_date,
       payment_method: sellForm.payment_method,
+      sale_source: sellForm.sale_source,
       price: sellPrice.value,
       notes: sellForm.notes || null,
       sale_date: todayISO(),
@@ -346,6 +353,7 @@ const ownerLabel = computed(() => observedUsers.value.find((u) => u.id === owner
               <option v-for="pm in PAYMENT_METHODS" :key="pm.value" :value="pm.value">{{ pm.label }}</option>
             </select>
           </div>
+          <SaleSourcePicker v-model="sellForm.sale_source" required style="grid-column: 1 / -1" />
           <div v-if="sellIsGift" class="field">
             <label>Precio</label>
             <div class="alert alert-info" style="margin: 0">

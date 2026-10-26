@@ -181,6 +181,7 @@ def save_quote_as_sale(
         profit=scenario.profit,
         margin_percent=calculate_margin_percent(scenario.price, breakdown.total_cost),
         payment_method=payload.payment_method,
+        sale_source=payload.sale_source,
         notes=payload.notes,
         # Un regalo no cobra nada, tampoco la reserva por riesgo.
         risk_percent=0 if payload.payment_method == GIFT_PAYMENT_METHOD else breakdown.risk_percent,

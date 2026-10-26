@@ -30,6 +30,16 @@ export const PAYMENT_METHODS = [
   { value: "cortesia", label: "Cortesía (regalo)" },
 ];
 
+// De dónde salió la venta. Las ventas anteriores a este campo no tienen fuente ("Sin
+// registrar"). color: el de cada red, para los gráficos.
+export const SALE_SOURCES = [
+  { value: "instagram", label: "Instagram", icon: "instagram", color: "#d62976" },
+  { value: "facebook", label: "Facebook", icon: "facebook", color: "#1877f2" },
+  { value: "personal", label: "Personal", icon: "person", color: "#17b3a3" },
+];
+export const NO_SALE_SOURCE = { value: "sin_registrar", label: "Sin registrar", icon: null, color: "#9aa0b4" };
+export const saleSourceInfo = (value) => SALE_SOURCES.find((s) => s.value === value) || NO_SALE_SOURCE;
+
 // Pagar "por cortesía" es regalar: precio $0, los costos se registran igual (el servidor
 // fuerza el $0).
 export const GIFT_PAYMENT_METHOD = "cortesia";

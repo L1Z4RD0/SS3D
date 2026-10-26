@@ -13,6 +13,10 @@ const props = defineProps({
   values: { type: Array, required: true },
   centerLabel: { type: String, default: "Total" },
   format: { type: Function, default: formatCurrency },
+  // Opcional: un color por parte (ej. el de cada red social). Si no, la paleta de gráficos.
+  colors: { type: Array, default: null },
+  // false cuando al lado ya hay una lista con cada parte (ej. Ventas por fuente).
+  legend: { type: Boolean, default: true },
 });
 
 const GAP = 0.8; // separación entre partes, en % de la vuelta
@@ -21,7 +25,7 @@ const total = computed(() => props.values.reduce((sum, v) => sum + Math.max(0, N
 const parts = computed(() => {
   let start = 0;
   return props.values
-    .map((v, i) => ({ label: props.labels[i], value: Math.max(0, Number(v) || 0), color: CHART_PALETTE[i % CHART_PALETTE.length] }))
+    .map((v, i) => ({ label: props.labels[i], value: Math.max(0, Number(v) || 0), color: props.colors?.[i] || CHART_PALETTE[i % CHART_PALETTE.length] }))
     .filter((p) => p.value > 0)
     .map((p, i, list) => {
       const pct = total.value ? (p.value / total.value) * 100 : 0;
@@ -31,7 +35,6 @@ const parts = computed(() => {
     });
 });
 
-// Al aparecer o al cambiar los valores (ej. recalcular), la dona se vuelve a dibujar.
 // Se dibuja cuando la dona entra en pantalla, y de nuevo cada vez que cambian los valores
 // (ej. recalcular). Mientras se dibuja cada parte espera su turno; después (settled)
 // responden al instante.
@@ -107,7 +110,7 @@ const pctText = (p) => `${p.pct.toLocaleString("es-CL", { maximumFractionDigits:
         </Transition>
       </div>
     </div>
-    <ul class="mdonut-legend" :class="{ shown: drawn }">
+    <ul v-if="legend" class="mdonut-legend" :class="{ shown: drawn }">
       <li
         v-for="p in parts"
         :key="p.label"

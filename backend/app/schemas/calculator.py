@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.constants import GRAMS_MAX
+from app.constants import GRAMS_MAX, SALE_SOURCE_PATTERN
 
 
 class SupplyUsageInput(BaseModel):
@@ -80,6 +80,7 @@ class SaveQuoteAsSaleRequest(QuoteRequest):
     client_name: str = Field(min_length=1, max_length=160)
     buyer_name: str | None = Field(default=None, max_length=160)
     payment_method: str
+    sale_source: str | None = Field(default=None, pattern=SALE_SOURCE_PATTERN)
     notes: str | None = None
     chosen_margin_percent: int
     # Precio fijado a mano por el usuario (ej. para redondear). Si viene, manda por

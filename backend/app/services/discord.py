@@ -6,16 +6,24 @@ entregarse, gris si se cancela o elimina.
 
 Todo corre en segundo plano (BackgroundTasks), con su propia sesión de base de datos, y
 nunca lanza: si Discord o la tabla discord_messages fallan, el pedido no se entera.
+
+Discord limita cuántos mensajes acepta un webhook por segundo y responde 429 si llegan
+más. Antes, varios pedidos seguidos se enviaban en paralelo y los que chocaban con el
+límite se perdían. Ahora los avisos salen de a uno (_SEND_LOCK), se respeta la espera que
+pide Discord y se reintenta; y si aun así un pedido reciente no quedó publicado, se publica
+en su siguiente cambio (sync_order).
 """
 import json
 import logging
 import re
+import threading
+import time
 import urllib.error
 import urllib.request
 from urllib.parse import parse_qsl, urlencode
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from app.config import settings
 from app.database import SessionLocal
@@ -60,6 +68,16 @@ THEMES = {
     STATUS_CANCELLED: Theme(GREY, "🚫 PEDIDO CANCELADO", "⚫ **Cancelado**"),
     DELETED: Theme(GREY, "🗑️ PEDIDO ELIMINADO", "⚫ **Eliminado**"),
 }
+# Un aviso a la vez: así una ráfaga de pedidos no choca con el límite de Discord, y
+# "anunciar" y "actualizar" el mismo pedido nunca se cruzan (no hay tarjetas duplicadas).
+_SEND_LOCK = threading.Lock()
+# Reintentos ante un límite de Discord (429), un error suyo (5xx) o un corte de red.
+MAX_ATTEMPTS = 5
+MAX_WAIT_SECONDS = 15
+# Un pedido que no alcanzó a publicarse se publica en su siguiente cambio, solo si es
+# reciente: editar un pedido antiguo (de antes del bot) no debe aparecer como nuevo.
+RECOVERY_WINDOW = timedelta(days=3)
+
 PROGRESS = (
     (STATUS_PENDING, "Pendiente"),
     (STATUS_IN_PRODUCTION, "Producción"),
@@ -78,34 +96,53 @@ def announce_order(sale_id: uuid.UUID) -> None:
     if not settings.discord_webhook_url:
         return
     try:
-        with SessionLocal() as db:
-            sale = db.get(Sale, sale_id)
-            if sale is None or sale.created_by is None:
-                return
-            if sale.created_by.username.lower() not in settings.discord_notify_users_set:
-                return
-            message_id = _deliver(to_sale_response(sale))
-            if message_id:
-                db.add(DiscordMessage(sale_id=sale_id, message_id=message_id))
-                db.commit()
+        with _SEND_LOCK, SessionLocal() as db:
+            if db.get(DiscordMessage, sale_id) is None:
+                sale = db.get(Sale, sale_id)
+                if sale is not None and _should_announce(sale):
+                    _announce(db, sale)
     except Exception:
         logger.exception("No se pudo anunciar el pedido %s en Discord", sale_id)
 
 
 def sync_order(sale_id: uuid.UUID) -> None:
     """Actualiza la tarjeta de un pedido ya anunciado con su estado actual. Lee el pedido
-    al momento de correr, así dos cambios seguidos siempre dejan el último."""
+    al momento de correr, así dos cambios seguidos siempre dejan el último. Si un pedido
+    reciente nunca alcanzó a publicarse (Discord lo rechazó), lo publica ahora."""
     if not settings.discord_webhook_url:
         return
     try:
-        with SessionLocal() as db:
-            link = db.get(DiscordMessage, sale_id)
-            sale = db.get(Sale, sale_id) if link is not None else None
+        with _SEND_LOCK, SessionLocal() as db:
+            sale = db.get(Sale, sale_id)
             if sale is None:
                 return
-            _edit_or_forget(db, link, to_sale_response(sale))
+            link = db.get(DiscordMessage, sale_id)
+            if link is not None:
+                _edit_or_forget(db, link, to_sale_response(sale))
+            elif _should_announce(sale) and _is_recent(sale):
+                _announce(db, sale)
     except Exception:
         logger.exception("No se pudo actualizar el pedido %s en Discord", sale_id)
+
+
+def _should_announce(sale: Sale) -> bool:
+    return sale.created_by is not None and sale.created_by.username.lower() in settings.discord_notify_users_set
+
+
+def _is_recent(sale: Sale) -> bool:
+    created = sale.created_at
+    if created is None:
+        return False
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - created <= RECOVERY_WINDOW
+
+
+def _announce(db, sale: Sale) -> None:
+    message_id = _deliver(to_sale_response(sale))
+    if message_id:
+        db.add(DiscordMessage(sale_id=sale.id, message_id=message_id))
+        db.commit()
 
 
 def snapshot_before_delete(sale: Sale) -> SaleResponse | None:
@@ -124,7 +161,7 @@ def mark_order_deleted(sale_id: uuid.UUID, snapshot: SaleResponse | None) -> Non
     if not settings.discord_webhook_url or snapshot is None:
         return
     try:
-        with SessionLocal() as db:
+        with _SEND_LOCK, SessionLocal() as db:
             link = db.get(DiscordMessage, sale_id)
             if link is None:
                 return
@@ -172,16 +209,59 @@ def _deliver(sale: SaleResponse, message_id: str | None = None) -> str | None:
 
 
 def _request(method: str, url: str, payload: dict) -> dict | None:
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode(),
-        # Discord (Cloudflare) rechaza con 403 el User-Agent por defecto de urllib.
-        headers={"Content-Type": "application/json", "User-Agent": "SS3D-Notifier/1.0"},
-        method=method,
-    )
-    with urllib.request.urlopen(request, timeout=8) as response:
-        body = response.read()
-    return json.loads(body) if body else None
+    """Envía a Discord, esperando y reintentando si pide bajar la velocidad (429), si
+    falla de su lado (5xx) o si se corta la conexión. Otros errores (400, 404) se lanzan
+    de inmediato: reintentar no los arregla."""
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode(),
+            # Discord (Cloudflare) rechaza con 403 el User-Agent por defecto de urllib.
+            headers={"Content-Type": "application/json", "User-Agent": "SS3D-Notifier/1.0"},
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=8) as response:
+                body = response.read()
+                _pause_if_exhausted(response.headers)
+            return json.loads(body) if body else None
+        except urllib.error.HTTPError as exc:
+            if attempt == MAX_ATTEMPTS or not (exc.code == 429 or exc.code >= 500):
+                raise
+            wait = _retry_after(exc) if exc.code == 429 else 2 ** (attempt - 1)
+            logger.warning("Discord respondió %s; reintento %s en %.1f s", exc.code, attempt, wait)
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if attempt == MAX_ATTEMPTS:
+                raise
+            wait = 2 ** (attempt - 1)
+            logger.warning("Sin conexión con Discord (%s); reintento %s en %.1f s", exc, attempt, wait)
+        time.sleep(wait)
+    return None
+
+
+def _retry_after(exc: urllib.error.HTTPError) -> float:
+    """Segundos que Discord pide esperar tras un 429 (cuerpo JSON o cabecera)."""
+    wait = None
+    try:
+        wait = float(json.loads(exc.read() or b"{}").get("retry_after"))
+    except (ValueError, TypeError, AttributeError):
+        pass
+    if wait is None:
+        try:
+            wait = float(exc.headers.get("Retry-After") or 1)
+        except (TypeError, ValueError):
+            wait = 1.0
+    return min(max(wait, 0.5), MAX_WAIT_SECONDS)
+
+
+def _pause_if_exhausted(headers) -> None:
+    """Si Discord avisa que no quedan envíos en la ventana actual, espera a que se renueve
+    antes de soltar el turno: así el siguiente aviso no recibe un 429."""
+    try:
+        if headers.get("X-RateLimit-Remaining") == "0":
+            time.sleep(min(float(headers.get("X-RateLimit-Reset-After") or 1), MAX_WAIT_SECONDS))
+    except (TypeError, ValueError):
+        pass
 
 
 # ---------------------------------------------------------------------------

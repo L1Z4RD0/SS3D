@@ -4,11 +4,12 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import extract, func
 from sqlalchemy.orm import Session
 
+from app.constants import NO_SALE_SOURCE
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.sale import Sale
 from app.models.user import User
-from app.schemas.history import MonthlySummary
+from app.schemas.history import MonthlySummary, SourceTotals
 from app.models.sale import STATUS_DELIVERED
 from app.services.sale_builder import sales_counted_for
 
@@ -57,6 +58,20 @@ def get_monthly_history(db: Session = Depends(get_db), current_user: User = Depe
         .all()
     )
 
+    # Mismo grupo de pedidos, separado por fuente de venta.
+    by_source: dict[tuple[int, int], dict[str, SourceTotals]] = {}
+    source_rows = (
+        db.query(Sale)
+        .filter(sales_counted_for(current_user), Sale.status == STATUS_DELIVERED)
+        .with_entities(
+            year_expr, month_expr, Sale.sale_source, func.count(Sale.id), func.coalesce(func.sum(Sale.base_price), 0)
+        )
+        .group_by(year_expr, month_expr, Sale.sale_source)
+        .all()
+    )
+    for year, month, source, jobs, revenue in source_rows:
+        by_source.setdefault((int(year), int(month)), {})[source or NO_SALE_SOURCE] = SourceTotals(jobs=jobs, revenue=revenue)
+
     items = []
     for (
         year,
@@ -92,6 +107,7 @@ def get_monthly_history(db: Session = Depends(get_db), current_user: User = Depe
                 total_filament_used_g=total_grams,
                 total_depreciation=total_depr,
                 total_energy=total_energy,
+                by_source=by_source.get((year_int, month_int), {}),
             )
         )
     return items

@@ -40,6 +40,14 @@ class PaymentMethodBreakdownItem(BaseModel):
     profit: Decimal
 
 
+class SaleSourceBreakdownItem(BaseModel):
+    # None = ventas sin fuente registrada (anteriores al campo).
+    sale_source: str | None
+    jobs: int
+    revenue: Decimal
+    profit: Decimal
+
+
 class StockAlertItem(BaseModel):
     filament_id: uuid.UUID
     brand: str

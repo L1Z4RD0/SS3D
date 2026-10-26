@@ -243,6 +243,7 @@ def sell_item(
         profit=money(price - item.cost),
         margin_percent=calculate_margin_percent(price, item.cost),
         payment_method=payload.payment_method,
+        sale_source=payload.sale_source,
         notes=payload.notes,
         status=STATUS_READY,
         promised_delivery_date=payload.promised_delivery_date,

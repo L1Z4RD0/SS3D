@@ -335,6 +335,7 @@ def to_sale_response(
         profit=sale.profit,
         margin_percent=sale.margin_percent,
         payment_method=sale.payment_method,
+        sale_source=sale.sale_source,
         notes=sale.notes,
         supplies_used=[
             SaleSupplyResponse(

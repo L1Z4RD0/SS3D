@@ -5,6 +5,8 @@ import { formatCurrency, formatNumber, formatPercent } from "../utils/format";
 import StatCard from "../components/StatCard.vue";
 import MonthlyTrendChart from "../components/MonthlyTrendChart.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
+import SourceBreakdown from "../components/SourceBreakdown.vue";
+import { SALE_SOURCES, NO_SALE_SOURCE } from "../api/sales";
 
 const months = ref([]);
 const selectedKeys = ref([]);
@@ -56,6 +58,22 @@ const sparkFor = (field) => {
     .slice(-8);
   return upTo.length >= 2 ? upTo.map((m) => Number(m[field])) : null;
 };
+
+// Ventas por fuente. Un mes: dona. Varios: una barra por canal en cada mes (pedidos).
+const sourceItems = (m) =>
+  Object.entries(m.by_source || {}).map(([source, t]) => ({ source, jobs: t.jobs, revenue: t.revenue }));
+const ALL_SOURCES = [...SALE_SOURCES, NO_SALE_SOURCE];
+const sourceSeriesInfo = computed(() =>
+  // Solo los canales con ventas en algún mes elegido ("Sin registrar" no aparece si no hay).
+  ALL_SOURCES.filter((src) => selectedMonths.value.some((m) => m.by_source?.[src.value]?.jobs))
+);
+const sourceSeries = computed(() =>
+  sourceSeriesInfo.value.map((src) => ({
+    name: src.label,
+    data: selectedMonths.value.map((m) => m.by_source?.[src.value]?.jobs || 0),
+  }))
+);
+const formatJobs = (v) => `${Math.round(v)}`;
 
 function toggleMonth(m) {
   const key = monthKey(m);
@@ -123,6 +141,13 @@ function isSelected(m) {
           <StatCard label="Horas impresas" :value="formatNumber(singleMonth.total_print_hours, 1)" :spark="sparkFor('total_print_hours')" color="var(--info)" />
           <StatCard label="Filamento usado" :value="`${formatNumber(singleMonth.total_filament_used_g, 0)} g`" />
         </div>
+        <div v-reveal class="card glow">
+          <div class="card-header">
+            <h3>Ventas por fuente</h3>
+            <span class="text-muted text-sm">De dónde llegaron los pedidos entregados de {{ singleMonth.label }}</span>
+          </div>
+          <SourceBreakdown :items="sourceItems(singleMonth)" />
+        </div>
       </template>
 
       <template v-else-if="isComparing">
@@ -139,6 +164,22 @@ function isSelected(m) {
             </div>
             <MonthlyTrendChart type="line" :categories="chartCategories" :series="marginSeries" :value-formatter="formatPercent" />
           </div>
+        </div>
+
+        <div v-reveal class="card glow" style="margin-bottom: 20px">
+          <div class="card-header">
+            <h3>Ventas por fuente</h3>
+            <span class="text-muted text-sm">Pedidos entregados de cada canal, mes a mes</span>
+          </div>
+          <div v-if="!sourceSeries.length" class="empty-state">Sin ventas en estos meses.</div>
+          <MonthlyTrendChart
+            v-else
+            type="bar"
+            :categories="chartCategories"
+            :series="sourceSeries"
+            :colors="sourceSeriesInfo.map((s) => s.color)"
+            :value-formatter="formatJobs"
+          />
         </div>
 
         <div class="card">

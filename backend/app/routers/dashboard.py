@@ -17,6 +17,7 @@ from app.schemas.dashboard import (
     DashboardSummary,
     PaymentMethodBreakdownItem,
     PrinterBreakdownItem,
+    SaleSourceBreakdownItem,
     StockAlertItem,
 )
 from app.services.inventory import filament_stock_status
@@ -197,6 +198,29 @@ def get_by_payment_method(
     return [
         PaymentMethodBreakdownItem(payment_method=pm, jobs=jobs, revenue=revenue, profit=profit)
         for pm, jobs, revenue, profit in rows
+    ]
+
+
+@router.get("/by-source", response_model=list[SaleSourceBreakdownItem])
+def get_by_source(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+):
+    """De dónde salieron las ventas del período (Instagram, Facebook, Personal o sin
+    registrar). Mismas reglas que el resto del Dashboard: pedidos Entregados."""
+    revenue = func.coalesce(func.sum(Sale.base_price), 0)
+    rows = (
+        _dated_sales_query(db, current_user, date_from, date_to)
+        .with_entities(Sale.sale_source, func.count(Sale.id), revenue, func.coalesce(func.sum(Sale.profit), 0))
+        .group_by(Sale.sale_source)
+        .order_by(revenue.desc())
+        .all()
+    )
+    return [
+        SaleSourceBreakdownItem(sale_source=src, jobs=jobs, revenue=rev, profit=profit)
+        for src, jobs, rev, profit in rows
     ]
 
 

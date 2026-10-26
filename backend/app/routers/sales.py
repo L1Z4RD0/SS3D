@@ -3,9 +3,10 @@ from datetime import date
 from decimal import Decimal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
-from app.constants import ELECTRICITY_RATE, LABOR_RATE_PER_HOUR
+from app.constants import ELECTRICITY_RATE, LABOR_RATE_PER_HOUR, NO_SALE_SOURCE, SALE_SOURCES
 from app.database import get_db
 from app.dependencies import get_current_user, is_watcher, readable_user_ids
 from app.models.sale import ORDER_STATUSES, STATUS_CANCELLED, STATUS_DELIVERED, Sale
@@ -67,8 +68,19 @@ router = APIRouter(prefix="/api/sales", tags=["sales"])
 
 # En En producción y Lista la pieza ya se está fabricando: solo se editan estos datos.
 EDITABLE_WHILE_IN_PRODUCTION = (
-    "client_name", "buyer_name", "notes", "payment_method", "price", "promised_delivery_date", "delivery_by"
+    "client_name", "buyer_name", "notes", "payment_method", "sale_source", "price", "promised_delivery_date",
+    "delivery_by",
 )
+# Columnas por las que se puede ordenar la hoja de ventas (?sort=...&direction=asc|desc).
+SORT_COLUMNS = {
+    "fecha": Sale.sale_date,
+    "entrega": Sale.promised_delivery_date,
+    "cliente": func.lower(Sale.client_name),
+    "precio": Sale.total_price,
+    "costo": Sale.total_cost,
+    "ganancia": Sale.profit,
+    "margen": Sale.margin_percent,
+}
 LOCKED_FIELD_LABELS = {
     "sale_date": "fecha del pedido",
     "printer_id": "impresora",
@@ -163,6 +175,10 @@ def list_sales(
     payment_method: str | None = Query(default=None),
     search: str | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
+    # "sin_registrar" = ventas sin fuente (las anteriores a que existiera el campo).
+    sale_source: str | None = Query(default=None, pattern="^(" + "|".join((*SALE_SOURCES, NO_SALE_SOURCE)) + ")$"),
+    sort: str = Query(default="fecha", pattern="^(" + "|".join(SORT_COLUMNS) + ")$"),
+    direction: str = Query(default="desc", pattern="^(asc|desc)$"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
@@ -177,6 +193,10 @@ def list_sales(
         query = query.filter(Sale.printer_id == printer_id)
     if payment_method is not None:
         query = query.filter(Sale.payment_method == payment_method)
+    if sale_source == NO_SALE_SOURCE:
+        query = query.filter(Sale.sale_source.is_(None))
+    elif sale_source is not None:
+        query = query.filter(Sale.sale_source == sale_source)
     statuses = _parse_status_filter(status_filter)
     if statuses is not None:
         query = query.filter(Sale.status.in_(statuses))
@@ -187,7 +207,15 @@ def list_sales(
         )
 
     total = query.count()
-    rows = query.order_by(Sale.sale_date.desc(), Sale.created_at.desc()).offset(offset).limit(limit).all()
+    column = SORT_COLUMNS[sort]
+    primary = column.asc() if direction == "asc" else column.desc()
+    # Desempate estable (para que paginar no repita ni salte ventas): las más nuevas primero.
+    rows = (
+        query.order_by(primary.nulls_last(), Sale.created_at.desc(), Sale.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
     return SalePage(items=[to_sale_response(s, viewer=current_user) for s in rows], total=total)
 
 
@@ -339,6 +367,7 @@ def create_sale(
         profit=money(price - breakdown.total_cost),
         margin_percent=calculate_margin_percent(price, breakdown.total_cost),
         payment_method=payload.payment_method,
+        sale_source=payload.sale_source,
         notes=payload.notes,
         delivery_by=(payload.delivery_by or "").strip() or None,
         # Un regalo no cobra nada, tampoco la reserva por riesgo.
@@ -433,13 +462,13 @@ def update_sale(
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 f"El pedido {why}: no se pueden cambiar {names}. "
-                "Solo precio, fecha de entrega, trabajo, comprador, método de pago y notas.",
+                "Solo precio, fecha de entrega, trabajo, comprador, método de pago, fuente de venta y notas.",
             )
         for field in EDITABLE_WHILE_IN_PRODUCTION:
             if field == "price" or field not in changes:
                 continue
-            # Comprador y notas se pueden vaciar; el resto de los campos no admite vacío.
-            if changes[field] is None and field not in ("buyer_name", "notes", "delivery_by"):
+            # Comprador, notas y fuente se pueden vaciar; el resto de los campos no admite vacío.
+            if changes[field] is None and field not in ("buyer_name", "notes", "delivery_by", "sale_source"):
                 continue
             setattr(sale, field, changes[field])
         if sale.status == STATUS_DELIVERED and new_delivered is not None:

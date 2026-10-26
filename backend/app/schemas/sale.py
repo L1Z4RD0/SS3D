@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.constants import SALE_SOURCE_PATTERN
 from app.schemas.calculator import FilamentUsageInput, PlateInput, SupplyUsageInput
 
 PAYMENT_METHODS = ("efectivo", "transferencia", "debito", "credito", "por_cobrar", "cortesia")
@@ -36,6 +37,7 @@ class SaleCreateRequest(BaseModel):
     delivery_by: str | None = Field(default=None, max_length=60)
     supplies: list[SupplyUsageInput] = Field(default_factory=list)
     payment_method: str = Field(pattern="^(" + "|".join(PAYMENT_METHODS) + ")$")
+    sale_source: str | None = Field(default=None, pattern=SALE_SOURCE_PATTERN)
     notes: str | None = None
     # Planchas adicionales del mismo producto (la impresora/horas/filamentos de arriba son
     # la plancha principal).
@@ -61,6 +63,8 @@ class SaleUpdateRequest(BaseModel):
     shipping_cost: Decimal | None = Field(default=None, ge=0)
     supplies: list[SupplyUsageInput] | None = None
     payment_method: str | None = Field(default=None, pattern="^(" + "|".join(PAYMENT_METHODS) + ")$")
+    # null la deja "Sin registrar".
+    sale_source: str | None = Field(default=None, pattern=SALE_SOURCE_PATTERN)
     notes: str | None = None
     # Solo en edición completa (Pendiente/Entregada): recalcula la reserva por riesgo.
     risk_level: Literal["bajo", "medio", "alto"] | None = None
@@ -225,6 +229,7 @@ class SaleResponse(BaseModel):
     profit: Decimal
     margin_percent: Decimal
     payment_method: str
+    sale_source: str | None = None
     notes: str | None
     # Ciclo de vida del pedido
     status: str

@@ -15,6 +15,7 @@ import { useAuthStore } from "../stores/auth";
 import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
 import DoughnutChart from "../components/DoughnutChart.vue";
+import SaleSourcePicker from "../components/SaleSourcePicker.vue";
 import PriceLadder from "../components/PriceLadder.vue";
 import QuoteDocument from "../components/QuoteDocument.vue";
 import FilamentPickerModal from "../components/FilamentPickerModal.vue";
@@ -360,6 +361,7 @@ const saveForm = reactive({
   client_name: "",
   buyer_name: "",
   payment_method: "efectivo",
+  sale_source: "",
   notes: "",
 });
 const saving = ref(false);
@@ -429,6 +431,10 @@ function openSaveModal(scenario) {
 }
 
 async function confirmSaveAsSale() {
+  if (!saveForm.sale_source) {
+    saveError.value = "Elige la fuente de venta: Instagram, Facebook o Personal.";
+    return;
+  }
   if (saleOwnerMismatch.value) {
     saveError.value = "Para guardar como venta, la impresora, los filamentos y los insumos deben ser del mismo usuario.";
     return;
@@ -457,6 +463,7 @@ async function confirmSaveAsSale() {
       client_name: saveForm.client_name,
       buyer_name: saveForm.buyer_name || null,
       payment_method: saveForm.payment_method,
+      sale_source: saveForm.sale_source,
       notes: saveForm.notes || null,
       chosen_margin_percent: selectedScenario.value.margin_percent,
       ...(auth.isCompany && companySaleOwnerId.value ? { owner_id: companySaleOwnerId.value } : {}),
@@ -1106,6 +1113,7 @@ onMounted(() => {
             <label>Comprador (opcional)</label>
             <input v-model="saveForm.buyer_name" />
           </div>
+          <SaleSourcePicker v-model="saveForm.sale_source" required style="grid-column: 1 / -1" />
         </div>
         <div v-if="!saveIsGift" class="field mt-2">
           <label class="flex items-center gap-2" style="cursor: pointer; font-weight: 600">

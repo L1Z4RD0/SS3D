@@ -6,7 +6,7 @@ import * as betaApi from "../api/beta";
 import { DEFAULT_RISK_LEVEL, riskLevelForPercent } from "../api/calculator";
 import * as printersApi from "../api/printers";
 import * as inventoryApi from "../api/inventory";
-import { PAYMENT_METHODS, GIFT_PAYMENT_METHOD } from "../api/sales";
+import { PAYMENT_METHODS, GIFT_PAYMENT_METHOD, SALE_SOURCES, NO_SALE_SOURCE, saleSourceInfo } from "../api/sales";
 import { formatCurrency, formatPercent, formatDate, todayISO } from "../utils/format";
 import { GRAMS_MAX, isValidGrams, isValidNumber, gramsErrorMessage, extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
@@ -18,6 +18,7 @@ import Icon from "../components/Icon.vue";
 import FilamentPickerModal from "../components/FilamentPickerModal.vue";
 import ExtraPlatesEditor from "../components/ExtraPlatesEditor.vue";
 import RiskLevelPicker from "../components/RiskLevelPicker.vue";
+import SaleSourcePicker from "../components/SaleSourcePicker.vue";
 import HoursMinutesInput from "../components/HoursMinutesInput.vue";
 import AddPlateModal from "../components/AddPlateModal.vue";
 import { platesPayload, platesError } from "../utils/plates";
@@ -47,14 +48,52 @@ function sellerLabel(sale) {
 const sales = ref([]);
 const total = ref(0);
 const loading = ref(true);
-const limit = 20;
+const limit = 100;
 const offset = ref(0);
 
 const printers = ref([]);
 const filaments = ref([]);
 const supplies = ref([]);
 
-const filters = reactive({ date_from: "", date_to: "", client: "", printer_id: "", payment_method: "", search: "", status: "" });
+const EMPTY_FILTERS = { date_from: "", date_to: "", client: "", printer_id: "", payment_method: "", sale_source: "", search: "", status: "" };
+const filters = reactive({ ...EMPTY_FILTERS });
+
+/* Orden de la hoja: lo resuelve el servidor (así sirve con varias páginas). Se elige en
+   "Ordenar por" o tocando el título de una columna (otro toque invierte el orden). */
+const SORT_OPTIONS = [
+  { by: "fecha", direction: "desc", label: "Más recientes" },
+  { by: "fecha", direction: "asc", label: "Más antiguas" },
+  { by: "precio", direction: "desc", label: "Precio: mayor a menor" },
+  { by: "precio", direction: "asc", label: "Precio: menor a mayor" },
+  { by: "ganancia", direction: "desc", label: "Ganancia: mayor a menor" },
+  { by: "ganancia", direction: "asc", label: "Ganancia: menor a mayor" },
+  { by: "costo", direction: "desc", label: "Costo: mayor a menor" },
+  { by: "margen", direction: "desc", label: "Margen: mayor a menor" },
+  { by: "entrega", direction: "asc", label: "Entrega más próxima" },
+  { by: "cliente", direction: "asc", label: "Trabajo (A-Z)" },
+];
+const sort = reactive({ by: "fecha", direction: "desc" });
+const sortKey = computed({
+  get: () => `${sort.by}:${sort.direction}`,
+  set: (key) => {
+    const [by, direction] = key.split(":");
+    Object.assign(sort, { by, direction });
+  },
+});
+// Lo primero que uno espera al tocar cada columna (los montos, de mayor a menor).
+const FIRST_DIRECTION = { fecha: "desc", cliente: "asc", precio: "desc", costo: "desc", ganancia: "desc", margen: "desc" };
+function sortBy(by) {
+  sort.direction = sort.by === by ? (sort.direction === "desc" ? "asc" : "desc") : FIRST_DIRECTION[by];
+  sort.by = by;
+}
+const MONEY_COLUMNS = [
+  { by: "precio", label: "Precio" },
+  { by: "costo", label: "Costo" },
+  { by: "ganancia", label: "Ganancia" },
+  { by: "margen", label: "Margen" },
+];
+const sortArrow = (by) => (sort.by === by ? (sort.direction === "desc" ? "▼" : "▲") : "");
+watch(sortKey, () => applyFilters());
 
 const paymentLabel = (v) => PAYMENT_METHODS.find((p) => p.value === v)?.label || v;
 
@@ -174,7 +213,7 @@ async function loadCatalog() {
 async function loadSales() {
   loading.value = true;
   try {
-    const params = { limit, offset: offset.value };
+    const params = { limit, offset: offset.value, sort: sort.by, direction: sort.direction };
     Object.entries(filters).forEach(([k, v]) => {
       if (v) params[k] = v;
     });
@@ -210,7 +249,7 @@ function setQuickStatus(value) {
 }
 
 function resetFilters() {
-  Object.assign(filters, { date_from: "", date_to: "", client: "", printer_id: "", payment_method: "", search: "", status: "" });
+  Object.assign(filters, EMPTY_FILTERS);
   applyFilters();
 }
 
@@ -259,6 +298,7 @@ const emptyForm = () => ({
   delivery_by: "",
   risk_level: DEFAULT_RISK_LEVEL,
   payment_method: "efectivo",
+  sale_source: "",
   notes: "",
 });
 const form = reactive(emptyForm());
@@ -588,6 +628,7 @@ function openEdit(sale) {
     shipping_cost: Number(sale.shipping_cost),
     risk_level: riskLevelForPercent(sale.risk_percent),
     payment_method: sale.payment_method,
+    sale_source: sale.sale_source || "",
     notes: sale.notes || "",
     promised_delivery_date: sale.promised_delivery_date,
     delivery_by: sale.delivery_by || "",
@@ -615,6 +656,7 @@ function buildPayload() {
     buyer_name: form.buyer_name || null,
     ...buildPricingPayload(),
     payment_method: form.payment_method,
+    sale_source: form.sale_source || null,
     delivery_by: form.delivery_by?.trim() || null,
     notes: form.notes || null,
   };
@@ -657,6 +699,8 @@ function validateJobInputs() {
 
 function validateSaleForm() {
   if (auth.isWatcher && !form.owner_id) return "Selecciona el usuario para el que registras la venta.";
+  // Obligatoria en las ventas nuevas; las antiguas pueden seguir sin fuente.
+  if (!editingId.value && !form.sale_source) return "Elige la fuente de venta: Instagram, Facebook o Personal.";
   if (!form.printer_id) return "Selecciona una impresora.";
   if (editingStatus.value === "entregada") {
     if (!form.delivered_date) return "Indica la fecha real de entrega.";
@@ -868,6 +912,20 @@ onMounted(async () => {
           </select>
         </div>
         <div class="field">
+          <label>Fuente de venta</label>
+          <select v-model="filters.sale_source">
+            <option value="">Todas</option>
+            <option v-for="src in SALE_SOURCES" :key="src.value" :value="src.value">{{ src.label }}</option>
+            <option :value="NO_SALE_SOURCE.value">{{ NO_SALE_SOURCE.label }}</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Ordenar por</label>
+          <select v-model="sortKey">
+            <option v-for="o in SORT_OPTIONS" :key="`${o.by}:${o.direction}`" :value="`${o.by}:${o.direction}`">{{ o.label }}</option>
+          </select>
+        </div>
+        <div class="field">
           <label>Estado</label>
           <select v-model="filters.status">
             <option value="">Todos</option>
@@ -897,16 +955,17 @@ onMounted(async () => {
           <table>
             <thead>
               <tr>
-                <th>Pedido</th>
+                <th><button type="button" class="th-sort" :class="{ on: sort.by === 'fecha' }" @click="sortBy('fecha')">Pedido <span>{{ sortArrow("fecha") }}</span></button></th>
                 <th>Estado</th>
-                <th>Cliente</th>
+                <th><button type="button" class="th-sort" :class="{ on: sort.by === 'cliente' }" @click="sortBy('cliente')">Cliente <span>{{ sortArrow("cliente") }}</span></button></th>
                 <th v-if="auth.isWatcher">Inventario de</th>
                 <th>Registrada por</th>
                 <th>Impresora</th>
-                <th class="text-right">Precio</th>
-                <th class="text-right">Costo</th>
-                <th class="text-right">Ganancia</th>
-                <th class="text-right">Margen</th>
+                <th v-for="col in MONEY_COLUMNS" :key="col.by" class="text-right">
+                  <button type="button" class="th-sort" :class="{ on: sort.by === col.by }" @click="sortBy(col.by)">
+                    <span>{{ sortArrow(col.by) }}</span> {{ col.label }}
+                  </button>
+                </th>
                 <th>Pago</th>
                 <th></th>
               </tr>
@@ -977,7 +1036,13 @@ onMounted(async () => {
                   {{ formatCurrency(s.profit) }}
                 </td>
                 <td class="text-right">{{ s.status === "cancelado" ? "—" : formatPercent(s.margin_percent) }}</td>
-                <td><span class="badge badge-neutral">{{ paymentLabel(s.payment_method) }}</span></td>
+                <td>
+                  <span class="badge badge-neutral">{{ paymentLabel(s.payment_method) }}</span>
+                  <div v-if="s.sale_source" class="source-tag" :style="{ '--source-color': saleSourceInfo(s.sale_source).color }">
+                    <Icon :name="saleSourceInfo(s.sale_source).icon" :size="12" />
+                    {{ saleSourceInfo(s.sale_source).label }}
+                  </div>
+                </td>
                 <td class="text-right">
                   <div class="flex gap-2" style="justify-content: flex-end">
                     <button class="btn btn-icon btn-ghost" title="Estado y línea de tiempo" @click="statusModalSaleId = s.id">
@@ -1145,6 +1210,7 @@ onMounted(async () => {
             <label>Comprador (opcional)</label>
             <input v-model="form.buyer_name" />
           </div>
+          <SaleSourcePicker v-model="form.sale_source" :required="!editingId" class="form-span" />
           <div class="field">
             <label>Impresora</label>
             <select v-model="form.printer_id" required :disabled="productionLocked || (auth.isWatcher && !form.owner_id)">
@@ -1366,6 +1432,46 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+/* Selector de fuente de venta: ocupa toda la fila del formulario. */
+.form-span {
+  grid-column: 1 / -1;
+}
+
+/* Títulos de columna que ordenan la hoja (otro toque invierte el orden). */
+.th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+.th-sort:hover,
+.th-sort.on {
+  color: var(--primary);
+}
+.th-sort span {
+  display: inline-block;
+  min-width: 0.7em;
+  font-size: 0.7em;
+}
+
+/* Fuente de venta bajo el método de pago. */
+.source-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  color: var(--source-color);
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
 .quick-status {
   position: relative;
   display: inline-flex;

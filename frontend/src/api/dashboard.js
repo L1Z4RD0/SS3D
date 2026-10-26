@@ -9,4 +9,7 @@ export const getByPrinter = (params = {}) =>
 export const getByPaymentMethod = (params = {}) =>
   client.get("/api/dashboard/by-payment-method", { params }).then((r) => r.data);
 
+export const getBySource = (params = {}) =>
+  client.get("/api/dashboard/by-source", { params }).then((r) => r.data);
+
 export const getStockAlerts = () => client.get("/api/dashboard/stock-alerts").then((r) => r.data);

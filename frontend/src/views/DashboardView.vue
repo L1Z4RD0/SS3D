@@ -10,6 +10,7 @@ import { formatCurrency, formatNumber, formatPercent, currentMonthRange } from "
 import { BUSINESS_NAME, BUSINESS_LOGO_URL } from "../utils/business";
 import StatCard from "../components/StatCard.vue";
 import DoughnutChart from "../components/DoughnutChart.vue";
+import SourceBreakdown from "../components/SourceBreakdown.vue";
 import Icon from "../components/Icon.vue";
 import { useAuthStore } from "../stores/auth";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
@@ -19,6 +20,7 @@ const auth = useAuthStore();
 const summary = ref(null);
 const byPrinter = ref([]);
 const byPayment = ref([]);
+const bySource = ref([]);
 const stockAlerts = ref([]);
 const loading = ref(true);
 
@@ -106,6 +108,8 @@ async function loadAll() {
     if (filters.date_from) params.date_from = filters.date_from;
     if (filters.date_to) params.date_to = filters.date_to;
 
+    // Aparte y tolerante: si falla, el resto del Dashboard se muestra igual.
+    const sourcePromise = dashboardApi.getBySource(params).catch(() => []);
     const [s, p, pm, alerts] = await Promise.all([
       dashboardApi.getSummary(params),
       dashboardApi.getByPrinter(params),
@@ -116,6 +120,7 @@ async function loadAll() {
     byPrinter.value = p;
     byPayment.value = pm;
     stockAlerts.value = alerts;
+    bySource.value = (await sourcePromise).map((r) => ({ source: r.sale_source, jobs: r.jobs, revenue: r.revenue }));
   } finally {
     loading.value = false;
   }
@@ -319,6 +324,14 @@ onMounted(() => {
             </table>
           </div>
         </div>
+      </div>
+
+      <div v-reveal class="card glow" style="margin-bottom: 20px">
+        <div class="card-header">
+          <h3>Ventas por fuente</h3>
+          <span class="text-muted text-sm">De dónde llegaron los pedidos entregados del período</span>
+        </div>
+        <SourceBreakdown :items="bySource" />
       </div>
 
       <div v-if="!auth.isWatcher" v-reveal class="card">

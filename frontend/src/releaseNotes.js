@@ -8,6 +8,33 @@
    Textos cortos y en el idioma de los usuarios (qué pueden hacer ahora), no técnicos. */
 export const RELEASES = [
   {
+    id: "2026-10-26",
+    date: "26 de octubre de 2026",
+    title: "Fuente de venta y hoja de ventas más cómoda",
+    items: [
+      {
+        icon: "📣",
+        title: "¿De dónde llegó la venta?",
+        text: "Al registrar una venta eliges Instagram, Facebook o Personal. En el Dashboard y el Historial ves qué canal vende más.",
+      },
+      {
+        icon: "📋",
+        title: "100 ventas por página",
+        text: "La hoja de ventas ahora muestra hasta 100 ventas antes de pasar de página.",
+      },
+      {
+        icon: "↕️",
+        title: "Ordena como quieras",
+        text: "Toca Precio, Ganancia, Costo, Margen, Pedido o Cliente para ordenar de mayor a menor (otro toque invierte), o usa \"Ordenar por\".",
+      },
+      {
+        icon: "🤖",
+        title: "Discord no se salta pedidos",
+        text: "Si se registran muchos pedidos seguidos, el bot los publica todos, uno tras otro.",
+      },
+    ],
+  },
+  {
     id: "2026-10-22",
     date: "22 de octubre de 2026",
     title: "Conexión más estable",

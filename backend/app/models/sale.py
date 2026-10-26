@@ -80,6 +80,8 @@ class Sale(UUIDMixin, TimestampMixin, Base):
     delivery_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0, server_default="0")
 
     payment_method: Mapped[str] = mapped_column(Text, nullable=False)
+    # De dónde salió la venta (app.constants.SALE_SOURCES). NULL en las anteriores a 0019.
+    sale_source: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # ---- Ciclo de vida del pedido ----

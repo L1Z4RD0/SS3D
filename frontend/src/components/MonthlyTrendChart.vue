@@ -11,6 +11,8 @@ const props = defineProps({
   series: { type: Array, required: true }, // [{ name, data: number[] }]
   height: { type: [Number, String], default: 280 },
   valueFormatter: { type: Function, default: (v) => v },
+  // Opcional: un color por serie (si no, la paleta de gráficos).
+  colors: { type: Array, default: null },
 });
 
 const { theme } = useTheme();
@@ -36,6 +38,7 @@ const chartOptions = computed(() => {
   const base = baseChartOptions(theme.value);
   return {
     ...base,
+    colors: props.colors || base.colors,
     chart: {
       ...base.chart,
       type: chartType.value,

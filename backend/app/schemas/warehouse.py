@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
+from app.constants import SALE_SOURCE_PATTERN
 from app.schemas.sale import PAYMENT_METHODS
 
 
@@ -45,6 +46,7 @@ class WarehouseSellRequest(BaseModel):
     client_name: str | None = Field(default=None, min_length=1, max_length=160)
     buyer_name: str | None = Field(default=None, max_length=160)
     payment_method: str = Field(pattern="^(" + "|".join(PAYMENT_METHODS) + ")$")
+    sale_source: str | None = Field(default=None, pattern=SALE_SOURCE_PATTERN)
     # Por defecto, el precio de venta de la pieza.
     price: Decimal | None = Field(default=None, ge=0)
     notes: str | None = None

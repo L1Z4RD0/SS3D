@@ -33,3 +33,10 @@ MARGIN_SCENARIO_PERCENTS = {s["margin_percent"] for s in MARGIN_SCENARIOS}
 # depreciación, energía e insumos) que se cobra como reserva, fuera del margen.
 RISK_LEVELS: dict[str, int] = {"bajo": 10, "medio": 15, "alto": 20}
 DEFAULT_RISK_LEVEL = "bajo"
+
+# De dónde salió una venta (para ver qué canal vende más). Opcional: las ventas anteriores
+# a la migración 0019 no lo tienen.
+SALE_SOURCES = ("instagram", "facebook", "personal")
+SALE_SOURCE_PATTERN = "^(" + "|".join(SALE_SOURCES) + ")$"
+# Cómo se llaman en filtros y gráficos las ventas sin fuente.
+NO_SALE_SOURCE = "sin_registrar"
