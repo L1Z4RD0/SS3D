@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useAuthStore } from "./stores/auth";
 import AppSidebar from "./components/AppSidebar.vue";
 import AppTopbar from "./components/AppTopbar.vue";
+import AssistantBubble from "./components/AssistantBubble.vue";
 import ConfirmDialogHost from "./components/ConfirmDialogHost.vue";
 import MobileTabBar from "./components/MobileTabBar.vue";
 import ToastHost from "./components/ToastHost.vue";
@@ -46,6 +47,7 @@ watch(
       </div>
     </div>
     <MobileTabBar />
+    <AssistantBubble />
   </div>
   <router-view v-else />
   <WhatsNewModal v-if="showShell" />

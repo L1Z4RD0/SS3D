@@ -341,3 +341,13 @@
 **¿Generó migración de Alembic?:** No. Solo cambió la validación de `POST/PUT /api/sales` y `POST /api/calculator/quote/save-as-sale` (este último acepta un `owner_id` opcional, solo para la Empresa).
 
 **Cambios grandes o riesgosos:** Ninguno. Un socio sigue vendiendo solo con su propia impresora y un observador común sigue usando la del dueño de la venta. El Reparto y la Inversión recuperada ya asignaban la máquina por dueño de impresora, así que la recuperación de inversión se suma al socio dueño. Verificado con 6 tests nuevos en `tests/test_company.py` (131 tests en total, todos OK) y build del frontend sin errores, contra la base local desechable; no se tocó producción.
+
+## [2026-10-27] - Asistente IA (Gemini) para consultas sobre Zola
+
+**Qué se hizo:** Burbuja flotante (abajo a la derecha; en el celular sobre la barra de pestañas) que abre un chat con un asistente IA. Solo la ven las cuentas de `ASSISTANT_USERS` (por defecto Diego, Sntg y Simple_Solutions3D) y responde con los datos de esas tres cuentas: pedidos/ventas en todos los estados, clientes, impresoras, filamentos, insumos, cotizaciones, Almacén y gastos de la Empresa. Los totales (por mes, cuenta, fuente, medio de pago y cliente) se calculan en el backend y se le pasan ya hechos, para que el modelo no sume cientos de filas a mano. Backend: `app/services/assistant.py` + `app/routers/assistant.py` (`GET /api/assistant/access`, `POST /api/assistant/chat`). Llama a la API de Gemini por REST con `urllib` (sin dependencias nuevas). Frontend: `AssistantBubble.vue`, con Markdown mínimo que escapa todo el HTML.
+
+**Por qué:** Poder preguntar en lenguaje natural por ventas, historial y clientes sin armar filtros a mano.
+
+**¿Generó migración de Alembic?:** No. Solo lee datos.
+
+**Cambios grandes o riesgosos:** Requiere la variable de entorno `GEMINI_API_KEY` en el backend (Render); sin ella la burbuja aparece pero avisa que falta configurarla. Opcionales: `GEMINI_MODEL` (por defecto `gemini-flash-latest`) y `ASSISTANT_USERS`. Cada pregunta envía a Google los datos de las tres cuentas (nombres de clientes incluidos). Solo consulta: no crea, edita ni borra nada. Tests en `tests/test_assistant.py` (acceso, que no se filtren datos de otras cuentas, historial y error sin clave).

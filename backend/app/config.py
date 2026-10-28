@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     # URL pública del frontend (ej. https://tu-app.vercel.app). Opcional: si está, el aviso
     # enlaza al Calendario y muestra el logo de la app.
     app_url: str | None = None
+    # Asistente IA (Gemini, Google AI Studio). Sin clave la burbuja avisa que falta configurarla.
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-flash-latest"
+    # Quiénes pueden usar el asistente; también son las cuentas cuyos datos consulta.
+    assistant_users: str = "Diego,Sntg,Simple_Solutions3D"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -35,6 +40,10 @@ class Settings(BaseSettings):
     @property
     def discord_notify_users_set(self) -> set[str]:
         return {u.strip().lower() for u in self.discord_notify_users.split(",") if u.strip()}
+
+    @property
+    def assistant_users_set(self) -> set[str]:
+        return {u.strip().lower() for u in self.assistant_users.split(",") if u.strip()}
 
     @property
     def refresh_cookie_samesite(self) -> str:
