@@ -6,7 +6,6 @@ from app.config import settings
 from app.routers import (
     beta,
     admin,
-    assistant,
     auth,
     business_profile,
     calculator,
@@ -52,7 +51,6 @@ app.include_router(filament_catalog.router)
 app.include_router(history.router)
 app.include_router(warehouse.router)
 app.include_router(beta.router)
-app.include_router(assistant.router)
 
 
 @app.get("/api/health")

@@ -351,3 +351,13 @@
 **¿Generó migración de Alembic?:** No. Solo lee datos.
 
 **Cambios grandes o riesgosos:** Requiere la variable de entorno `GEMINI_API_KEY` en el backend (Render); sin ella la burbuja aparece pero avisa que falta configurarla. Opcionales: `GEMINI_MODEL` (por defecto `gemini-flash-latest`) y `ASSISTANT_USERS`. Cada pregunta envía a Google los datos de las tres cuentas (nombres de clientes incluidos). Solo consulta: no crea, edita ni borra nada. Tests en `tests/test_assistant.py` (acceso, que no se filtren datos de otras cuentas, historial y error sin clave).
+
+## [2026-10-28] - Se quita el Asistente IA (Gemini)
+
+**Qué se hizo:** Se eliminó por completo el asistente del 2026-10-27: la burbuja (`AssistantBubble.vue`, `api/assistant.js`), las rutas `/api/assistant/*`, `app/services/assistant.py`, sus tests y las variables `GEMINI_API_KEY`, `GEMINI_MODEL` y `ASSISTANT_USERS`.
+
+**Por qué:** Las respuestas no eran buenas y no aportaba lo suficiente.
+
+**¿Generó migración de Alembic?:** No (el asistente no guardaba nada).
+
+**Cambios grandes o riesgosos:** Ninguno. En Render se puede borrar la variable `GEMINI_API_KEY` y revocar la clave en Google AI Studio.
