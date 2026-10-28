@@ -814,6 +814,18 @@ async function handleDelete(sale) {
 
 /* -------- Estados del pedido -------- */
 const statusModalSaleId = ref(null);
+// Cambio desde el detalle del pedido. Si se canceló y se rehízo, se muestra el pedido nuevo.
+async function onOrderChanged(s) {
+  if (s?.redone_as_id) {
+    statusModalSaleId.value = null;
+    await loadSales();
+    flashRow(s.redone_as_id);
+    showToast("Pedido rehecho", { detail: "El nuevo ya está En producción" });
+    return;
+  }
+  await loadSales();
+  flashRow(s?.id);
+}
 const advancingId = ref(null);
 
 // Botón rápido para el paso siguiente (el resto de opciones está en el detalle).
@@ -1434,7 +1446,7 @@ onMounted(async () => {
       v-if="statusModalSaleId"
       :sale-id="statusModalSaleId"
       @close="statusModalSaleId = null"
-      @changed="(s) => loadSales().then(() => flashRow(s?.id))"
+      @changed="onOrderChanged"
     />
 
     <AddPlateModal

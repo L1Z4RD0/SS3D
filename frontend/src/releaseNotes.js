@@ -9,6 +9,29 @@
 export const RELEASES = [
   {
     // Sale el mismo día que la anterior: repite sus puntos para quien todavía no la vio.
+    id: "2026-10-28.3",
+    date: "28 de octubre de 2026",
+    title: "Rehacer pedidos dañados, Rendimiento y Excel",
+    items: [
+      {
+        icon: "🔁",
+        title: "Rehacer un pedido dañado",
+        text: "Al cancelar un pedido porque la pieza salió dañada, Zola te pregunta si quieres rehacerlo: se crea uno igual que pasa directo a En producción.",
+      },
+      {
+        icon: "📈",
+        title: "Rendimiento por cuenta",
+        text: "Simple_Solutions3D tiene un módulo nuevo: Diego, Sntg y la Empresa por separado y todas juntas, mes a mes.",
+      },
+      {
+        icon: "📊",
+        title: "Ventas y Reparto en Excel",
+        text: "En Ventas y en Reparto (beta), «Descargar Excel» baja la información ordenada; el del Reparto explica cada fórmula.",
+      },
+    ],
+  },
+  {
+    // Sale el mismo día que la anterior: repite sus puntos para quien todavía no la vio.
     id: "2026-10-28.2",
     date: "28 de octubre de 2026",
     title: "Rendimiento por cuenta y Excel de ventas y Reparto",

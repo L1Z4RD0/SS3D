@@ -10,12 +10,20 @@ from sqlalchemy.orm import Session, joinedload
 from app.constants import ELECTRICITY_RATE, LABOR_RATE_PER_HOUR, NO_SALE_SOURCE, SALE_SOURCES
 from app.database import get_db
 from app.dependencies import get_current_user, is_watcher, readable_user_ids
-from app.models.sale import ORDER_STATUSES, STATUS_CANCELLED, STATUS_DELIVERED, Sale
+from app.models.sale import (
+    ORDER_STATUSES,
+    STATUS_CANCELLED,
+    STATUS_DELIVERED,
+    STATUS_IN_PRODUCTION,
+    STATUS_READY,
+    Sale,
+)
 from app.models.sale_filament import SaleFilament
 from app.models.sale_supply import SaleSupply
 from app.models.user import User
 from app.models.warehouse_item import WarehouseItem
 from app.models.sale_plate import SalePlate
+from app.schemas.calculator import FilamentUsageInput, PlateInput, SupplyUsageInput
 from app.schemas.sale import (
     GIFT_PAYMENT_METHOD,
     AddPlateRequest,
@@ -372,14 +380,17 @@ def get_sale(sale_id: uuid.UUID, db: Session = Depends(get_db), current_user: Us
     return to_sale_response(_get_listed_sale(db, sale_id, current_user), viewer=current_user, include_history=True)
 
 
-@router.post("", response_model=SaleResponse, status_code=status.HTTP_201_CREATED)
-def create_sale(
+def _create_sale(
+    db: Session,
     payload: SaleCreateRequest,
-    request: Request,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
+    current_user: User,
+    ip: str | None,
+    *,
+    created_note: str = "Pedido creado",
+    audit_source: str = "manual",
+) -> tuple[Sale, list]:
+    """Registra una venta (sin confirmar la transacción). La usan Nueva venta y Rehacer un
+    pedido con la pieza dañada, así ambos descuentan inventario y calculan costos igual."""
     # La venta usa solo el inventario de un dueño: el propio usuario, o el usuario
     # asignado que eligió el observador. Así los inventarios nunca se mezclan.
     owner_id = resolve_sale_owner(db, current_user, payload.owner_id)
@@ -444,7 +455,7 @@ def create_sale(
     start_as_pending(sale, payload.promised_delivery_date)
     db.add(sale)
     db.flush()
-    record_status(db, sale, sale.status, current_user, "Pedido creado")
+    record_status(db, sale, sale.status, current_user, created_note)
 
     exhausted_filaments = apply_filaments_to_sale(db, sale, resolved_filaments)
     exhausted_filaments += [f for f in apply_plates(db, sale, resolved_plates) if f not in exhausted_filaments]
@@ -461,15 +472,27 @@ def create_sale(
         entity_type="sale",
         entity_id=sale.id,
         details={
-            "source": "manual",
+            "source": audit_source,
             "client_name": sale.client_name,
             "price": str(price),
             "owner_id": str(owner_id),
             "status": sale.status,
             "promised_delivery_date": sale.promised_delivery_date.isoformat(),
         },
-        ip_address=request.client.host if request.client else None,
+        ip_address=ip,
     )
+    return sale, exhausted_filaments
+
+
+@router.post("", response_model=SaleResponse, status_code=status.HTTP_201_CREATED)
+def create_sale(
+    payload: SaleCreateRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    sale, exhausted_filaments = _create_sale(db, payload, current_user, request.client.host if request.client else None)
     db.commit()
     response = to_sale_response(_get_listed_sale(db, sale.id, current_user), exhausted_filaments, viewer=current_user)
     background_tasks.add_task(announce_order, sale.id)
@@ -712,6 +735,7 @@ def cancel_sale(
     borra el pedido como si nunca hubiera existido). Los cancelados nunca son ingreso."""
     sale = _get_editable_sale(db, sale_id, current_user)
     previous = sale.status
+    redo_payload = _redo_payload(sale, payload) if payload.redo else None
     piece = cancel_order(
         db,
         sale,
@@ -751,10 +775,100 @@ def cancel_sale(
                      "discard_reason": piece.discard_reason},
             ip_address=ip,
         )
+    redone = None
+    if redo_payload is not None:
+        redone = _redo_sale(db, sale, redo_payload, current_user, ip)
     db.commit()
     db.expire_all()
     background_tasks.add_task(sync_order, sale.id)
-    return to_sale_response(_get_listed_sale(db, sale.id, current_user), viewer=current_user, include_history=True)
+    response = to_sale_response(_get_listed_sale(db, sale.id, current_user), viewer=current_user, include_history=True)
+    if redone is not None:
+        background_tasks.add_task(announce_order, redone.id)
+        response.redone_as_id = redone.id
+    return response
+
+
+def _is_damaged_piece(sale: Sale, payload: CancelOrderRequest) -> bool:
+    """La pieza se dañó: En producción quedó inutilizable, o en Lista se descarta por dañada."""
+    if sale.warehouse_item_id is not None:
+        return False
+    if sale.status == STATUS_IN_PRODUCTION:
+        return payload.piece_outcome == "inutilizable"
+    if sale.status == STATUS_READY:
+        return payload.piece_outcome == "descartar" and payload.discard_reason == "danada"
+    return False
+
+
+def _redo_payload(sale: Sale, payload: CancelOrderRequest) -> SaleCreateRequest:
+    """El mismo pedido para volver a fabricarlo: mismo trabajo, cliente, precio, pago,
+    fuente, impresora, filamentos, horas, insumos, planchas y delivery. Se arma ANTES de
+    cancelar (con los datos tal como estaban)."""
+    if not _is_damaged_piece(sale, payload):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Solo se puede rehacer un pedido cuya pieza se dañó (En producción y no sirve, o Lista y dañada).",
+        )
+    plate_grams = sum((pf.grams_used for p in sale.plates for pf in p.filaments_used), Decimal(0))
+    if sale.filaments_used:
+        filaments = [FilamentUsageInput(filament_id=f.filament_id, grams_used=f.grams_used) for f in sale.filaments_used]
+    elif sale.filament_id and sale.grams_used - plate_grams > 0:
+        # Ventas antiguas con un solo filamento (sin líneas de filamento).
+        filaments = [FilamentUsageInput(filament_id=sale.filament_id, grams_used=sale.grams_used - plate_grams)]
+    else:
+        filaments = []
+    plates = [
+        PlateInput(
+            name=p.name,
+            printer_id=p.printer_id,
+            print_hours=p.print_hours,
+            filaments=[FilamentUsageInput(filament_id=pf.filament_id, grams_used=pf.grams_used) for pf in p.filaments_used],
+        )
+        for p in sale.plates
+        if not p.is_reprint  # las reimpresiones fueron fallas de ese pedido, no parte del producto
+    ]
+    return SaleCreateRequest(
+        sale_date=payload.today or date.today(),
+        promised_delivery_date=sale.promised_delivery_date,
+        client_name=sale.client_name,
+        buyer_name=sale.buyer_name,
+        owner_id=sale.user_id,
+        printer_id=sale.printer_id,
+        filaments=filaments,
+        print_hours=sale.print_hours,
+        postprocess_hours=sale.postprocess_hours,
+        price=sale.total_price,
+        shipping_cost=sale.shipping_cost,
+        delivery_by=sale.delivery_by,
+        supplies=[SupplyUsageInput(supply_id=s.supply_id, quantity=s.quantity_used) for s in sale.supplies_used],
+        payment_method=sale.payment_method,
+        sale_source=sale.sale_source,
+        notes=sale.notes,
+        extra_plates=plates,
+        risk_level=risk_level_for(sale.risk_percent) or "bajo",
+    )
+
+
+def _redo_sale(db: Session, original: Sale, payload: SaleCreateRequest, user: User, ip: str | None) -> Sale:
+    """Crea el pedido de reemplazo y lo deja directo En producción. Si no hay stock para
+    rehacerlo, falla todo (tampoco se cancela el original): nada queda a medias."""
+    code = original.id.hex[:6].upper()
+    sale, _ = _create_sale(db, payload, user, ip, created_note=f"Rehecho del pedido #{code} (pieza dañada)",
+                           audit_source="rehecho")
+    # Lo registra la misma cuenta que el original: sus ingresos siguen en esa cuenta.
+    if original.created_by_user_id is not None:
+        sale.created_by_user_id = original.created_by_user_id
+    sale.status = STATUS_IN_PRODUCTION
+    record_status(db, sale, STATUS_IN_PRODUCTION, user, "Directo a producción al rehacer el pedido")
+    log_event(
+        db,
+        user_id=user.id,
+        event_type="SALE_REDONE",
+        entity_type="sale",
+        entity_id=sale.id,
+        details={"original_sale_id": str(original.id), "owner_id": str(sale.user_id)},
+        ip_address=ip,
+    )
+    return sale
 
 
 @router.put("/{sale_id}/delivery", response_model=SaleResponse)

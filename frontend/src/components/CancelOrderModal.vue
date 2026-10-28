@@ -57,7 +57,19 @@ const outcomeText = computed(() => {
   return `La pieza no sirve: ${formatCurrency(pieceCost.value)} quedan como pérdida.`;
 });
 
-const canSubmit = computed(() => !(ready.value && pieceOutcome.value === "descartar" && !discardReason.value));
+// Pieza dañada: En producción y no sirve, o Lista y descartada por "Dañada". Solo entonces
+// se ofrece rehacer el pedido (uno igual, directo En producción).
+const damaged = computed(
+  () =>
+    (inProduction.value && pieceOutcome.value === "inutilizable") ||
+    (ready.value && pieceOutcome.value === "descartar" && discardReason.value === "danada")
+);
+const redo = ref(null); // null = sin responder
+const willRedo = computed(() => damaged.value && redo.value === true);
+
+const canSubmit = computed(
+  () => !(ready.value && pieceOutcome.value === "descartar" && !discardReason.value) && !(damaged.value && redo.value === null)
+);
 
 async function submit() {
   if (!canSubmit.value) return;
@@ -69,11 +81,14 @@ async function submit() {
       payload.keep_hours = keepHours.value;
       payload.piece_outcome = pieceOutcome.value;
       if (pieceOutcome.value === "descartar") payload.discard_reason = discardReason.value;
+      if (willRedo.value) payload.redo = true;
     }
     const updated = await salesApi.cancelSale(props.sale.id, payload);
     emit("cancelled", updated);
   } catch (err) {
-    error.value = extractApiError(err, "No se pudo cancelar el pedido.");
+    const msg = extractApiError(err, "No se pudo cancelar el pedido.");
+    // Si no se pudo rehacer (ej. falta filamento) no se canceló nada: se avisa claro.
+    error.value = willRedo.value ? `${msg} No se canceló el pedido: puedes cancelarlo sin rehacerlo.` : msg;
   } finally {
     busy.value = false;
   }
@@ -132,6 +147,22 @@ async function submit() {
         </fieldset>
 
         <div class="outcome" :class="pieceOutcome === 'almacen' ? 'is-warehouse' : 'is-loss'">{{ outcomeText }}</div>
+
+        <Transition name="redo-q">
+          <fieldset v-if="damaged" class="question redo-question">
+            <legend>¿Volver a generar el pedido?</legend>
+            <label class="option">
+              <input v-model="redo" type="radio" :value="true" /> Sí, rehacerlo y pasarlo directo a En producción
+            </label>
+            <label class="option"><input v-model="redo" type="radio" :value="false" /> No, solo cancelar</label>
+            <p class="field-hint">
+              Se crea un pedido nuevo igual (mismo trabajo, cliente, precio, pago y fecha de entrega) que vuelve a
+              descontar <strong>{{ formatNumber(sale.grams_used, 0) }} g</strong> de filamento<template
+                v-if="suppliesCount">, los insumos</template> y <strong>{{ formatNumber(sale.print_hours, 1) }} h</strong> de la
+              impresora. El pedido dañado queda Cancelado con su pérdida.
+            </p>
+          </fieldset>
+        </Transition>
       </template>
 
       <div class="field mt-4">
@@ -148,7 +179,7 @@ async function submit() {
       <div class="form-actions">
         <button type="button" class="btn btn-secondary" :disabled="busy" @click="emit('close')">Volver</button>
         <button type="submit" class="btn btn-danger" :disabled="busy || !canSubmit">
-          {{ busy ? "Cancelando..." : "Cancelar pedido" }}
+          {{ busy ? "Cancelando..." : willRedo ? "Cancelar y rehacer" : "Cancelar pedido" }}
         </button>
       </div>
     </form>
@@ -186,6 +217,20 @@ async function submit() {
 
 .option input {
   width: auto;
+}
+
+.redo-question {
+  margin-top: 12px;
+  border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
+  background: var(--primary-soft);
+}
+
+.redo-q-enter-active {
+  transition: opacity 0.25s, transform 0.3s var(--ease-out);
+}
+.redo-q-enter-from {
+  opacity: 0;
+  transform: translateY(-6px);
 }
 
 .outcome {

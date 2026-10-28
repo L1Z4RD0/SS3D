@@ -90,6 +90,10 @@ class CancelOrderRequest(BaseModel):
     discard_reason: str | None = Field(default=None, pattern="^(regalada|danada|desechada|otro)$")
     reason: str | None = Field(default=None, max_length=500)
     today: date | None = None
+    # Solo si la pieza se dañó (En producción "no sirve", o Lista descartada por "Dañada"):
+    # rehacer el pedido. Se crea uno nuevo igual, directo En producción, que vuelve a
+    # descontar filamento, insumos y horas.
+    redo: bool = False
 
 
 class WarehousePieceInfo(BaseModel):
@@ -266,6 +270,8 @@ class SaleResponse(BaseModel):
     loss_amount: Decimal = Decimal(0)
     # Pieza que este pedido dejó en el Almacén al cancelarse (si hay).
     warehouse_piece: WarehousePieceInfo | None = None
+    # Solo en la respuesta de Cancelar con "rehacer": el pedido nuevo que lo reemplaza.
+    redone_as_id: uuid.UUID | None = None
 
     model_config = {"from_attributes": True}
 
