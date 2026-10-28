@@ -20,6 +20,8 @@ const allLinks = [
   { to: "/almacen", label: "Almacén", icon: "box" },
   { to: "/impresoras", label: "Impresoras", icon: "printer", hideForWatcher: true },
   { to: "/historial", label: "Historial", icon: "history" },
+  // Solo la cuenta Empresa: Diego, Sntg y la Empresa por separado y juntas.
+  { to: "/rendimiento", label: "Rendimiento", icon: "trend", companyOnly: true },
 ];
 
 const roleLabel = computed(() => {
@@ -31,7 +33,9 @@ const roleLabel = computed(() => {
 
 // La Empresa sí tiene impresoras propias (a futuro); el observador común no.
 const links = computed(() =>
-  allLinks.filter((link) => !(link.hideForWatcher && auth.isWatcher && !auth.isCompany))
+  allLinks.filter(
+    (link) => !(link.hideForWatcher && auth.isWatcher && !auth.isCompany) && !(link.companyOnly && !auth.isCompany)
+  )
 );
 
 // Vistas BETA (Reparto e Inversión): solo para quien tiene acceso.

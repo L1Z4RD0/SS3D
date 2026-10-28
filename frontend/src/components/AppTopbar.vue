@@ -23,6 +23,7 @@ const titles = {
   inventory: "Inventario",
   printers: "Impresoras",
   history: "Historial",
+  performance: "Rendimiento por cuenta",
   admin: "Administración",
   split: "Reparto del mes",
   investment: "Mi inversión",

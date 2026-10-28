@@ -8,6 +8,29 @@
    Textos cortos y en el idioma de los usuarios (qué pueden hacer ahora), no técnicos. */
 export const RELEASES = [
   {
+    // Sale el mismo día que la anterior: repite sus puntos para quien todavía no la vio.
+    id: "2026-10-28.2",
+    date: "28 de octubre de 2026",
+    title: "Rendimiento por cuenta y Excel de ventas y Reparto",
+    items: [
+      {
+        icon: "📈",
+        title: "Rendimiento por cuenta",
+        text: "Simple_Solutions3D tiene un módulo nuevo: Diego, Sntg y la Empresa por separado y todas juntas, mes a mes. Los ingresos van a quien registró la venta y cada costo a quien puso el recurso.",
+      },
+      {
+        icon: "📊",
+        title: "Ventas en Excel",
+        text: "En Ventas, «Descargar Excel» baja todas las ventas con los filtros y el orden que elegiste, con el costo desglosado y de quién es cada costo.",
+      },
+      {
+        icon: "🧾",
+        title: "Reparto explicado paso a paso",
+        text: "En Reparto (beta), el Excel trae cada fórmula, de dónde sale cada monto y una cuadratura. Es una guía: revísenlo entre todos antes de repartir.",
+      },
+    ],
+  },
+  {
     id: "2026-10-28",
     date: "28 de octubre de 2026",
     title: "Descarga tus ventas y el Reparto en Excel",

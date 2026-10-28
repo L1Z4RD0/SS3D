@@ -61,6 +61,12 @@ const routes = [
     component: () => import("../views/HistoryView.vue"),
   },
   {
+    path: "/rendimiento",
+    name: "performance",
+    component: () => import("../views/PerformanceView.vue"),
+    meta: { companyOnly: true },
+  },
+  {
     path: "/reparto",
     name: "split",
     component: () => import("../views/SplitView.vue"),
@@ -103,6 +109,10 @@ router.beforeEach((to) => {
   }
   // El watcher registra ventas con el inventario de sus usuarios asignados, pero no
   // administra impresoras: no entra a Impresoras aunque escriba la URL a mano.
+  // Rendimiento por cuenta: solo la cuenta Empresa (el servidor lo valida igual).
+  if (to.meta.companyOnly && !auth.isCompany) {
+    return { name: "dashboard" };
+  }
   if (to.meta.blockedForWatcher && auth.isWatcher) {
     return { name: "inventory" };
   }
