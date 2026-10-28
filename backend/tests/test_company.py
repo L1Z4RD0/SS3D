@@ -407,3 +407,76 @@ def test_printer_owner_recovers_investment_from_company_sales(client, biz):
     inv = client.get("/api/beta/investment", headers=biz["hd"]).json()
     recovered = {p["name"]: Decimal(p["recovered"]) for p in inv["printers"]}
     assert recovered["A1 Diego"] == Decimal(sale["depreciation_cost"]) + Decimal(sale["energy_cost"])
+
+
+def test_split_excel_matches_screen_and_balances(client, biz, monkeypatch):
+    """El Excel del Reparto usa el mismo cálculo que la pantalla y la cuadratura cierra."""
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    monkeypatch.setattr(settings, "split_partners", f"{biz['diego'].username},{biz['sntg'].username},Omar")
+    D, S = biz["diego"].username, biz["sntg"].username
+    fc = _company_filament(client, biz)
+    today = date.today()
+    month = today.strftime("%Y-%m")
+    a = client.post("/api/sales", headers=biz["hd"], json=sale_payload(biz["pd"], biz["fd"], 100, price=20000)).json()
+    deliver(client, biz["hd"], a["id"], today)
+    body = sale_payload(biz["ps"], owner_id=biz["company"].id, price=10000)
+    body["filaments"] = [{"filament_id": fc["id"], "grams_used": 50}]
+    b = client.post("/api/sales", headers=biz["hc"], json=body).json()
+    deliver(client, biz["hc"], b["id"], today)
+    client.put(f"/api/sales/{b['id']}/delivery", headers=biz["hc"], json={"delivery_by": "Omar", "delivery_amount": 2000})
+    gift = client.post("/api/sales", headers=biz["hd"],
+                       json=sale_payload(biz["pd"], price=0, payment_method="cortesia")).json()
+    deliver(client, biz["hd"], gift["id"], today)
+    for paid_by, amount in ((S, 3000), ("Caja", 1000), ("Alguien externo", 500)):
+        client.post("/api/beta/expenses", headers=biz["hc"],
+                    json={"expense_date": str(today), "concept": "Bolsas", "amount": amount, "paid_by": paid_by})
+
+    rep = client.get("/api/beta/split", headers=biz["hc"], params={"month": month}).json()
+    r = client.get("/api/beta/split/export.xlsx", headers=biz["hc"], params={"month": month})
+    assert r.status_code == 200, r.text
+    assert f"reparto_beta_{month}.xlsx" in r.headers["content-disposition"]
+    wb = load_workbook(BytesIO(r.content))
+    assert wb.sheetnames == ["Léeme", "Resumen", "A cada uno", "Pedidos", "Costos por dueño", "Gastos", "Deliveries",
+                             "Fuera del reparto"]
+    readme = " ".join(str(c) for row in wb["Léeme"].iter_rows(values_only=True) for c in row if c)
+    for must in ("BETA", "GUÍA", "NETO A REPARTIR", "Depreciación =", "Luz =", "Material =", "Insumos =",
+                 "Postprocesado =", "Delivery =", "TOTAL A RECIBIR"):
+        assert must in readme, must
+
+    summary = {}
+    for row in wb["Resumen"].iter_rows(values_only=True):
+        if row[0]:
+            summary.setdefault(row[0], row[1])  # la primera aparición (la cuadratura repite "Cobrado")
+    assert summary["Cobrado en el mes"] == float(rep["collected_revenue"])
+    assert summary["Costos devueltos a socios"] == float(rep["partner_cost_refunds"])
+    assert summary["Gastos de la Empresa"] == float(rep["expenses_total"])
+    assert str(summary["NETO A REPARTIR"]).startswith("=")  # fórmula visible y revisable
+
+    # Cuadratura: cobrado = totales a recibir + gastos no devueltos a socios + delivery sin asignar (± redondeo).
+    totals = sum(Decimal(p["total"]) for p in rep["partners"])
+    refunded_expenses = sum(Decimal(p["expense_refund"]) for p in rep["partners"])
+    gap = (Decimal(rep["collected_revenue"]) - totals - (Decimal(rep["expenses_total"]) - refunded_expenses)
+           - Decimal(rep["unassigned_delivery"]))
+    assert abs(gap) <= Decimal("0.05")
+
+    # Costos por dueño: la máquina de B es de Sntg (se le devuelve); su material, de la Empresa (no).
+    owners = [row for row in wb["Costos por dueño"].iter_rows(values_only=True) if row and row[2] in (S, biz["company"].username)]
+    sntg_row = next(row for row in owners if row[2] == S)
+    company_row = next(row for row in owners if row[2] == biz["company"].username)
+    assert sntg_row[3] > 0 and sntg_row[7] == S
+    assert company_row[4] > 0 and company_row[7].startswith("No:")
+    # El regalo queda fuera del reparto, con quién absorbe su costo.
+    outside = " ".join(str(c) for row in wb["Fuera del reparto"].iter_rows(values_only=True) for c in row if c)
+    assert D in outside
+    gastos = [row for row in wb["Gastos"].iter_rows(values_only=True) if row and row[3] == "Alguien externo"]
+    assert gastos and gastos[0][4].startswith("No")
+
+
+def test_split_excel_requires_access(client, make, biz, monkeypatch):
+    monkeypatch.setattr(settings, "split_partners", f"{biz['diego'].username},Omar")
+    outsider = make.user()
+    r = client.get("/api/beta/split/export.xlsx", headers=make.headers(outsider))
+    assert r.status_code == 403

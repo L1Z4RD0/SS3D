@@ -6,6 +6,9 @@ export const createSale = (payload) => client.post("/api/sales", payload).then((
 
 export const updateSale = (id, payload) => client.put(`/api/sales/${id}`, payload).then((r) => r.data);
 
+// Excel con todas las ventas que cumplen los filtros y el orden (no solo la página visible).
+export const exportSales = (params = {}) => client.get("/api/sales/export.xlsx", { params, responseType: "blob" });
+
 export const deleteSale = (id) => client.delete(`/api/sales/${id}`);
 
 export const getSale = (id) => client.get(`/api/sales/${id}`).then((r) => r.data);

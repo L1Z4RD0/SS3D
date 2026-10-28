@@ -26,6 +26,7 @@ import OrderStatusModal from "../components/OrderStatusModal.vue";
 import { STATUS_LABELS, NEXT_ACTION, OPEN_STATUSES, statusClass, isOverdue } from "../utils/orderStatus";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import { showToast } from "../composables/useToast";
+import { saveBlobResponse } from "../utils/download";
 import { useRoute, useRouter } from "vue-router";
 
 const auth = useAuthStore();
@@ -222,6 +223,26 @@ async function loadSales() {
     total.value = page.total;
   } finally {
     loading.value = false;
+  }
+}
+
+// Excel con todas las ventas que cumplen los filtros (todas las páginas) y el orden actual.
+const exporting = ref(false);
+const exportError = ref("");
+async function exportExcel() {
+  exporting.value = true;
+  exportError.value = "";
+  try {
+    const params = { sort: sort.by, direction: sort.direction };
+    Object.entries(filters).forEach(([k, v]) => {
+      if (v) params[k] = v;
+    });
+    saveBlobResponse(await salesApi.exportSales(params), `ventas_${todayISO()}.xlsx`);
+    showToast("Excel descargado", { detail: `${total.value} venta(s)` });
+  } catch {
+    exportError.value = "No se pudo descargar el Excel. Intenta de nuevo en unos segundos.";
+  } finally {
+    exporting.value = false;
   }
 }
 
@@ -862,10 +883,17 @@ onMounted(async () => {
         dueño del inventario, indicando que la hiciste tú.
       </p>
       <p v-else class="page-subtitle">Historial de trabajos vendidos, con costos y ganancia calculados automáticamente</p>
-      <button class="btn btn-primary" :disabled="auth.isWatcher && !observedUsers.length" @click="openCreate">
-        <Icon name="plus" :size="16" /> Nueva venta
-      </button>
+      <div class="header-actions">
+        <button class="btn btn-secondary" :disabled="exporting || !total" title="Descarga las ventas con los filtros y el orden actuales" @click="exportExcel">
+          <Icon name="download" :size="16" /> {{ exporting ? "Preparando..." : "Descargar Excel" }}
+        </button>
+        <button class="btn btn-primary" :disabled="auth.isWatcher && !observedUsers.length" @click="openCreate">
+          <Icon name="plus" :size="16" /> Nueva venta
+        </button>
+      </div>
     </div>
+
+    <div v-if="exportError" class="alert alert-danger">{{ exportError }}</div>
 
     <div ref="quickEl" class="quick-status" role="tablist" aria-label="Estado de los pedidos">
       <span
@@ -1432,6 +1460,12 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 /* Selector de fuente de venta: ocupa toda la fila del formulario. */
 .form-span {
   grid-column: 1 / -1;

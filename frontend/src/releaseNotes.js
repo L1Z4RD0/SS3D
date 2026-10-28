@@ -8,6 +8,23 @@
    Textos cortos y en el idioma de los usuarios (qué pueden hacer ahora), no técnicos. */
 export const RELEASES = [
   {
+    id: "2026-10-28",
+    date: "28 de octubre de 2026",
+    title: "Descarga tus ventas y el Reparto en Excel",
+    items: [
+      {
+        icon: "📊",
+        title: "Ventas en Excel",
+        text: "En Ventas, «Descargar Excel» baja todas las ventas con los filtros y el orden que elegiste, con el costo desglosado y de quién es cada costo.",
+      },
+      {
+        icon: "🧾",
+        title: "Reparto explicado paso a paso",
+        text: "En Reparto (beta), el Excel trae cada fórmula, de dónde sale cada monto y una cuadratura. Es una guía: revísenlo entre todos antes de repartir.",
+      },
+    ],
+  },
+  {
     id: "2026-10-26",
     date: "26 de octubre de 2026",
     title: "Fuente de venta y hoja de ventas más cómoda",

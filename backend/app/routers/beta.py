@@ -20,10 +20,11 @@ Reglas (acordadas con los socios):
 """
 import uuid
 from calendar import monthrange
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -38,7 +39,9 @@ from app.models.sale import STATUS_DELIVERED, Sale
 from app.models.user import User
 from app.services.audit import log_event
 from app.services.calculator import money
-from app.services.cost_allocation import allocate_sale_costs
+from app.services.cost_allocation import SaleCostAllocation, allocate_sale_costs
+from app.services.split_export import build_split_workbook
+from app.services.xlsx import XLSX_MEDIA_TYPE
 
 router = APIRouter(prefix="/api/beta", tags=["beta"])
 
@@ -191,19 +194,24 @@ class SplitResponse(BaseModel):
     deliveries: list[DeliveryLine]
 
 
-@router.get("/split", response_model=SplitResponse)
-def monthly_split(
-    month: str = Query(default_factory=lambda: date.today().strftime("%Y-%m")),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_split_access),
-):
-    first, last = _month_range(month)
+@dataclass
+class SplitDetails:
+    """Lo que hay detrás del Reparto (para el Excel): cada venta cobrada con el reparto de
+    sus costos por dueño, y los gastos de la Empresa del mes."""
+
+    sales: list[tuple[Sale, SaleCostAllocation]]
+    expenses: list[CompanyExpense]
+
+
+def compute_split(db: Session, first: date, last: date) -> tuple[SplitDetails, SplitResponse]:
+    """Cálculo del Reparto de un mes. Lo usan la pantalla y el Excel, así siempre coinciden."""
     names = partner_names()
     lines = {n: PartnerLine(name=n) for n in names}
     lines[CASH_BOX] = PartnerLine(name=CASH_BOX, is_cash_box=True)
 
     collected = Decimal(0)
     company_cost = Decimal(0)
+    details: list[tuple[Sale, SaleCostAllocation]] = []
     sale_lines, pending, deliveries, gifts = [], [], [], []
 
     deliveries_total = Decimal(0)
@@ -240,7 +248,9 @@ def monthly_split(
                 unassigned_delivery += sale.shipping_cost
         refunds: dict[str, Decimal] = {}
         sale_company_cost = Decimal(0)
-        for oc in allocate_sale_costs(sale).owners:
+        allocation = allocate_sale_costs(sale)
+        details.append((sale, allocation))
+        for oc in allocation.owners:
             owner_user = db.get(User, oc.user_id)
             if is_company(owner_user):
                 sale_company_cost += oc.total
@@ -260,6 +270,7 @@ def monthly_split(
         ))
 
     expenses = _expenses_between(db, first, last)
+    details_out = SplitDetails(sales=details, expenses=expenses)
     expenses_total = money(sum((e.amount for e in expenses), Decimal(0)))
     for e in expenses:
         who = next((n for n in lines if n.lower() == e.paid_by.lower()), None)
@@ -278,7 +289,7 @@ def monthly_split(
         line.delivery_refund = money(line.delivery_refund)
         line.total = money(line.share + line.cost_refund + line.expense_refund + line.delivery_refund)
 
-    return SplitResponse(
+    return details_out, SplitResponse(
         month=f"{first:%Y-%m}",
         collected_revenue=money(collected),
         partner_cost_refunds=partner_refunds,
@@ -295,6 +306,34 @@ def monthly_split(
         gifts=gifts,
         gifts_cost=money(sum((g.cost for g in gifts), Decimal(0))),
         deliveries=deliveries,
+    )
+
+
+@router.get("/split", response_model=SplitResponse)
+def monthly_split(
+    month: str = Query(default_factory=lambda: date.today().strftime("%Y-%m")),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_split_access),
+):
+    first, last = _month_range(month)
+    return compute_split(db, first, last)[1]
+
+
+@router.get("/split/export.xlsx")
+def export_split(
+    month: str = Query(default_factory=lambda: date.today().strftime("%Y-%m")),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_split_access),
+):
+    """Excel del Reparto del mes, con las fórmulas y de dónde sale cada monto (guía beta)."""
+    first, last = _month_range(month)
+    details, report = compute_split(db, first, last)
+    company_names = {u.username for u in db.query(User).filter(User.is_company.is_(True))}
+    content = build_split_workbook(report, details, partner_names(), CASH_BOX, company_names)
+    return Response(
+        content=content,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="reparto_beta_{report.month}.xlsx"'},
     )
 
 

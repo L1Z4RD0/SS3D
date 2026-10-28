@@ -1,8 +1,9 @@
 import uuid
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
@@ -31,6 +32,8 @@ from app.schemas.sale import (
 from app.services.audit import log_event
 from app.services.calculator import calculate_margin_percent, money, risk_level_for, with_risk
 from app.services.cancellation import cancel_order, check_can_delete, undo_remaining_consumption
+from app.services.sales_export import build_sales_workbook
+from app.services.xlsx import XLSX_MEDIA_TYPE
 from app.services.discord import announce_order, mark_order_deleted, snapshot_before_delete, sync_order
 from app.services.inventory import consume_supply, restore_filament, restore_supply
 from app.services.sale_plates import (
@@ -164,10 +167,44 @@ def _set_price(sale: Sale, price) -> None:
     sale.total_price = price
 
 
-@router.get("", response_model=SalePage)
-def list_sales(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+@dataclass
+class SalesFilters:
+    """Filtros y orden de la hoja de Ventas (los mismos para la pantalla y el Excel)."""
+
+    date_from: date | None
+    date_to: date | None
+    client: str | None
+    printer_id: uuid.UUID | None
+    payment_method: str | None
+    search: str | None
+    status: str | None
+    sale_source: str | None
+    sort: str
+    direction: str
+
+    def describe(self) -> str:
+        """Los filtros usados, en palabras (para el encabezado del Excel)."""
+        parts = []
+        if self.date_from or self.date_to:
+            parts.append(f"pedidos del {self.date_from or 'inicio'} al {self.date_to or 'hoy'}")
+        if self.status:
+            parts.append(f"estado: {self.status.replace('_', ' ')}")
+        if self.sale_source:
+            parts.append(f"fuente: {self.sale_source.replace('_', ' ')}")
+        if self.payment_method:
+            parts.append(f"pago: {self.payment_method.replace('_', ' ')}")
+        if self.printer_id:
+            parts.append("una impresora")
+        if self.client:
+            parts.append(f"cliente: {self.client}")
+        if self.search:
+            parts.append(f"búsqueda: {self.search}")
+        order = "de mayor a menor" if self.direction == "desc" else "de menor a mayor"
+        filters = ", ".join(parts) if parts else "sin filtros"
+        return f"{filters} · ordenado por {self.sort} ({order})"
+
+
+def sales_filters(
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
     client: str | None = Query(default=None),
@@ -179,44 +216,72 @@ def list_sales(
     sale_source: str | None = Query(default=None, pattern="^(" + "|".join((*SALE_SOURCES, NO_SALE_SOURCE)) + ")$"),
     sort: str = Query(default="fecha", pattern="^(" + "|".join(SORT_COLUMNS) + ")$"),
     direction: str = Query(default="desc", pattern="^(asc|desc)$"),
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
-):
-    query = _sale_query(db).filter(sales_listed_for(db, current_user))
-    if date_from is not None:
-        query = query.filter(Sale.sale_date >= date_from)
-    if date_to is not None:
-        query = query.filter(Sale.sale_date <= date_to)
-    if client is not None:
-        query = query.filter(Sale.client_name.ilike(f"%{client}%"))
-    if printer_id is not None:
-        query = query.filter(Sale.printer_id == printer_id)
-    if payment_method is not None:
-        query = query.filter(Sale.payment_method == payment_method)
-    if sale_source == NO_SALE_SOURCE:
+) -> SalesFilters:
+    return SalesFilters(date_from, date_to, client, printer_id, payment_method, search, status_filter, sale_source,
+                        sort, direction)
+
+
+def _filtered_sales(db: Session, user: User, f: SalesFilters):
+    """Ventas visibles para el usuario con los filtros aplicados y ya ordenadas."""
+    query = _sale_query(db).filter(sales_listed_for(db, user))
+    if f.date_from is not None:
+        query = query.filter(Sale.sale_date >= f.date_from)
+    if f.date_to is not None:
+        query = query.filter(Sale.sale_date <= f.date_to)
+    if f.client is not None:
+        query = query.filter(Sale.client_name.ilike(f"%{f.client}%"))
+    if f.printer_id is not None:
+        query = query.filter(Sale.printer_id == f.printer_id)
+    if f.payment_method is not None:
+        query = query.filter(Sale.payment_method == f.payment_method)
+    if f.sale_source == NO_SALE_SOURCE:
         query = query.filter(Sale.sale_source.is_(None))
-    elif sale_source is not None:
-        query = query.filter(Sale.sale_source == sale_source)
-    statuses = _parse_status_filter(status_filter)
+    elif f.sale_source is not None:
+        query = query.filter(Sale.sale_source == f.sale_source)
+    statuses = _parse_status_filter(f.status)
     if statuses is not None:
         query = query.filter(Sale.status.in_(statuses))
-    if search is not None:
-        like = f"%{search}%"
+    if f.search is not None:
+        like = f"%{f.search}%"
         query = query.filter(
             (Sale.client_name.ilike(like)) | (Sale.buyer_name.ilike(like)) | (Sale.notes.ilike(like))
         )
-
-    total = query.count()
-    column = SORT_COLUMNS[sort]
-    primary = column.asc() if direction == "asc" else column.desc()
+    column = SORT_COLUMNS[f.sort]
+    primary = column.asc() if f.direction == "asc" else column.desc()
     # Desempate estable (para que paginar no repita ni salte ventas): las más nuevas primero.
-    rows = (
-        query.order_by(primary.nulls_last(), Sale.created_at.desc(), Sale.id.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
+    return query, query.order_by(primary.nulls_last(), Sale.created_at.desc(), Sale.id.desc())
+
+
+@router.get("", response_model=SalePage)
+def list_sales(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    filters: SalesFilters = Depends(sales_filters),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    query, ordered = _filtered_sales(db, current_user, filters)
+    total = query.count()
+    rows = ordered.offset(offset).limit(limit).all()
     return SalePage(items=[to_sale_response(s, viewer=current_user) for s in rows], total=total)
+
+
+@router.get("/export.xlsx")
+def export_sales(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    filters: SalesFilters = Depends(sales_filters),
+):
+    """Excel con TODAS las ventas que cumplen los filtros (no solo la página en pantalla)."""
+    _, ordered = _filtered_sales(db, current_user, filters)
+    sales = [to_sale_response(s, viewer=current_user) for s in ordered.all()]
+    content = build_sales_workbook(sales, filters.describe())
+    filename = f"ventas_{date.today():%Y-%m-%d}.xlsx"
+    return Response(
+        content=content,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/calendar", response_model=list[CalendarOrder])

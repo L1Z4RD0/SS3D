@@ -7,6 +7,8 @@ import { confirmAction } from "../composables/useConfirm";
 import StatCard from "../components/StatCard.vue";
 import Icon from "../components/Icon.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
+import { saveBlobResponse } from "../utils/download";
+import { showToast } from "../composables/useToast";
 import CountUp from "../components/CountUp.vue";
 import { CHART_PALETTE } from "../utils/chartTheme";
 
@@ -43,6 +45,22 @@ onMounted(async () => {
   await load();
 });
 watch(month, load);
+
+// Excel del mes elegido, con instrucciones y fórmulas (mismo cálculo que esta pantalla).
+const exporting = ref(false);
+const exportError = ref("");
+async function exportExcel() {
+  exporting.value = true;
+  exportError.value = "";
+  try {
+    saveBlobResponse(await betaApi.exportMonthlySplit(month.value), `reparto_beta_${month.value}.xlsx`);
+    showToast("Excel del Reparto descargado", { detail: "Revisa la hoja «Léeme» para ver cómo se calcula." });
+  } catch {
+    exportError.value = "No se pudo descargar el Excel. Intenta de nuevo en unos segundos.";
+  } finally {
+    exporting.value = false;
+  }
+}
 
 const shareLabel = computed(() =>
   report.value ? `${report.value.parts} partes iguales (${Math.round(100 / report.value.parts)}% c/u)` : ""
@@ -123,11 +141,27 @@ async function removeExpense(e) {
           del resto de la app.
         </p>
       </div>
-      <label class="month-picker">
-        <Icon name="calendar" :size="16" />
-        <input v-model="month" type="month" aria-label="Mes" />
-      </label>
+      <div class="header-actions">
+        <label class="month-picker">
+          <Icon name="calendar" :size="16" />
+          <input v-model="month" type="month" aria-label="Mes" />
+        </label>
+        <button
+          type="button"
+          class="btn btn-secondary"
+          :disabled="exporting || !report"
+          title="Excel con el cálculo del mes paso a paso, para revisarlo antes de repartir"
+          @click="exportExcel"
+        >
+          <Icon name="download" :size="16" /> {{ exporting ? "Preparando..." : "Descargar Excel" }}
+        </button>
+      </div>
     </div>
+    <div class="alert alert-warning beta-note">
+      <strong>Módulo BETA:</strong> úsenlo solo como <strong>guía</strong> para el reparto de fin de mes. El Excel
+      explica cada fórmula y de dónde sale cada monto: revísenlo entre todos antes de mover dinero.
+    </div>
+    <div v-if="exportError" class="alert alert-danger">{{ exportError }}</div>
 
     <div v-if="error" class="alert alert-danger">{{ error }}</div>
     <div v-if="loading && !report" class="card"><LoadingSkeleton :lines="6" /></div>
@@ -347,6 +381,17 @@ async function removeExpense(e) {
   font-size: 0.7rem;
   font-weight: 800;
   letter-spacing: 0.05em;
+}
+
+.header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.beta-note {
+  margin-bottom: 16px;
 }
 
 .month-picker {
