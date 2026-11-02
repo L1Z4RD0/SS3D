@@ -10,3 +10,11 @@ export const deleteExpense = (id) => client.delete(`/api/beta/expenses/${id}`);
 export const exportMonthlySplit = (month) =>
   client.get("/api/beta/split/export.xlsx", { params: { month }, responseType: "blob" });
 export const getMyInvestment = () => client.get("/api/beta/investment").then((r) => r.data);
+
+// Saldo de la Caja: cierre real del mes (pasa al siguiente) y retiros con su motivo.
+export const getCashBox = (month) => client.get("/api/beta/cash-box", { params: { month } }).then((r) => r.data);
+export const saveCashBoxClosing = (payload) => client.put("/api/beta/cash-box/closing", payload).then((r) => r.data);
+export const deleteCashBoxClosing = (month) => client.delete("/api/beta/cash-box/closing", { params: { month } });
+export const createCashBoxWithdrawal = (payload) =>
+  client.post("/api/beta/cash-box/withdrawals", payload).then((r) => r.data);
+export const deleteCashBoxWithdrawal = (id) => client.delete(`/api/beta/cash-box/withdrawals/${id}`);

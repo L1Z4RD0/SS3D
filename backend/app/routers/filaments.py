@@ -171,14 +171,11 @@ def update_filament(
     return _to_response(filament)
 
 
-@router.delete("/{filament_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_filament(
-    filament_id: uuid.UUID,
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_not_watcher),
-):
-    filament = _get_owned_filament(db, filament_id, current_user)
+def _retire_filament(db: Session, filament: Filament, user: User, request: Request) -> None:
+    """Saca un filamento del inventario sin tocar ninguna venta: cada venta guarda sus gramos
+    y su costo de material al registrarse, así que los pedidos (entregados o no) conservan sus
+    números. Si algún pedido lo usó se desactiva (para que el detalle de esas ventas siga
+    mostrando qué filamento fue); si nunca se usó, se borra."""
     # Cualquier pedido que lo haya usado cuenta como historial: de un solo filamento
     # (sales.filament_id) o multicolor (sale_filaments), incluidos cancelados y los que
     # originaron piezas del Almacén. Antes solo se miraba sales.filament_id, así que un
@@ -198,11 +195,40 @@ def delete_filament(
 
     log_event(
         db,
-        user_id=current_user.id,
+        user_id=user.id,
         event_type=event_type,
         entity_type="filament",
-        entity_id=filament_id,
-        details={"brand": filament.brand, "color": filament.color},
+        entity_id=filament.id,
+        details={"brand": filament.brand, "color": filament.color, "available_g": str(filament.available_g)},
         ip_address=request.client.host if request.client else None,
     )
+
+
+@router.post("/retire-exhausted")
+def retire_exhausted_filaments(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_not_watcher),
+):
+    """Saca del inventario, de una vez, todos los filamentos propios que quedaron en 0 g."""
+    exhausted = (
+        db.query(Filament)
+        .filter(Filament.user_id == current_user.id, Filament.is_active.is_(True), Filament.available_g <= 0)
+        .all()
+    )
+    for filament in exhausted:
+        _retire_filament(db, filament, current_user, request)
+    db.commit()
+    return {"retired": len(exhausted)}
+
+
+@router.delete("/{filament_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_filament(
+    filament_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_not_watcher),
+):
+    filament = _get_owned_filament(db, filament_id, current_user)
+    _retire_filament(db, filament, current_user, request)
     db.commit()

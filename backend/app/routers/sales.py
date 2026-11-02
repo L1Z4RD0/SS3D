@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.constants import ELECTRICITY_RATE, LABOR_RATE_PER_HOUR, NO_SALE_SOURCE, SALE_SOURCES
@@ -187,6 +187,9 @@ class SalesFilters:
     search: str | None
     status: str | None
     sale_source: str | None
+    # Cuenta: ventas a su nombre o que registró ella (ej. la Empresa, que no tiene impresora).
+    account_id: uuid.UUID | None
+    account_name: str | None
     sort: str
     direction: str
 
@@ -203,6 +206,8 @@ class SalesFilters:
             parts.append(f"pago: {self.payment_method.replace('_', ' ')}")
         if self.printer_id:
             parts.append("una impresora")
+        if self.account_id:
+            parts.append(f"cuenta: {self.account_name or 'una cuenta'}")
         if self.client:
             parts.append(f"cliente: {self.client}")
         if self.search:
@@ -222,11 +227,14 @@ def sales_filters(
     status_filter: str | None = Query(default=None, alias="status"),
     # "sin_registrar" = ventas sin fuente (las anteriores a que existiera el campo).
     sale_source: str | None = Query(default=None, pattern="^(" + "|".join((*SALE_SOURCES, NO_SALE_SOURCE)) + ")$"),
+    account_id: uuid.UUID | None = Query(default=None),
     sort: str = Query(default="fecha", pattern="^(" + "|".join(SORT_COLUMNS) + ")$"),
     direction: str = Query(default="desc", pattern="^(asc|desc)$"),
+    db: Session = Depends(get_db),
 ) -> SalesFilters:
+    account = db.get(User, account_id) if account_id else None
     return SalesFilters(date_from, date_to, client, printer_id, payment_method, search, status_filter, sale_source,
-                        sort, direction)
+                        account_id, account.username if account else None, sort, direction)
 
 
 def _filtered_sales(db: Session, user: User, f: SalesFilters):
@@ -242,6 +250,8 @@ def _filtered_sales(db: Session, user: User, f: SalesFilters):
         query = query.filter(Sale.printer_id == f.printer_id)
     if f.payment_method is not None:
         query = query.filter(Sale.payment_method == f.payment_method)
+    if f.account_id is not None:
+        query = query.filter(or_(Sale.user_id == f.account_id, Sale.created_by_user_id == f.account_id))
     if f.sale_source == NO_SALE_SOURCE:
         query = query.filter(Sale.sale_source.is_(None))
     elif f.sale_source is not None:

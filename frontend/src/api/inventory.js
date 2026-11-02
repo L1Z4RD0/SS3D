@@ -14,6 +14,8 @@ export const updateFilament = (id, payload) =>
   client.put(`/api/inventory/filaments/${id}`, payload).then((r) => r.data);
 
 export const deleteFilament = (id) => client.delete(`/api/inventory/filaments/${id}`);
+// Saca del inventario todos los filamentos propios en 0 g (las ventas no cambian).
+export const retireExhaustedFilaments = () => client.post("/api/inventory/filaments/retire-exhausted").then((r) => r.data);
 
 export const listSupplies = (includeInactive = false) =>
   client.get("/api/inventory/supplies", { params: { include_inactive: includeInactive } }).then((r) => r.data);

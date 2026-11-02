@@ -235,19 +235,24 @@ def test_monthly_split(client, db, make, biz, monkeypatch):
     assert Decimal(rep["collected_revenue"]) == Decimal(a["price"]) + Decimal(b["price"])
     assert Decimal(lines[D]["cost_refund"]) == refund_a - Decimal(a["postprocess_cost"]) - Decimal(a["shipping_cost"])
     assert Decimal(lines[S]["cost_refund"]) == refund_b
-    assert Decimal(rep["company_absorbed_cost"]) == Decimal(b["material_cost"])
+    # El material de la Empresa se le devuelve a la Caja (y se resta del neto como el de un socio).
+    company_cost = Decimal(b["material_cost"])
+    assert Decimal(rep["company_absorbed_cost"]) == company_cost
+    assert Decimal(lines["Caja"]["cost_refund"]) == company_cost
+    assert Decimal(rep["partner_cost_refunds"]) == refund_a - Decimal(a["postprocess_cost"]) - Decimal(
+        a["shipping_cost"]) + refund_b + company_cost
     assert Decimal(rep["expenses_total"]) == 4000
     # La venta A cobró $3.000 de delivery sin nadie asignado; la B, $2.000 que llevó Omar.
     assert Decimal(rep["deliveries_total"]) == 5000 and Decimal(rep["unassigned_delivery"]) == 3000
     expected_net = (Decimal(a["price"]) + Decimal(b["price"]) - Decimal(lines[D]["cost_refund"])
-                    - Decimal(lines[S]["cost_refund"]) - 5000 - 4000)
+                    - Decimal(lines[S]["cost_refund"]) - company_cost - 5000 - 4000)
     assert Decimal(rep["net"]) == expected_net
     assert rep["parts"] == 4
     share = (expected_net / 4).quantize(Decimal("0.01"))
     assert all(Decimal(l["share"]) == share for l in rep["partners"])
     assert Decimal(lines[S]["expense_refund"]) == 3000
     assert Decimal(lines[S]["total"]) == share + Decimal(lines[S]["cost_refund"]) + 3000
-    assert Decimal(lines["Caja"]["total"]) == share
+    assert Decimal(lines["Caja"]["total"]) == share + company_cost
     assert Decimal(lines["Omar"]["delivery_refund"]) == 2000 and Decimal(lines["Omar"]["total"]) == share + 2000
     assert Decimal(rep["pending_total"]) == Decimal(c["price"]) and len(rep["sales"]) == 2
     assert sorted(str(d["delivery_by"]) for d in rep["deliveries"]) == ["None", "Omar"]
@@ -451,7 +456,7 @@ def test_split_excel_matches_screen_and_balances(client, biz, monkeypatch):
         if row[0]:
             summary.setdefault(row[0], row[1])  # la primera aparición (la cuadratura repite "Cobrado")
     assert summary["Cobrado en el mes"] == float(rep["collected_revenue"])
-    assert summary["Costos devueltos a socios"] == float(rep["partner_cost_refunds"])
+    assert summary["Costos devueltos"] == float(rep["partner_cost_refunds"])
     assert summary["Gastos de la Empresa"] == float(rep["expenses_total"])
     assert str(summary["NETO A REPARTIR"]).startswith("=")  # fórmula visible y revisable
 
@@ -467,7 +472,7 @@ def test_split_excel_matches_screen_and_balances(client, biz, monkeypatch):
     sntg_row = next(row for row in owners if row[2] == S)
     company_row = next(row for row in owners if row[2] == biz["company"].username)
     assert sntg_row[3] > 0 and sntg_row[7] == S
-    assert company_row[4] > 0 and company_row[7].startswith("No:")
+    assert company_row[4] > 0 and company_row[7].startswith("Caja")
     # El regalo queda fuera del reparto, con quién absorbe su costo.
     outside = " ".join(str(c) for row in wb["Fuera del reparto"].iter_rows(values_only=True) for c in row if c)
     assert D in outside

@@ -2,7 +2,7 @@
 
 Es una guía aproximada para repartir el mes entre los socios, no una verdad contable: solo
 LEE ventas e inventario (no cambia nada del resto de la app). Lo único que escribe son los
-gastos de la Empresa, que solo se usan aquí.
+gastos de la Empresa y el saldo de la Caja, que solo se usan aquí.
 
 Reglas (acordadas con los socios):
 - Solo cuentan los pedidos Entregados en el mes y ya cobrados (no "Por cobrar").
@@ -10,18 +10,23 @@ Reglas (acordadas con los socios):
   lo absorbe quien regaló (no se le devuelve ni se reparte entre los demás).
 - A cada socio se le devuelve lo que puso: máquina (depreciación + luz) de sus impresoras,
   y el material e insumos que eran suyos.
-- Lo que pone la Empresa (su filamento/insumos) no se devuelve: lo compró la Caja y ya está
-  en los gastos de la Empresa del mes.
+- Lo que pone la Empresa (su filamento/insumos) se le devuelve a la Caja, igual que a un
+  socio: lo compró la Caja. Antes no se devolvía, suponiendo que ya estaba en los gastos del
+  mes, pero el filamento suele comprarse otro mes y ese costo se perdía (se repartía como
+  ganancia). Por eso una compra de filamento o insumos para el inventario de la Empresa NO
+  se carga también como gasto: se contaría dos veces.
 - El postprocesado es ganancia común (no se le devuelve a nadie).
 - El delivery (lo que pagó el cliente por el envío) se le devuelve a quien lo llevó: no es
   ganancia de nadie. Si no tiene a nadie asignado, queda "sin asignar".
-- Neto = cobrado − costos devueltos a los socios − deliveries − gastos de la Empresa. Se
+- Neto = cobrado − costos devueltos (socios y Caja) − deliveries − gastos de la Empresa. Se
   reparte en partes iguales entre los socios y la Caja.
+- Saldo de la Caja: lo que de verdad quedó al cerrar el mes se anota a mano (con su
+  explicación) y es el saldo inicial del mes siguiente; los retiros de la Caja lo bajan.
 """
 import uuid
 from calendar import monthrange
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -32,6 +37,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_user, is_company, is_watcher
+from app.models.cash_box import CashBoxClosing, CashBoxWithdrawal
 from app.models.company_expense import CompanyExpense
 from app.models.filament import Filament
 from app.models.printer import Printer
@@ -253,9 +259,11 @@ def compute_split(db: Session, first: date, last: date) -> tuple[SplitDetails, S
         for oc in allocation.owners:
             owner_user = db.get(User, oc.user_id)
             if is_company(owner_user):
+                # Lo que puso la Empresa vuelve a la Caja (ella lo compró).
                 sale_company_cost += oc.total
-                continue
-            name = _partner_for_username(oc.username) or oc.username
+                name = CASH_BOX
+            else:
+                name = _partner_for_username(oc.username) or oc.username
             if name not in lines:  # una cuenta que no está en la lista de socios
                 lines[name] = PartnerLine(name=name)
             lines[name].cost_refund += oc.total
@@ -417,6 +425,188 @@ def delete_expense(
               entity_id=expense.id, details={"concept": expense.concept, "amount": str(expense.amount)},
               ip_address=request.client.host if request.client else None)
     db.delete(expense)
+    db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Saldo de la Caja
+# ---------------------------------------------------------------------------
+
+
+class WithdrawalRequest(BaseModel):
+    withdrawal_date: date
+    amount: Decimal = Field(gt=0)
+    concept: str = Field(min_length=1, max_length=200)
+
+
+class WithdrawalResponse(BaseModel):
+    id: uuid.UUID
+    withdrawal_date: date
+    amount: Decimal
+    concept: str
+
+    model_config = {"from_attributes": True}
+
+
+class ClosingRequest(BaseModel):
+    month: str = Field(pattern=r"^\d{4}-\d{2}$")
+    amount: Decimal = Field(ge=0)
+    note: str = Field(min_length=1, max_length=1000)
+
+
+class ClosingResponse(BaseModel):
+    month: str
+    amount: Decimal
+    note: str
+    updated_at: datetime
+    updated_by: str | None
+
+
+class CashBoxResponse(BaseModel):
+    month: str
+    opening: Decimal  # cierre real del último mes anterior que lo tenga (0 si ninguno)
+    opening_month: str | None
+    opening_note: str | None
+    split_income: Decimal  # lo que le toca a la Caja en el Reparto del mes
+    expenses_paid: Decimal  # gastos de la Empresa del mes que pagó la Caja
+    withdrawals: list[WithdrawalResponse]
+    withdrawals_total: Decimal
+    estimated: Decimal  # saldo inicial + reparto − gastos pagados − retiros
+    closing: ClosingResponse | None
+    difference: Decimal | None  # cierre real − estimado
+
+
+def _closing_response(db: Session, c: CashBoxClosing) -> ClosingResponse:
+    who = db.get(User, c.updated_by_user_id) if c.updated_by_user_id else None
+    return ClosingResponse(month=c.month, amount=c.amount, note=c.note, updated_at=c.updated_at,
+                           updated_by=who.username if who else None)
+
+
+@router.get("/cash-box", response_model=CashBoxResponse)
+def cash_box(
+    month: str = Query(default_factory=lambda: date.today().strftime("%Y-%m")),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_split_access),
+):
+    """Saldo de la Caja en el mes. El inicial es el cierre REAL del mes anterior (el último que
+    se anotó), así lo que de verdad quedó pasa al mes siguiente aunque el estimado no cuadre."""
+    first, last = _month_range(month)
+    month = f"{first:%Y-%m}"
+    previous = (
+        db.query(CashBoxClosing).filter(CashBoxClosing.month < month).order_by(CashBoxClosing.month.desc()).first()
+    )
+    opening = previous.amount if previous else Decimal(0)
+    report = compute_split(db, first, last)[1]
+    split_income = next((p.total for p in report.partners if p.is_cash_box), Decimal(0))
+    expenses_paid = money(sum(
+        (e.amount for e in _expenses_between(db, first, last) if e.paid_by.strip().lower() == CASH_BOX.lower()),
+        Decimal(0),
+    ))
+    withdrawals = (
+        db.query(CashBoxWithdrawal)
+        .filter(CashBoxWithdrawal.withdrawal_date >= first, CashBoxWithdrawal.withdrawal_date <= last)
+        .order_by(CashBoxWithdrawal.withdrawal_date, CashBoxWithdrawal.created_at)
+        .all()
+    )
+    withdrawals_total = money(sum((w.amount for w in withdrawals), Decimal(0)))
+    estimated = money(opening + split_income - expenses_paid - withdrawals_total)
+    closing = db.query(CashBoxClosing).filter(CashBoxClosing.month == month).first()
+    return CashBoxResponse(
+        month=month,
+        opening=money(opening),
+        opening_month=previous.month if previous else None,
+        opening_note=previous.note if previous else None,
+        split_income=money(split_income),
+        expenses_paid=expenses_paid,
+        withdrawals=withdrawals,
+        withdrawals_total=withdrawals_total,
+        estimated=estimated,
+        closing=_closing_response(db, closing) if closing else None,
+        difference=money(closing.amount - estimated) if closing else None,
+    )
+
+
+@router.put("/cash-box/closing", response_model=ClosingResponse)
+def save_closing(
+    payload: ClosingRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_split_access),
+):
+    """Anota (o corrige) lo que de verdad quedó en la Caja al cerrar el mes."""
+    first, _ = _month_range(payload.month)
+    month = f"{first:%Y-%m}"
+    closing = db.query(CashBoxClosing).filter(CashBoxClosing.month == month).first()
+    if closing is None:
+        closing = CashBoxClosing(month=month)
+        db.add(closing)
+    closing.amount = money(payload.amount)
+    closing.note = payload.note.strip()
+    closing.updated_by_user_id = current_user.id
+    db.flush()
+    log_event(db, user_id=current_user.id, event_type="CASH_BOX_CLOSING_SAVED", entity_type="cash_box_closing",
+              entity_id=closing.id, details={"month": month, "amount": str(closing.amount), "note": closing.note},
+              ip_address=request.client.host if request.client else None)
+    db.commit()
+    db.refresh(closing)
+    return _closing_response(db, closing)
+
+
+@router.delete("/cash-box/closing", status_code=status.HTTP_204_NO_CONTENT)
+def delete_closing(
+    request: Request,
+    month: str = Query(),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_split_access),
+):
+    first, _ = _month_range(month)
+    closing = db.query(CashBoxClosing).filter(CashBoxClosing.month == f"{first:%Y-%m}").first()
+    if closing is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Ese mes no tiene cierre de Caja")
+    log_event(db, user_id=current_user.id, event_type="CASH_BOX_CLOSING_DELETED", entity_type="cash_box_closing",
+              entity_id=closing.id, details={"month": closing.month, "amount": str(closing.amount)},
+              ip_address=request.client.host if request.client else None)
+    db.delete(closing)
+    db.commit()
+
+
+@router.post("/cash-box/withdrawals", response_model=WithdrawalResponse, status_code=status.HTTP_201_CREATED)
+def create_withdrawal(
+    payload: WithdrawalRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_split_access),
+):
+    withdrawal = CashBoxWithdrawal(
+        withdrawal_date=payload.withdrawal_date,
+        amount=money(payload.amount),
+        concept=payload.concept.strip(),
+        created_by_user_id=current_user.id,
+    )
+    db.add(withdrawal)
+    db.flush()
+    log_event(db, user_id=current_user.id, event_type="CASH_BOX_WITHDRAWAL_CREATED", entity_type="cash_box_withdrawal",
+              entity_id=withdrawal.id, details={"concept": withdrawal.concept, "amount": str(withdrawal.amount)},
+              ip_address=request.client.host if request.client else None)
+    db.commit()
+    db.refresh(withdrawal)
+    return withdrawal
+
+
+@router.delete("/cash-box/withdrawals/{withdrawal_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_withdrawal(
+    withdrawal_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_split_access),
+):
+    withdrawal = db.get(CashBoxWithdrawal, withdrawal_id)
+    if withdrawal is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Retiro no encontrado")
+    log_event(db, user_id=current_user.id, event_type="CASH_BOX_WITHDRAWAL_DELETED", entity_type="cash_box_withdrawal",
+              entity_id=withdrawal.id, details={"concept": withdrawal.concept, "amount": str(withdrawal.amount)},
+              ip_address=request.client.host if request.client else None)
+    db.delete(withdrawal)
     db.commit()
 
 

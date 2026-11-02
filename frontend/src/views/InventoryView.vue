@@ -13,6 +13,7 @@ import Modal from "../components/Modal.vue";
 import Icon from "../components/Icon.vue";
 import FilamentSpoolIcon from "../components/FilamentSpoolIcon.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
+import { showToast } from "../composables/useToast";
 
 const auth = useAuthStore();
 
@@ -282,15 +283,44 @@ async function submitFilament() {
   }
 }
 
+// Dar de baja = sacarlo del inventario. Las ventas no cambian: cada una guardó sus gramos y
+// su costo de material al registrarse (si alguna lo usó, el filamento solo se oculta).
 async function deleteFilament(f) {
+  const left = Number(f.available_g);
   const ok = await confirmAction({
-    title: "Eliminar filamento",
-    message: `¿Eliminar "${f.brand} ${f.color}"? Si tiene ventas asociadas, se desactivará.`,
-    confirmLabel: "Eliminar",
+    title: "Dar de baja filamento",
+    message:
+      `¿Sacar "${f.brand} ${f.color}" del inventario?` +
+      (left > 0 ? ` Todavía figura con ${formatNumber(left, 0)} g: úsalo si ya no lo tienen de verdad.` : "") +
+      " Las ventas que lo usaron (entregadas o no) conservan sus costos y no cambian.",
+    confirmLabel: "Dar de baja",
     danger: true,
   });
   if (!ok) return;
-  await inventoryApi.deleteFilament(f.id);
+  try {
+    await inventoryApi.deleteFilament(f.id);
+    showToast("Filamento dado de baja", { detail: `${f.brand} ${f.color}` });
+  } catch (err) {
+    showToast("No se pudo dar de baja", { detail: extractApiError(err) });
+  }
+  await loadFilaments();
+}
+
+async function retireExhausted() {
+  const ok = await confirmAction({
+    title: "Dar de baja los agotados",
+    message:
+      "¿Sacar del inventario todos tus filamentos en 0 g? Las ventas que los usaron conservan sus costos y no cambian.",
+    confirmLabel: "Dar de baja",
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    const { retired } = await inventoryApi.retireExhaustedFilaments();
+    showToast(retired ? `${retired} filamento(s) dados de baja` : "No había filamentos agotados");
+  } catch (err) {
+    showToast("No se pudo dar de baja", { detail: extractApiError(err) });
+  }
   await loadFilaments();
 }
 
@@ -516,6 +546,14 @@ async function deleteSupply(s) {
           <button class="btn btn-secondary btn-sm" @click="toggleExhausted">
             {{ showExhausted ? "Ocultar agotados" : "Ver agotados" }}
           </button>
+          <button
+            v-if="canManage && showExhausted"
+            class="btn btn-secondary btn-sm"
+            title="Saca del inventario todos tus filamentos en 0 g (las ventas no cambian)"
+            @click="retireExhausted"
+          >
+            <Icon name="trash" :size="14" /> Dar de baja agotados
+          </button>
           <button class="btn btn-secondary btn-sm" @click="toggleSort">
             <Icon name="filter" :size="14" />
             {{ sortLabel }}
@@ -565,7 +603,7 @@ async function deleteSupply(s) {
               <td class="text-right">
                 <div v-if="canManage" class="flex gap-2" style="justify-content: flex-end">
                   <button class="btn btn-icon btn-ghost" @click="openEditFilament(f)"><Icon name="edit" :size="16" /></button>
-                  <button class="btn btn-icon btn-ghost" @click="deleteFilament(f)"><Icon name="trash" :size="16" /></button>
+                  <button class="btn btn-icon btn-ghost" title="Dar de baja" @click="deleteFilament(f)"><Icon name="trash" :size="16" /></button>
                 </div>
               </td>
             </tr>

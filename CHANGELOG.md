@@ -361,3 +361,13 @@
 **¿Generó migración de Alembic?:** No (el asistente no guardaba nada).
 
 **Cambios grandes o riesgosos:** Ninguno. En Render se puede borrar la variable `GEMINI_API_KEY` y revocar la clave en Google AI Studio.
+
+## [2026-11-01] - Costos de la Empresa en el Reparto, saldo de la Caja, filtro de Ventas por cuenta y dar de baja filamentos
+
+**Qué se hizo:** (1) **Reparto (beta):** el material e insumos de la Empresa (Simple_Solutions3D) usados en ventas cobradas ahora se le devuelven a la Caja, igual que a un socio, y se restan del neto (`compute_split` en `routers/beta.py`). La pantalla y el Excel del Reparto explican la regla nueva. (2) **Saldo de la Caja** en el Reparto: saldo inicial (el último cierre real anterior) + lo que le toca a la Caja − gastos que pagó la Caja − retiros = estimado. Al final del mes se anota cuánto quedó de verdad, con su explicación, y eso pasa al mes siguiente. Los retiros llevan monto y para qué se usaron. Rutas `GET /api/beta/cash-box`, `PUT/DELETE /api/beta/cash-box/closing` y `POST/DELETE /api/beta/cash-box/withdrawals`. (3) **Ventas:** filtro "Cuenta" (`account_id`): ventas a nombre de esa cuenta o que registró ella. Aparece para los observadores, entre ellos la Empresa. También aplica al Excel. (4) **Inventario:** "Dar de baja" un filamento, con un texto más claro, y botón "Dar de baja agotados" (`POST /api/inventory/filaments/retire-exhausted`). Si un filamento se usó en alguna venta, se desactiva y no se borra; las ventas conservan sus gramos y su costo guardados.
+
+**Por qué:** Al comparar el Reparto con el Excel manual de octubre, los costos de la Empresa no se devolvían. La regla anterior suponía que ya estaban en los gastos del mes, pero el filamento se compra otro mes y ese costo se repartía como ganancia. Además faltaba registrar cuánto queda de verdad en la Caja, poder ver solo las ventas de la Empresa y limpiar filamentos que ya no existen.
+
+**¿Generó migración de Alembic?:** Sí: `0020_cash_box.py`, con dos tablas nuevas (`cash_box_closings` y `cash_box_withdrawals`). No toca datos existentes.
+
+**Cambios grandes o riesgosos:** El Reparto de meses con ventas que usaron material de la Empresa cambia: la Caja recibe más y el neto que se reparte baja en ese monto. Una compra de filamento o insumos para el inventario de la Empresa no debe cargarse también como Gasto de la Empresa, porque se contaría dos veces. Tests nuevos en `tests/test_cash_box_and_filters.py`, más los del Reparto ajustados en `tests/test_company.py` (172 en total, todos OK) contra la base local desechable.

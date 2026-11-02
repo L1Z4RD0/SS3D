@@ -8,6 +8,33 @@
    Textos cortos y en el idioma de los usuarios (qué pueden hacer ahora), no técnicos. */
 export const RELEASES = [
   {
+    id: "2026-11-01",
+    date: "1 de noviembre de 2026",
+    title: "Caja del Reparto, filtro por cuenta y filamentos",
+    items: [
+      {
+        icon: "💰",
+        title: "La Caja recupera lo que pone la Empresa",
+        text: "En Reparto (beta), el filamento e insumos de Simple_Solutions3D usados en ventas ahora se le devuelven a la Caja, como a cualquier socio.",
+      },
+      {
+        icon: "🧾",
+        title: "Saldo real de la Caja",
+        text: "Al final del mes anota cuánto quedó de verdad en la Caja y por qué: pasa al mes siguiente. También puedes descontar retiros explicando para qué se usaron.",
+      },
+      {
+        icon: "🔎",
+        title: "Ventas por cuenta",
+        text: "Simple_Solutions3D puede filtrar Ventas por cuenta para ver solo las suyas, aunque no tenga impresora.",
+      },
+      {
+        icon: "🧵",
+        title: "Dar de baja filamentos",
+        text: "Saca de Inventario los filamentos que ya no tienes, uno por uno o todos los agotados de una vez. Las ventas no cambian.",
+      },
+    ],
+  },
+  {
     // Sale el mismo día que la anterior: repite sus puntos para quien todavía no la vio.
     id: "2026-10-28.3",
     date: "28 de octubre de 2026",

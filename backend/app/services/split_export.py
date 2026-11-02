@@ -79,12 +79,13 @@ def _readme(ws, report, partners: list[str], cash_box: str) -> None:
         ]),
         ("Cómo se calcula el reparto", [
             "Cobrado = suma de los precios de los pedidos que entran.",
-            "Costos devueltos a socios = suma de máquina + material + insumos que pusieron los socios.",
-            "Lo que puso la Empresa (su filamento e insumos) NO se devuelve: lo compró la Caja y ya está en los "
-            "Gastos de la Empresa del mes.",
+            "Costos devueltos = suma de máquina + material + insumos que pusieron los socios y la Empresa.",
+            f"Lo que puso la Empresa (su filamento e insumos) se le devuelve a la {cash_box}: ella lo compró. Por "
+            "eso una compra de filamento o insumos para el inventario de la Empresa NO se carga también como "
+            "gasto (se contaría dos veces).",
             "Deliveries = suma de los deliveries cobrados (se devuelven a quien los llevó).",
-            "Gastos de la Empresa = compras del mes registradas en el Reparto (bolsas, argollas, filamento...).",
-            "NETO A REPARTIR = Cobrado − Costos devueltos a socios − Deliveries − Gastos de la Empresa.",
+            "Gastos de la Empresa = compras del mes registradas en el Reparto (bolsas, argollas, laca...).",
+            "NETO A REPARTIR = Cobrado − Costos devueltos − Deliveries − Gastos de la Empresa.",
             f"Se reparte en partes iguales entre {', '.join(partners)} y la {cash_box} ({report.parts} partes): "
             "Parte de cada uno = Neto ÷ partes.",
             "TOTAL A RECIBIR de cada uno = su parte + sus costos devueltos + los gastos que pagó de su bolsillo + "
@@ -139,8 +140,9 @@ def _summary(ws, report, details, cash_box: str, totals_row: int) -> None:
     items = [
         ("Cobrado en el mes", report.collected_revenue,
          f"Suma de los precios de {collected_count} pedido(s) entregados y cobrados (hoja Pedidos)."),
-        ("Costos devueltos a socios", report.partner_cost_refunds,
-         "Máquina + material + insumos que pusieron los socios (hoja Costos por dueño)."),
+        ("Costos devueltos", report.partner_cost_refunds,
+         f"Máquina + material + insumos que pusieron los socios y la Empresa (a la {cash_box}). Hoja Costos por "
+         "dueño."),
         ("Deliveries", report.deliveries_total, "Lo que pagaron los clientes por el envío (hoja Deliveries)."),
         ("Gastos de la Empresa", report.expenses_total, "Compras del mes registradas en el Reparto (hoja Gastos)."),
         ("NETO A REPARTIR", f"={b(0)}-{b(1)}-{b(2)}-{b(3)}",
@@ -156,8 +158,8 @@ def _summary(ws, report, details, cash_box: str, totals_row: int) -> None:
 
     row = xlsx.section(ws, row, "Informativo (no se resta del neto)")
     row = xlsx.key_values(ws, row, [
-        ("Material e insumos de la Empresa", report.company_absorbed_cost,
-         "Lo que puso la Empresa en estos pedidos. No se devuelve: ya está pagado en los Gastos de la Empresa."),
+        ("De eso, material e insumos de la Empresa", report.company_absorbed_cost,
+         f"Lo que puso la Empresa en estos pedidos. Ya está dentro de Costos devueltos (vuelve a la {cash_box})."),
         ("Por cobrar (fuera)", report.pending_total,
          f"{len(report.pending)} pedido(s) entregados sin cobrar. Entran el mes en que se cobren."),
         ("Regalos (fuera)", report.gifts_cost,
@@ -187,11 +189,11 @@ def _summary(ws, report, details, cash_box: str, totals_row: int) -> None:
 def _orders(ws, report, details) -> None:
     row = xlsx.title(ws, "Pedidos que entran en el reparto", f"Entregados y cobrados en {_month_label(report.month)}")
     row = xlsx.note(ws, row, (
-        "Aporte al neto = Precio cobrado − Costos devueltos a socios − Delivery. La suma de los aportes menos los "
+        "Aporte al neto = Precio cobrado − Costos devueltos (socios y Empresa) − Delivery. La suma de los aportes menos los "
         "Gastos de la Empresa es el Neto a repartir."), span=12)
     cols = [Col("Entregado", 12, "date"), Col("Trabajo", 28), Col("Cuenta dueña", 20), Col("Registrada por", 20),
-            Col("Pago", 14), Col("Precio cobrado", 14, "money"), Col("Costos devueltos a socios", 15, "money"),
-            Col("Puso la Empresa (no se devuelve)", 15, "money"), Col("Postprocesado (ganancia común)", 15, "money"),
+            Col("Pago", 14), Col("Precio cobrado", 14, "money"), Col("Costos devueltos", 15, "money"),
+            Col("De eso, de la Empresa (vuelve a la Caja)", 15, "money"), Col("Postprocesado (ganancia común)", 15, "money"),
             Col("Reserva por riesgo (en la ganancia)", 15, "money"), Col("Delivery", 12, "money"),
             Col("Lo llevó", 14), Col("Aporte al neto", 15, "money")]
     head = row
@@ -214,8 +216,8 @@ def _owner_costs(ws, report, details, partner_for, company_names: set[str]) -> N
     row = xlsx.title(ws, "Costos por dueño", "De quién es cada costo de cada pedido y a quién se le devuelve")
     row = xlsx.note(ws, row, (
         "Máquina = depreciación + luz de la impresora (del dueño de la impresora). Material = filamento (del dueño "
-        "de cada filamento). Insumos = del dueño de cada insumo. A los socios se les devuelve lo suyo; lo de la "
-        "Empresa no se devuelve porque ya está en sus gastos."), span=9)
+        "de cada filamento). Insumos = del dueño de cada insumo. A cada socio se le devuelve lo suyo y lo de la "
+        "Empresa vuelve a la Caja."), span=9)
     cols = [Col("Entregado", 12, "date"), Col("Trabajo", 28), Col("Cuenta que puso el recurso", 22),
             Col("Máquina (depreciación + luz)", 15, "money"), Col("Material", 13, "money"),
             Col("Insumos", 12, "money"), Col("Total", 13, "money"), Col("Se devuelve a", 30)]
@@ -224,7 +226,7 @@ def _owner_costs(ws, report, details, partner_for, company_names: set[str]) -> N
     for sale, allocation in details.sales:
         for oc in allocation.owners:
             if oc.username in company_names:
-                back = "No: es de la Empresa (ya está en sus gastos)"
+                back = "Caja (es de la Empresa)"
             else:
                 back = partner_for(oc.username) or oc.username
             rows.append([sale.delivered_date, sale.client_name, oc.username, oc.machine, oc.material, oc.supplies,

@@ -25,9 +25,20 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const [rep, exps] = await Promise.all([betaApi.getMonthlySplit(month.value), betaApi.listExpenses(month.value)]);
+    const [rep, exps, box] = await Promise.all([
+      betaApi.getMonthlySplit(month.value),
+      betaApi.listExpenses(month.value),
+      // Si la Caja falla (ej. migración aún sin aplicar), el resto del Reparto se muestra igual.
+      betaApi.getCashBox(month.value).catch(() => null),
+    ]);
     report.value = rep;
     expenses.value = exps;
+    cashBox.value = box;
+    Object.assign(closingForm, {
+      amount: box?.closing ? Number(box.closing.amount) : null,
+      note: box?.closing?.note || "",
+    });
+    closingEditing.value = !box?.closing;
     redrawSplit();
   } catch (err) {
     error.value = extractApiError(err, "No se pudo calcular el reparto.");
@@ -129,6 +140,94 @@ async function removeExpense(e) {
   await betaApi.deleteExpense(e.id);
   await load();
 }
+
+/* -------- Saldo de la Caja -------- */
+const cashBox = ref(null);
+const monthName = (m) =>
+  m ? new Date(`${m}-01T12:00:00`).toLocaleDateString("es-CL", { month: "long", year: "numeric" }) : "";
+
+const closingForm = reactive({ amount: null, note: "" });
+const closingEditing = ref(true);
+const closingError = ref("");
+const savingClosing = ref(false);
+
+async function saveClosing() {
+  closingError.value = "";
+  if (!isValidNumber(closingForm.amount, { min: 0, allowZero: true })) {
+    closingError.value = "Ingresa cuánto quedó en la Caja (puede ser 0).";
+    return;
+  }
+  if (!closingForm.note.trim()) {
+    closingError.value = "Explica por qué quedó ese monto.";
+    return;
+  }
+  savingClosing.value = true;
+  try {
+    await betaApi.saveCashBoxClosing({ month: month.value, amount: Number(closingForm.amount), note: closingForm.note });
+    showToast("Cierre de Caja guardado", { detail: "Será el saldo inicial del mes siguiente." });
+    await load();
+  } catch (err) {
+    closingError.value = extractApiError(err, "No se pudo guardar el cierre.");
+  } finally {
+    savingClosing.value = false;
+  }
+}
+
+async function removeClosing() {
+  const ok = await confirmAction({
+    title: "Borrar cierre de Caja",
+    message: `¿Borrar el cierre de ${monthName(month.value)}? El mes siguiente arrancará con el último cierre anterior.`,
+    confirmLabel: "Borrar",
+    danger: true,
+  });
+  if (!ok) return;
+  await betaApi.deleteCashBoxClosing(month.value);
+  await load();
+}
+
+const emptyWithdrawal = () => ({
+  withdrawal_date: todayISO().slice(0, 7) === month.value ? todayISO() : `${month.value}-01`,
+  amount: null,
+  concept: "",
+});
+const withdrawalForm = reactive(emptyWithdrawal());
+watch(month, () => Object.assign(withdrawalForm, emptyWithdrawal()));
+const withdrawalError = ref("");
+const savingWithdrawal = ref(false);
+
+async function addWithdrawal() {
+  withdrawalError.value = "";
+  if (!isValidNumber(withdrawalForm.amount, { min: 0, allowZero: false })) {
+    withdrawalError.value = "Ingresa un monto mayor a 0.";
+    return;
+  }
+  if (!withdrawalForm.concept.trim()) {
+    withdrawalError.value = "Explica para qué se usó la plata.";
+    return;
+  }
+  savingWithdrawal.value = true;
+  try {
+    await betaApi.createCashBoxWithdrawal({ ...withdrawalForm, amount: Number(withdrawalForm.amount) });
+    Object.assign(withdrawalForm, emptyWithdrawal());
+    await load();
+  } catch (err) {
+    withdrawalError.value = extractApiError(err, "No se pudo guardar el retiro.");
+  } finally {
+    savingWithdrawal.value = false;
+  }
+}
+
+async function removeWithdrawal(w) {
+  const ok = await confirmAction({
+    title: "Eliminar retiro",
+    message: `¿Eliminar "${w.concept}" (${formatCurrency(w.amount)})?`,
+    confirmLabel: "Eliminar",
+    danger: true,
+  });
+  if (!ok) return;
+  await betaApi.deleteCashBoxWithdrawal(w.id);
+  await load();
+}
 </script>
 
 <template>
@@ -169,7 +268,7 @@ async function removeExpense(e) {
     <template v-if="report">
       <div class="grid grid-cols-4 stats">
         <StatCard label="Cobrado en el mes" :value="formatCurrency(report.collected_revenue)" :meta="`${report.sales.length} pedido(s) entregados y cobrados`" />
-        <StatCard label="Costos devueltos a socios" :value="formatCurrency(report.partner_cost_refunds)" meta="Máquina, material e insumos de cada uno" />
+        <StatCard label="Costos devueltos" :value="formatCurrency(report.partner_cost_refunds)" meta="Máquina, material e insumos de socios y Empresa" />
         <StatCard label="Gastos de la Empresa" :value="formatCurrency(report.expenses_total)" :meta="`${expenses.length} compra(s) del mes`" />
         <StatCard label="Ganancia neta a repartir" :value="formatCurrency(report.net)" :meta="shareLabel" />
       </div>
@@ -233,8 +332,8 @@ async function removeExpense(e) {
           </li>
           <li>
             A cada socio se le devuelve lo que puso: máquina (depreciación + luz) de sus impresoras y su material e
-            insumos. El material de la Empresa (<strong>{{ formatCurrency(report.company_absorbed_cost) }}</strong>) no se
-            devuelve: ya está en los gastos de la Empresa.
+            insumos. El material e insumos de la Empresa (<strong>{{ formatCurrency(report.company_absorbed_cost) }}</strong>)
+            vuelven a la <strong>Caja</strong>, que fue quien los compró.
           </li>
           <li>
             El <strong>delivery</strong> lo paga el cliente y se le devuelve a quien lo llevó
@@ -249,11 +348,113 @@ async function removeExpense(e) {
         </ul>
       </div>
 
+      <div v-if="cashBox" class="card">
+        <div class="card-header">
+          <h3>Saldo de la Caja</h3>
+          <span class="text-muted text-sm">Lo que de verdad quedó al cierre pasa al mes siguiente</span>
+        </div>
+        <div class="cash-flow">
+          <div class="mini-line">
+            <span>
+              Saldo inicial
+              <span class="text-muted">
+                {{ cashBox.opening_month ? `· cierre real de ${monthName(cashBox.opening_month)}` : "· sin cierres anteriores" }}
+              </span>
+              <div v-if="cashBox.opening_note" class="text-muted text-sm">«{{ cashBox.opening_note }}»</div>
+            </span>
+            <span class="mono">{{ formatCurrency(cashBox.opening) }}</span>
+          </div>
+          <div class="mini-line">
+            <span>+ Le toca a la Caja en el reparto <span class="text-muted">(su parte + lo que puso la Empresa)</span></span>
+            <span class="mono">{{ formatCurrency(cashBox.split_income) }}</span>
+          </div>
+          <div class="mini-line">
+            <span>− Gastos del mes que pagó la Caja</span>
+            <span class="mono">{{ formatCurrency(cashBox.expenses_paid) }}</span>
+          </div>
+          <div class="mini-line">
+            <span>− Retiros de la Caja</span>
+            <span class="mono">{{ formatCurrency(cashBox.withdrawals_total) }}</span>
+          </div>
+          <div class="mini-line total-line">
+            <strong>Debería quedar (estimado)</strong>
+            <strong class="mono">{{ formatCurrency(cashBox.estimated) }}</strong>
+          </div>
+        </div>
+
+        <h4 class="sub-title">Retiros de la Caja</h4>
+        <p class="text-muted text-sm hint">
+          Plata que se sacó de la Caja y para qué. Solo baja el saldo; si es una compra que se descuenta del reparto de
+          todos, anótala en Gastos de la Empresa.
+        </p>
+        <form class="withdrawal-form" @submit.prevent="addWithdrawal">
+          <input v-model="withdrawalForm.withdrawal_date" type="date" required aria-label="Fecha del retiro" />
+          <input v-model="withdrawalForm.concept" maxlength="200" placeholder="Para qué se usó (ej: pago de envío a proveedor)" aria-label="Para qué se usó" />
+          <input v-model.number="withdrawalForm.amount" type="number" min="1" step="1" placeholder="Monto" aria-label="Monto del retiro" />
+          <button type="submit" class="btn btn-secondary btn-sm" :disabled="savingWithdrawal">
+            <Icon name="plus" :size="14" /> Descontar
+          </button>
+        </form>
+        <div v-if="withdrawalError" class="alert alert-danger mt-2">{{ withdrawalError }}</div>
+        <div v-for="w in cashBox.withdrawals" :key="w.id" class="mini-line">
+          <span>{{ formatDate(w.withdrawal_date) }} · {{ w.concept }}</span>
+          <span class="flex items-center gap-2">
+            <span class="mono">−{{ formatCurrency(w.amount) }}</span>
+            <button class="btn btn-icon btn-ghost" title="Eliminar retiro" @click="removeWithdrawal(w)"><Icon name="trash" :size="15" /></button>
+          </span>
+        </div>
+
+        <h4 class="sub-title">Cierre real de {{ monthName(month) }}</h4>
+        <div v-if="cashBox.closing && !closingEditing" class="closing-box">
+          <div class="mini-line">
+            <span>
+              <strong>Quedó en la Caja</strong>
+              <div class="text-muted text-sm">
+                «{{ cashBox.closing.note }}»
+                <template v-if="cashBox.closing.updated_by"> · anotado por {{ cashBox.closing.updated_by }}</template>
+              </div>
+            </span>
+            <strong class="mono">{{ formatCurrency(cashBox.closing.amount) }}</strong>
+          </div>
+          <div class="mini-line">
+            <span>Diferencia contra el estimado</span>
+            <span class="mono" :class="{ 'text-danger': Number(cashBox.difference) < 0 }">
+              {{ Number(cashBox.difference) > 0 ? "+" : "" }}{{ formatCurrency(cashBox.difference) }}
+            </span>
+          </div>
+          <div class="flex gap-2 mt-2">
+            <button class="btn btn-secondary btn-sm" @click="closingEditing = true"><Icon name="edit" :size="14" /> Corregir</button>
+            <button class="btn btn-ghost btn-sm" @click="removeClosing"><Icon name="trash" :size="14" /> Borrar</button>
+          </div>
+        </div>
+        <form v-else class="closing-form" @submit.prevent="saveClosing">
+          <p class="text-muted text-sm hint">
+            Cuenten la Caja al final del mes y anoten cuánto quedó de verdad, con la explicación de por qué (ej. un
+            vuelto que faltó, una venta que se pagó en otra cuenta). Ese monto será el saldo inicial del mes siguiente.
+          </p>
+          <div class="closing-fields">
+            <input v-model.number="closingForm.amount" type="number" min="0" step="1" placeholder="Monto que quedó" aria-label="Monto que quedó en la Caja" />
+            <textarea v-model="closingForm.note" maxlength="1000" rows="2" placeholder="Por qué quedó ese monto" aria-label="Explicación del cierre"></textarea>
+          </div>
+          <div class="flex gap-2 mt-2">
+            <button type="submit" class="btn btn-primary btn-sm" :disabled="savingClosing">
+              <Icon name="check" :size="14" /> Guardar cierre
+            </button>
+            <button v-if="cashBox.closing" type="button" class="btn btn-ghost btn-sm" @click="closingEditing = false">Cancelar</button>
+          </div>
+          <div v-if="closingError" class="alert alert-danger mt-2">{{ closingError }}</div>
+        </form>
+      </div>
+
       <div class="card">
         <div class="card-header">
           <h3>Gastos de la Empresa del mes</h3>
-          <span class="text-muted text-sm">Compras de la caja (bolsas, argollas, filamento...)</span>
+          <span class="text-muted text-sm">Compras de la caja (bolsas, argollas, laca...)</span>
         </div>
+        <p class="text-muted text-sm hint">
+          El filamento y los insumos que compra la Empresa van al Inventario, no aquí: cuando se usan en una venta su costo
+          vuelve a la Caja, así que cargarlos también como gasto los contaría dos veces.
+        </p>
         <form class="expense-form" @submit.prevent="addExpense">
           <input v-model="expenseForm.expense_date" type="date" required aria-label="Fecha" />
           <input v-model="expenseForm.concept" maxlength="160" placeholder="Ej: Bolsas M" aria-label="Concepto" />
@@ -299,7 +500,6 @@ async function removeExpense(e) {
                 <th>Pago</th>
                 <th class="text-right">Cobrado</th>
                 <th v-for="n in refundNames" :key="n" class="text-right">Se le devuelve a {{ n }}</th>
-                <th class="text-right">Puso la Empresa</th>
               </tr>
             </thead>
             <tbody>
@@ -317,7 +517,6 @@ async function removeExpense(e) {
                 <td v-for="n in refundNames" :key="n" class="text-right mono">
                   {{ s.refunds[n] ? formatCurrency(s.refunds[n]) : "—" }}
                 </td>
-                <td class="text-right mono text-muted">{{ Number(s.company_cost) ? formatCurrency(s.company_cost) : "—" }}</td>
               </tr>
             </tbody>
           </table>
@@ -494,9 +693,47 @@ async function removeExpense(e) {
   border-bottom: none;
 }
 
+.mini-line .mono {
+  white-space: nowrap;
+}
+
+.hint {
+  margin: 0 0 10px;
+}
+
+.sub-title {
+  margin: 18px 0 6px;
+  font-size: 0.95rem;
+}
+
+.total-line {
+  border-top: 2px solid var(--border);
+}
+
+.withdrawal-form {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) 120px auto;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.closing-fields {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.closing-fields textarea {
+  resize: vertical;
+}
+
 @media (max-width: 900px) {
-  .expense-form {
+  .expense-form,
+  .withdrawal-form {
     grid-template-columns: 1fr 1fr;
+  }
+  .closing-fields {
+    grid-template-columns: 1fr;
   }
 }
 

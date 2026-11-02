@@ -56,7 +56,7 @@ const printers = ref([]);
 const filaments = ref([]);
 const supplies = ref([]);
 
-const EMPTY_FILTERS = { date_from: "", date_to: "", client: "", printer_id: "", payment_method: "", sale_source: "", search: "", status: "" };
+const EMPTY_FILTERS = { date_from: "", date_to: "", client: "", printer_id: "", account_id: "", payment_method: "", sale_source: "", search: "", status: "" };
 const filters = reactive({ ...EMPTY_FILTERS });
 
 /* Orden de la hoja: lo resuelve el servidor (así sirve con varias páginas). Se elige en
@@ -942,6 +942,16 @@ onMounted(async () => {
           <select v-model="filters.printer_id">
             <option value="">Todas</option>
             <option v-for="p in printers" :key="p.id" :value="p.id">{{ withOwner(p.name, p.owner_id) }}</option>
+          </select>
+        </div>
+        <div v-if="observedUsers.length" class="field">
+          <label>Cuenta</label>
+          <!-- Ventas a nombre de la cuenta o que registró ella (la Empresa vende sin impresora propia). -->
+          <select v-model="filters.account_id">
+            <option value="">Todas</option>
+            <option v-for="u in observedUsers" :key="u.id" :value="u.id">
+              {{ u.username }}{{ u.is_self ? " (Empresa)" : "" }}
+            </option>
           </select>
         </div>
         <div class="field">
