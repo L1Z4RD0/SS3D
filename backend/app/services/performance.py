@@ -54,6 +54,7 @@ class OwnCosts:
     machine: Decimal = Decimal(0)
     material: Decimal = Decimal(0)
     supplies: Decimal = Decimal(0)
+    postprocess: Decimal = Decimal(0)
     print_hours: Decimal = Decimal(0)
     filament_g: Decimal = Decimal(0)
     # Pedidos (de cualquier cuenta) en que se usó algo de esta cuenta.
@@ -61,7 +62,8 @@ class OwnCosts:
 
     def as_dict(self) -> dict:
         return {"machine": money(self.machine), "material": money(self.material), "supplies": money(self.supplies),
-                "total": money(self.machine + self.material + self.supplies),
+                "postprocess": money(self.postprocess),
+                "total": money(self.machine + self.material + self.supplies + self.postprocess),
                 "print_hours": money(self.print_hours), "filament_g": money(self.filament_g),
                 "sales_with_resources": self.sales_with_resources}
 
@@ -134,7 +136,7 @@ def account_performance(db: Session, company: User, date_from: date | None, date
         month.combined.add(sale)
 
         allocation = allocate_sale_costs(sale)
-        shared_cost += allocation.shared + sale.shipping_cost
+        shared_cost += sale.shipping_cost
         owners_here = set()
         for oc in allocation.owners:
             if oc.user_id not in users:
@@ -143,6 +145,7 @@ def account_performance(db: Session, company: User, date_from: date | None, date
             o.machine += oc.machine
             o.material += oc.material
             o.supplies += oc.supplies
+            o.postprocess += oc.postprocess
             month.own_costs[oc.user_id] += oc.total
             owners_here.add(oc.user_id)
         hours, grams = _usage_by_owner(sale)
@@ -176,7 +179,8 @@ def account_performance(db: Session, company: User, date_from: date | None, date
             **combined.as_dict(),
             "print_hours": money(combined_hours),
             "filament_g": money(combined_grams),
-            # Postprocesado (ganancia común) y delivery (de quien lo llevó): no son de una cuenta.
+            # Delivery (de quien lo llevó): no es de una cuenta. El postprocesado ya está en los
+            # costos propios del dueño de la impresora.
             "shared_cost": money(shared_cost),
             # Ventas registradas por una cuenta que usaron recursos de otra.
             "mixed_sales": mixed_sales,

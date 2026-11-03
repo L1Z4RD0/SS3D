@@ -238,11 +238,10 @@ def _cost_allocation_fields(sale: Sale) -> dict:
         "cost_by_owner": [
             OwnerCostResponse(
                 user_id=o.user_id, username=o.username, machine=o.machine, material=o.material,
-                supplies=o.supplies, total=o.total,
+                supplies=o.supplies, postprocess=o.postprocess, total=o.total,
             )
             for o in allocation.owners
         ],
-        "shared_cost": allocation.shared,
     }
 
 

@@ -158,6 +158,7 @@ class OwnerCostResponse(BaseModel):
     machine: Decimal
     material: Decimal
     supplies: Decimal
+    postprocess: Decimal = Decimal(0)
     total: Decimal
 
 
@@ -246,10 +247,9 @@ class SaleResponse(BaseModel):
     supplies_used: list[SaleSupplyResponse]
     # Algún insumo se usó sin stock: su costo (y la ganancia) es provisional hasta reponerlo.
     has_provisional_costs: bool = False
-    # Costos por dueño de recurso (máquina, material, insumos). El postprocesado no es de un
-    # recurso con dueño: va en shared_cost. El delivery es de quien lo llevó (delivery_by).
+    # Costos por dueño (máquina, material, insumos y el postprocesado, que es del dueño de la
+    # impresora). El delivery es de quien lo llevó (delivery_by).
     cost_by_owner: list[OwnerCostResponse] = Field(default_factory=list)
-    shared_cost: Decimal = Decimal(0)
     # Delivery: quién lo llevó. El monto es el delivery cobrado al cliente (shipping_cost).
     delivery_by: str | None = None
     delivery_amount: Decimal = Decimal(0)

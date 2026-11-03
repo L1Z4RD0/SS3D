@@ -64,8 +64,8 @@ def _readme(ws, report, partners: list[str], cash_box: str) -> None:
             f"Luz = horas de impresión × potencia de la impresora (kW) × ${xlsx_money(ELECTRICITY_RATE)} por kWh.",
             "Material = gramos usados ÷ peso del carrete × precio del carrete. Es del DUEÑO DE CADA FILAMENTO.",
             "Insumos = cantidad usada × costo unitario. Son del DUEÑO DE CADA INSUMO.",
-            f"Postprocesado = horas de postprocesado × ${xlsx_money(LABOR_RATE_PER_HOUR)} por hora. No es de "
-            "nadie: queda como ganancia común (no se devuelve).",
+            f"Postprocesado = horas de postprocesado × ${xlsx_money(LABOR_RATE_PER_HOUR)} por hora. Es del "
+            "DUEÑO DE LA IMPRESORA de la venta (él lo hace): se le devuelve junto con su máquina.",
             "Delivery = lo que pagó el cliente por el envío. No es ganancia: se le devuelve a quien lo llevó.",
             "Planchas adicionales: cada plancha usa su propia impresora y filamentos, con los mismos criterios.",
         ]),
@@ -79,7 +79,7 @@ def _readme(ws, report, partners: list[str], cash_box: str) -> None:
         ]),
         ("Cómo se calcula el reparto", [
             "Cobrado = suma de los precios de los pedidos que entran.",
-            "Costos devueltos = suma de máquina + material + insumos que pusieron los socios y la Empresa.",
+            "Costos devueltos = suma de máquina + material + insumos + postprocesado de los socios y la Empresa.",
             f"Lo que puso la Empresa (su filamento e insumos) se le devuelve a la {cash_box}: ella lo compró. Por "
             "eso una compra de filamento o insumos para el inventario de la Empresa NO se carga también como "
             "gasto (se contaría dos veces).",
@@ -141,7 +141,7 @@ def _summary(ws, report, details, cash_box: str, totals_row: int) -> None:
         ("Cobrado en el mes", report.collected_revenue,
          f"Suma de los precios de {collected_count} pedido(s) entregados y cobrados (hoja Pedidos)."),
         ("Costos devueltos", report.partner_cost_refunds,
-         f"Máquina + material + insumos que pusieron los socios y la Empresa (a la {cash_box}). Hoja Costos por "
+         f"Máquina + material + insumos + postprocesado de los socios y la Empresa (a la {cash_box}). Hoja Costos por "
          "dueño."),
         ("Deliveries", report.deliveries_total, "Lo que pagaron los clientes por el envío (hoja Deliveries)."),
         ("Gastos de la Empresa", report.expenses_total, "Compras del mes registradas en el Reparto (hoja Gastos)."),
@@ -193,7 +193,7 @@ def _orders(ws, report, details) -> None:
         "Gastos de la Empresa es el Neto a repartir."), span=12)
     cols = [Col("Entregado", 12, "date"), Col("Trabajo", 28), Col("Cuenta dueña", 20), Col("Registrada por", 20),
             Col("Pago", 14), Col("Precio cobrado", 14, "money"), Col("Costos devueltos", 15, "money"),
-            Col("De eso, de la Empresa (vuelve a la Caja)", 15, "money"), Col("Postprocesado (ganancia común)", 15, "money"),
+            Col("De eso, de la Empresa (vuelve a la Caja)", 15, "money"), Col("De eso, postprocesado (al dueño de la impresora)", 15, "money"),
             Col("Reserva por riesgo (en la ganancia)", 15, "money"), Col("Delivery", 12, "money"),
             Col("Lo llevó", 14), Col("Aporte al neto", 15, "money")]
     head = row
@@ -206,7 +206,7 @@ def _orders(ws, report, details) -> None:
         rows.append([sale.delivered_date, sale.client_name, sale.owner.username,
                      sale.created_by.username if sale.created_by else "",
                      PAYMENT_LABELS.get(sale.payment_method, sale.payment_method), sale.total_price, refunded,
-                     line.company_cost, allocation.shared, sale.risk_amount, sale.shipping_cost,
+                     line.company_cost, sale.postprocess_cost, sale.risk_amount, sale.shipping_cost,
                      sale.delivery_by or ("sin asignar" if sale.shipping_cost else ""), f"=F{r}-G{r}-K{r}"])
     xlsx.table(ws, row, cols, rows, totals={5: "sum", 6: "sum", 7: "sum", 8: "sum", 9: "sum", 10: "sum", 12: "sum"},
                freeze=True)
@@ -216,13 +216,14 @@ def _owner_costs(ws, report, details, partner_for, company_names: set[str]) -> N
     row = xlsx.title(ws, "Costos por dueño", "De quién es cada costo de cada pedido y a quién se le devuelve")
     row = xlsx.note(ws, row, (
         "Máquina = depreciación + luz de la impresora (del dueño de la impresora). Material = filamento (del dueño "
-        "de cada filamento). Insumos = del dueño de cada insumo. A cada socio se le devuelve lo suyo y lo de la "
-        "Empresa vuelve a la Caja."), span=9)
+        "de cada filamento). Insumos = del dueño de cada insumo. Postprocesado = del dueño de la impresora de la "
+        "venta (él lo hace). A cada socio se le devuelve lo suyo y lo de la Empresa vuelve a la Caja."), span=10)
     cols = [Col("Entregado", 12, "date"), Col("Trabajo", 28), Col("Cuenta que puso el recurso", 22),
             Col("Máquina (depreciación + luz)", 15, "money"), Col("Material", 13, "money"),
-            Col("Insumos", 12, "money"), Col("Total", 13, "money"), Col("Se devuelve a", 30)]
+            Col("Insumos", 12, "money"), Col("Postprocesado", 13, "money"), Col("Total", 13, "money"),
+            Col("Se devuelve a", 30)]
     rows = []
-    per_owner: dict[str, list[Decimal]] = defaultdict(lambda: [Decimal(0)] * 4)
+    per_owner: dict[str, list[Decimal]] = defaultdict(lambda: [Decimal(0)] * 5)
     for sale, allocation in details.sales:
         for oc in allocation.owners:
             if oc.username in company_names:
@@ -230,17 +231,19 @@ def _owner_costs(ws, report, details, partner_for, company_names: set[str]) -> N
             else:
                 back = partner_for(oc.username) or oc.username
             rows.append([sale.delivered_date, sale.client_name, oc.username, oc.machine, oc.material, oc.supplies,
-                         oc.total, back])
+                         oc.postprocess, oc.total, back])
             acc = per_owner[oc.username]
             acc[0] += oc.machine
             acc[1] += oc.material
             acc[2] += oc.supplies
-            acc[3] += oc.total
-    row = xlsx.table(ws, row, cols, rows, totals={3: "sum", 4: "sum", 5: "sum", 6: "sum"}, freeze=True)
+            acc[3] += oc.postprocess
+            acc[4] += oc.total
+    row = xlsx.table(ws, row, cols, rows, totals={3: "sum", 4: "sum", 5: "sum", 6: "sum", 7: "sum"}, freeze=True)
     row = xlsx.section(ws, row, "Total por cuenta")
     xlsx.table(ws, row, [Col("Cuenta", 20), Col("Máquina", 15, "money"), Col("Material", 13, "money"),
-                         Col("Insumos", 12, "money"), Col("Total", 13, "money")],
-               [[k, *v] for k, v in sorted(per_owner.items())], totals={1: "sum", 2: "sum", 3: "sum", 4: "sum"})
+                         Col("Insumos", 12, "money"), Col("Postprocesado", 13, "money"), Col("Total", 13, "money")],
+               [[k, *v] for k, v in sorted(per_owner.items())],
+               totals={1: "sum", 2: "sum", 3: "sum", 4: "sum", 5: "sum"})
 
 
 def _expenses(ws, report, details, cash_box: str, people: set[str]) -> None:

@@ -1156,7 +1156,7 @@ onMounted(async () => {
                           <span>
                             {{ o.username }}
                             <span class="text-muted">
-                              ({{ [Number(o.machine) && "máquina", Number(o.material) && "material", Number(o.supplies) && "insumos"].filter(Boolean).join(", ") }})
+                              ({{ [Number(o.machine) && "máquina", Number(o.material) && "material", Number(o.supplies) && "insumos", Number(o.postprocess) && "postprocesado"].filter(Boolean).join(", ") }})
                             </span>
                           </span>
                           <span class="mono">{{ formatCurrency(o.total) }}</span>

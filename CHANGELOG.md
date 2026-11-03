@@ -371,3 +371,13 @@
 **¿Generó migración de Alembic?:** Sí: `0020_cash_box.py`, con dos tablas nuevas (`cash_box_closings` y `cash_box_withdrawals`). No toca datos existentes.
 
 **Cambios grandes o riesgosos:** El Reparto de meses con ventas que usaron material de la Empresa cambia: la Caja recibe más y el neto que se reparte baja en ese monto. Una compra de filamento o insumos para el inventario de la Empresa no debe cargarse también como Gasto de la Empresa, porque se contaría dos veces. Tests nuevos en `tests/test_cash_box_and_filters.py`, más los del Reparto ajustados en `tests/test_company.py` (172 en total, todos OK) contra la base local desechable.
+
+## [2026-11-02] - El postprocesado es costo del dueño de la impresora
+
+**Qué se hizo:** `allocate_sale_costs` (`services/cost_allocation.py`) ahora asigna el postprocesado de cada venta al dueño de la impresora principal, en un campo nuevo `postprocess` dentro de los costos por dueño. Antes quedaba aparte como "ganancia común" (`shared`) y no se le devolvía a nadie. Con eso cambian el Reparto (se devuelve con la máquina), el detalle "Costos por cuenta" de cada venta, los costos propios en Rendimiento y los dos Excel (columna Postprocesado en los costos por dueño). Se quitó `shared_cost` de la respuesta de ventas, que el frontend no usaba. En Rendimiento, `shared_cost` ahora es solo el delivery.
+
+**Por qué:** Una venta de Simple Solutions con impresora y filamento de Sntg costó $2.171, pero el Reparto le devolvía $1.171 a Sntg: los $1.000 de postprocesado no se le devolvían. Esa regla venía así desde que se creó el Reparto (no la introdujo el cambio del 2026-11-01). Los socios aclararon que el postprocesado lo hace el dueño de la impresora y es costo suyo.
+
+**¿Generó migración de Alembic?:** No. No cambia ningún dato guardado: es solo cómo se reparte el costo que ya guarda cada venta.
+
+**Cambios grandes o riesgosos:** El Reparto se calcula en vivo, así que los meses anteriores (octubre incluido) también muestran ahora el postprocesado devuelto a cada dueño de impresora y un neto a repartir menor en ese monto. Reglas que se mantienen: la máquina va al dueño de la impresora; el material e insumos, a su dueño; lo de la Empresa, a la Caja; el delivery, a quien lo llevó. Tests: `test_split_postprocess_goes_to_printer_owner` (venta de la Empresa con impresora y filamento de Sntg, y venta mixta con impresora de Diego y filamento de la Empresa), más los tests de Reparto y Excel ajustados (173 en total, todos OK).

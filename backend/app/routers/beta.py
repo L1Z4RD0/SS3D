@@ -15,7 +15,8 @@ Reglas (acordadas con los socios):
   mes, pero el filamento suele comprarse otro mes y ese costo se perdía (se repartía como
   ganancia). Por eso una compra de filamento o insumos para el inventario de la Empresa NO
   se carga también como gasto: se contaría dos veces.
-- El postprocesado es ganancia común (no se le devuelve a nadie).
+- El postprocesado se le devuelve al dueño de la impresora de la venta: él lo hace. (Hasta
+  el 2026-11-02 era "ganancia común" y no se devolvía.)
 - El delivery (lo que pagó el cliente por el envío) se le devuelve a quien lo llevó: no es
   ganancia de nadie. Si no tiene a nadie asignado, queda "sin asignar".
 - Neto = cobrado − costos devueltos (socios y Caja) − deliveries − gastos de la Empresa. Se

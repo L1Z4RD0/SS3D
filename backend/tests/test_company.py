@@ -74,7 +74,9 @@ def test_company_sells_with_partner_printer_and_own_filament(client, db, biz):
     assert Decimal(d["machine"]) == Decimal(sale["depreciation_cost"]) + Decimal(sale["energy_cost"])
     assert Decimal(d["material"]) == 0
     assert Decimal(c["material"]) == Decimal(sale["material_cost"]) and Decimal(c["machine"]) == 0
-    assert Decimal(sale["shared_cost"]) == Decimal(sale["postprocess_cost"])  # el delivery no es "común"
+    # El postprocesado lo hace el dueño de la impresora (Diego): es costo suyo.
+    assert Decimal(d["postprocess"]) == Decimal(sale["postprocess_cost"]) > 0
+    assert Decimal(c["postprocess"]) == 0
     db.expire_all()
     assert db.get(Filament, fc["id"]).available_g == Decimal(900)
 
@@ -231,16 +233,17 @@ def test_monthly_split(client, db, make, biz, monkeypatch):
     rep = r.json()
     lines = {l["name"]: l for l in rep["partners"]}
     refund_a = Decimal(a["total_cost"])  # todo de Diego
-    refund_b = Decimal(b["depreciation_cost"]) + Decimal(b["energy_cost"])  # máquina de Sntg
+    # Máquina y postprocesado de Sntg (su impresora); el material es de la Empresa.
+    refund_b = Decimal(b["depreciation_cost"]) + Decimal(b["energy_cost"]) + Decimal(b["postprocess_cost"])
     assert Decimal(rep["collected_revenue"]) == Decimal(a["price"]) + Decimal(b["price"])
-    assert Decimal(lines[D]["cost_refund"]) == refund_a - Decimal(a["postprocess_cost"]) - Decimal(a["shipping_cost"])
+    # A Diego se le devuelve todo menos el delivery (es de quien lo llevó): incluido su postprocesado.
+    assert Decimal(lines[D]["cost_refund"]) == refund_a - Decimal(a["shipping_cost"])
     assert Decimal(lines[S]["cost_refund"]) == refund_b
     # El material de la Empresa se le devuelve a la Caja (y se resta del neto como el de un socio).
     company_cost = Decimal(b["material_cost"])
     assert Decimal(rep["company_absorbed_cost"]) == company_cost
     assert Decimal(lines["Caja"]["cost_refund"]) == company_cost
-    assert Decimal(rep["partner_cost_refunds"]) == refund_a - Decimal(a["postprocess_cost"]) - Decimal(
-        a["shipping_cost"]) + refund_b + company_cost
+    assert Decimal(rep["partner_cost_refunds"]) == refund_a - Decimal(a["shipping_cost"]) + refund_b + company_cost
     assert Decimal(rep["expenses_total"]) == 4000
     # La venta A cobró $3.000 de delivery sin nadie asignado; la B, $2.000 que llevó Omar.
     assert Decimal(rep["deliveries_total"]) == 5000 and Decimal(rep["unassigned_delivery"]) == 3000
@@ -471,8 +474,8 @@ def test_split_excel_matches_screen_and_balances(client, biz, monkeypatch):
     owners = [row for row in wb["Costos por dueño"].iter_rows(values_only=True) if row and row[2] in (S, biz["company"].username)]
     sntg_row = next(row for row in owners if row[2] == S)
     company_row = next(row for row in owners if row[2] == biz["company"].username)
-    assert sntg_row[3] > 0 and sntg_row[7] == S
-    assert company_row[4] > 0 and company_row[7].startswith("Caja")
+    assert sntg_row[3] > 0 and sntg_row[6] > 0 and sntg_row[8] == S  # máquina y postprocesado
+    assert company_row[4] > 0 and company_row[6] == 0 and company_row[8].startswith("Caja")
     # El regalo queda fuera del reparto, con quién absorbe su costo.
     outside = " ".join(str(c) for row in wb["Fuera del reparto"].iter_rows(values_only=True) for c in row if c)
     assert D in outside
@@ -485,3 +488,31 @@ def test_split_excel_requires_access(client, make, biz, monkeypatch):
     outsider = make.user()
     r = client.get("/api/beta/split/export.xlsx", headers=make.headers(outsider))
     assert r.status_code == 403
+
+
+def test_split_postprocess_goes_to_printer_owner(client, biz, monkeypatch):
+    """El postprocesado lo hace el dueño de la impresora: se le devuelve a él. La Empresa (sin
+    impresoras) solo recupera su propio filamento e insumos."""
+    monkeypatch.setattr(settings, "split_partners", f"{biz['diego'].username},{biz['sntg'].username},Omar")
+    D, S = biz["diego"].username, biz["sntg"].username
+    today = date.today()
+    # 1) Registrada por la Empresa, impresora y filamento de Sntg, con postprocesado y sin envío.
+    body = sale_payload(biz["ps"], biz["fs"], 40, owner_id=biz["company"].id, price=6000, shipping_cost=0)
+    a = client.post("/api/sales", headers=biz["hc"], json=body).json()
+    a = deliver(client, biz["hc"], a["id"], today)
+    assert Decimal(a["postprocess_cost"]) > 0
+    # 2) Mixta: impresora de Diego con filamento de la Empresa.
+    fc = _company_filament(client, biz)
+    body = sale_payload(biz["pd"], owner_id=biz["company"].id, price=8000, shipping_cost=0)
+    body["filaments"] = [{"filament_id": fc["id"], "grams_used": 50}]
+    b = client.post("/api/sales", headers=biz["hc"], json=body).json()
+    b = deliver(client, biz["hc"], b["id"], today)
+
+    rep = client.get("/api/beta/split", headers=biz["hc"], params={"month": today.strftime("%Y-%m")}).json()
+    refunds = {s["id"]: s["refunds"] for s in rep["sales"]}
+    # Venta 1: todo su costo es de Sntg; la Caja no recibe nada.
+    assert {k: Decimal(v) for k, v in refunds[a["id"]].items()} == {S: Decimal(a["total_cost"])}
+    # Venta 2: máquina y postprocesado a Diego, solo el filamento a la Caja.
+    diego_part = Decimal(b["depreciation_cost"]) + Decimal(b["energy_cost"]) + Decimal(b["postprocess_cost"])
+    assert {k: Decimal(v) for k, v in refunds[b["id"]].items()} == {D: diego_part, "Caja": Decimal(b["material_cost"])}
+    assert diego_part + Decimal(b["material_cost"]) == Decimal(b["total_cost"])

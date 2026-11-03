@@ -8,6 +8,23 @@
    Textos cortos y en el idioma de los usuarios (qué pueden hacer ahora), no técnicos. */
 export const RELEASES = [
   {
+    id: "2026-11-02",
+    date: "2 de noviembre de 2026",
+    title: "El postprocesado se le devuelve al dueño de la impresora",
+    items: [
+      {
+        icon: "🛠️",
+        title: "Postprocesado en el Reparto",
+        text: "El postprocesado lo hace el dueño de la impresora, así que ahora es costo suyo: en el Reparto se le devuelve junto con su máquina. Antes quedaba como ganancia de todos.",
+      },
+      {
+        icon: "🧵",
+        title: "La Empresa, solo lo suyo",
+        text: "Simple_Solutions3D solo recupera su propio filamento e insumos. La máquina y el postprocesado van siempre a quien puso la impresora.",
+      },
+    ],
+  },
+  {
     id: "2026-11-01",
     date: "1 de noviembre de 2026",
     title: "Caja del Reparto, filtro por cuenta y filamentos",

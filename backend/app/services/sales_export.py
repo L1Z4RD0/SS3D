@@ -75,6 +75,7 @@ OWNER_COLS = [
     Col("Máquina (depreciación + luz)", 16, "money"),
     Col("Material (filamento)", 14, "money"),
     Col("Insumos", 12, "money"),
+    Col("Postprocesado", 13, "money"),
     Col("Total de esa cuenta", 14, "money"),
 ]
 
@@ -126,15 +127,16 @@ def build_sales_workbook(sales: list[SaleResponse], filters_text: str) -> bytes:
     row = xlsx.note(ws, row, (
         "Cada costo es de quien puso el recurso: la máquina (depreciación + luz) es del dueño de la impresora; el "
         "material, del dueño de cada filamento; los insumos, del dueño de cada insumo. La cuenta que registra la "
-        "venta no carga con costos que no son suyos. El postprocesado no es de nadie (ganancia común) y el delivery "
-        "es de quien lo llevó, por eso no aparecen aquí."
+        "venta no carga con costos que no son suyos. El postprocesado es del dueño de la impresora de la venta (él lo "
+        "hace). El delivery es de quien lo llevó, por eso no aparece aquí."
     ), span=9)
     owner_rows = []
     for s in sales:
         for oc in s.cost_by_owner:
             owner_rows.append([s.sale_date, s.client_name, STATUS_LABELS.get(s.status, s.status),
-                               s.created_by_username or "", oc.username, oc.machine, oc.material, oc.supplies, oc.total])
-    xlsx.table(ws, row + 1, OWNER_COLS, owner_rows, totals={5: "sum", 6: "sum", 7: "sum", 8: "sum"}, freeze=True)
+                               s.created_by_username or "", oc.username, oc.machine, oc.material, oc.supplies, oc.postprocess, oc.total])
+    xlsx.table(ws, row + 1, OWNER_COLS, owner_rows, totals={5: "sum", 6: "sum", 7: "sum", 8: "sum", 9: "sum"},
+               freeze=True)
 
     # ---- Resumen ----
     ws = xlsx.sheet(wb, "Resumen")
@@ -161,17 +163,19 @@ def build_sales_workbook(sales: list[SaleResponse], filters_text: str) -> bytes:
     row = xlsx.table(ws, row, list(summary_cols), grouped(lambda s: SOURCE_LABELS.get(s.sale_source or NO_SALE_SOURCE)),
                      totals={1: "sum", 2: "sum", 3: "sum", 4: "sum"})
 
-    per_owner: dict[str, list] = defaultdict(lambda: [Decimal(0)] * 4)
+    per_owner: dict[str, list] = defaultdict(lambda: [Decimal(0)] * 5)
     for s in sales:
         for oc in s.cost_by_owner:
             p = per_owner[oc.username]
             p[0] += oc.machine
             p[1] += oc.material
             p[2] += oc.supplies
-            p[3] += oc.total
+            p[3] += oc.postprocess
+            p[4] += oc.total
     row = xlsx.section(ws, row, "Costos por cuenta (quién puso cada recurso)")
     xlsx.table(ws, row, [Col("Cuenta", 22), Col("Máquina", 15, "money"), Col("Material", 15, "money"),
-                         Col("Insumos", 15, "money"), Col("Total", 15, "money")],
-               [[k, *v] for k, v in sorted(per_owner.items())], totals={1: "sum", 2: "sum", 3: "sum", 4: "sum"})
+                         Col("Insumos", 15, "money"), Col("Postprocesado", 15, "money"), Col("Total", 15, "money")],
+               [[k, *v] for k, v in sorted(per_owner.items())],
+               totals={1: "sum", 2: "sum", 3: "sum", 4: "sum", 5: "sum"})
 
     return xlsx.to_bytes(wb)

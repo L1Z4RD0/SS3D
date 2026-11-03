@@ -6,8 +6,10 @@ y filamento propio reparte así: la máquina al socio, el material a la Empresa.
 desde las líneas que ya guarda cada venta (no se guarda nada aparte), así que siempre
 coincide con la venta aunque se edite.
 
-El postprocesado no es de un recurso con dueño: queda aparte (`shared`). El delivery
-(shipping_cost) tampoco: es de quien lo llevó (Sale.delivery_by).
+El postprocesado lo hace el dueño de la impresora de la venta (la plancha principal), así
+que es costo suyo. Hasta el 2026-11-02 quedaba aparte como "ganancia común" y no se le
+devolvía a nadie. El delivery (shipping_cost) no es de un recurso: es de quien lo llevó
+(Sale.delivery_by).
 """
 import uuid
 from dataclasses import dataclass, field
@@ -24,16 +26,16 @@ class OwnerCosts:
     machine: Decimal = Decimal(0)  # depreciación + energía de sus impresoras
     material: Decimal = Decimal(0)  # filamento suyo usado
     supplies: Decimal = Decimal(0)  # insumos suyos usados
+    postprocess: Decimal = Decimal(0)  # postprocesado (lo hace el dueño de la impresora)
 
     @property
     def total(self) -> Decimal:
-        return money(self.machine + self.material + self.supplies)
+        return money(self.machine + self.material + self.supplies + self.postprocess)
 
 
 @dataclass
 class SaleCostAllocation:
     owners: list[OwnerCosts] = field(default_factory=list)
-    shared: Decimal = Decimal(0)  # postprocesado (ganancia común)
 
 
 def allocate_sale_costs(sale: Sale) -> SaleCostAllocation:
@@ -53,6 +55,7 @@ def allocate_sale_costs(sale: Sale) -> SaleCostAllocation:
         for pf in plate.filaments_used:
             owner(pf.filament.owner).material += pf.material_cost_snapshot
     owner(sale.printer.owner).machine += sale.depreciation_cost + sale.energy_cost - plates_machine
+    owner(sale.printer.owner).postprocess += sale.postprocess_cost
 
     # Material de la plancha principal, por dueño de cada filamento. Ventas antiguas sin
     # líneas de filamento: su material es del dueño de la venta.
@@ -71,7 +74,8 @@ def allocate_sale_costs(sale: Sale) -> SaleCostAllocation:
     owners = []
     for oc in by_owner.values():
         oc.machine, oc.material, oc.supplies = money(oc.machine), money(oc.material), money(oc.supplies)
+        oc.postprocess = money(oc.postprocess)
         if oc.total != 0:
             owners.append(oc)
     owners.sort(key=lambda o: (o.user_id != sale.user_id, o.username.lower()))
-    return SaleCostAllocation(owners=owners, shared=money(sale.postprocess_cost))
+    return SaleCostAllocation(owners=owners)

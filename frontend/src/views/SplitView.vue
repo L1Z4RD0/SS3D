@@ -331,15 +331,15 @@ async function removeWithdrawal(w) {
             que se cobre.
           </li>
           <li>
-            A cada socio se le devuelve lo que puso: máquina (depreciación + luz) de sus impresoras y su material e
-            insumos. El material e insumos de la Empresa (<strong>{{ formatCurrency(report.company_absorbed_cost) }}</strong>)
+            A cada socio se le devuelve lo que puso: máquina (depreciación + luz) de sus impresoras, el
+            <strong>postprocesado</strong> de los pedidos hechos en sus impresoras y su material e insumos. El material e insumos de la Empresa (<strong>{{ formatCurrency(report.company_absorbed_cost) }}</strong>)
             vuelven a la <strong>Caja</strong>, que fue quien los compró.
           </li>
           <li>
             El <strong>delivery</strong> lo paga el cliente y se le devuelve a quien lo llevó
             (<strong>{{ formatCurrency(report.deliveries_total) }}</strong> este mes): no se reparte.
           </li>
-          <li>El postprocesado y la reserva por riesgo de fallo son ganancia común.</li>
+          <li>La reserva por riesgo de fallo es ganancia común.</li>
           <li>
             Los <strong>regalos</strong> quedan fuera del reparto: no entra dinero, así que su costo lo absorbe quien
             regaló<template v-if="report.gifts?.length">

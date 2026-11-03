@@ -114,6 +114,7 @@ const COST_PARTS = [
   { key: "machine", label: "Máquina (depreciación + luz)" },
   { key: "material", label: "Material (filamento)" },
   { key: "supplies", label: "Insumos" },
+  { key: "postprocess", label: "Postprocesado (en sus impresoras)" },
 ];
 const costBars = computed(() => {
   const own = current.value?.own_costs;
@@ -263,7 +264,7 @@ const rangeLabel = computed(() => {
             <div><dt>Horas de impresión</dt><dd class="mono">{{ formatNumber(data.combined.print_hours, 1) }} h</dd></div>
             <div><dt>Filamento usado</dt><dd class="mono">{{ formatNumber(data.combined.filament_g, 0) }} g</dd></div>
             <div>
-              <dt>Postprocesado y delivery</dt>
+              <dt>Delivery</dt>
               <dd class="mono">{{ formatCurrency(data.combined.shared_cost) }}</dd>
             </div>
             <div>
