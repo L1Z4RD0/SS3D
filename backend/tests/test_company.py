@@ -447,7 +447,7 @@ def test_split_excel_matches_screen_and_balances(client, biz, monkeypatch):
     assert r.status_code == 200, r.text
     assert f"reparto_beta_{month}.xlsx" in r.headers["content-disposition"]
     wb = load_workbook(BytesIO(r.content))
-    assert wb.sheetnames == ["Léeme", "Resumen", "A cada uno", "Pedidos", "Costos por dueño", "Gastos", "Deliveries",
+    assert wb.sheetnames == ["Léeme", "Resumen", "A cada uno", "Pedidos", "Costos por dueño", "Pérdidas", "Gastos", "Deliveries",
                              "Fuera del reparto"]
     readme = " ".join(str(c) for row in wb["Léeme"].iter_rows(values_only=True) for c in row if c)
     for must in ("BETA", "GUÍA", "NETO A REPARTIR", "Depreciación =", "Luz =", "Material =", "Insumos =",

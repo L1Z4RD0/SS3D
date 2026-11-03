@@ -42,6 +42,10 @@ export function statusOptions(sale) {
   if (PREV[sale.status] && !sale.warehouse_item_id) {
     opts.push({ status: PREV[sale.status], label: `Volver a ${STATUS_LABELS[PREV[sale.status]]}`, kind: "back" });
   }
+  // Corrección: un pedido marcado Entregado por error vuelve a Lista (deja de contar como ingreso).
+  if (sale.status === "entregada") {
+    opts.push({ status: "lista", label: "Volver a Lista (corregir entrega)", kind: "undo" });
+  }
   if (sale.status === "pendiente" || sale.status === "en_produccion") {
     opts.push({ status: "entregada", label: "Entregar directo (saltar pasos)", kind: "skip" });
   }

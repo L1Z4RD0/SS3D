@@ -1,10 +1,11 @@
 <script setup>
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import * as salesApi from "../api/sales";
 import { formatCurrency, formatNumber, todayISO } from "../utils/format";
 import { extractApiError } from "../utils/validation";
 import { STATUS_LABELS } from "../utils/orderStatus";
 import Modal from "./Modal.vue";
+import PartialPrintFields from "./PartialPrintFields.vue";
 
 /* Flujo de cancelación. Cancelar es un hecho del negocio: el pedido queda registrado
    como Cancelado (no se borra) y nunca cuenta como ingreso. Según el estado se pregunta
@@ -48,6 +49,19 @@ const pieceCost = computed(() => {
   return cost;
 });
 
+// Pieza que no sirve (En producción "no sirve" o Lista "descartarla"): se pregunta cuánto se
+// alcanzó a imprimir. En Lista la pieza suele estar completa: parte en 100 %.
+const partial = computed(
+  () => (inProduction.value && pieceOutcome.value === "inutilizable") || (ready.value && pieceOutcome.value === "descartar")
+);
+const printedPercent = ref(null);
+const hoursUsed = ref(null);
+const postprocessDone = ref(false);
+const partialFields = ref(null);
+watch(partial, (on) => {
+  if (on && printedPercent.value === null && ready.value) printedPercent.value = 100;
+});
+
 const outcomeText = computed(() => {
   if (!asksQuestions.value) return "";
   if (pieceOutcome.value === "almacen") {
@@ -68,7 +82,10 @@ const redo = ref(null); // null = sin responder
 const willRedo = computed(() => damaged.value && redo.value === true);
 
 const canSubmit = computed(
-  () => !(ready.value && pieceOutcome.value === "descartar" && !discardReason.value) && !(damaged.value && redo.value === null)
+  () =>
+    !(ready.value && pieceOutcome.value === "descartar" && !discardReason.value) &&
+    !(damaged.value && redo.value === null) &&
+    !(partial.value && !partialFields.value?.valid)
 );
 
 async function submit() {
@@ -78,8 +95,13 @@ async function submit() {
   try {
     const payload = { reason: reason.value.trim() || null, today: todayISO() };
     if (asksQuestions.value) {
-      payload.keep_hours = keepHours.value;
+      payload.keep_hours = partial.value ? true : keepHours.value;
       payload.piece_outcome = pieceOutcome.value;
+      if (partial.value) {
+        payload.printed_percent = Number(printedPercent.value);
+        payload.print_hours_used = Number(hoursUsed.value) || 0;
+        payload.postprocess_done = postprocessDone.value;
+      }
       if (pieceOutcome.value === "descartar") payload.discard_reason = discardReason.value;
       if (willRedo.value) payload.redo = true;
     }
@@ -115,20 +137,11 @@ async function submit() {
       <!-- En producción / Lista -->
       <template v-else>
         <div class="alert alert-warning cancel-info">
-          La pieza ya se fabricó (o se está fabricando): los
-          <strong>{{ formatNumber(sale.grams_used, 0) }} g</strong> de filamento quedan consumidos.
+          La pieza se está fabricando o ya se fabricó.
           <template v-if="inProduction && suppliesCount">Los insumos se devuelven al inventario.</template>
           <template v-if="ready && suppliesCount">Los insumos quedan consumidos (ya se pusieron).</template>
+          Si la pieza no sirve, se pregunta cuánto se alcanzó a imprimir: lo que no se usó vuelve al inventario.
         </div>
-
-        <fieldset class="question">
-          <legend>¿Dejar registradas las {{ formatNumber(sale.print_hours, 1) }} h de impresión en la impresora?</legend>
-          <label class="option"><input v-model="keepHours" type="radio" :value="true" /> Sí, dejarlas (recomendado)</label>
-          <label class="option"><input v-model="keepHours" type="radio" :value="false" /> No, devolverlas</label>
-          <p class="field-hint">
-            La impresora sí trabajó esas horas. Si no las registras, su % de vida usada quedará subestimado.
-          </p>
-        </fieldset>
 
         <fieldset v-if="inProduction" class="question">
           <legend>¿La pieza quedó utilizable?</legend>
@@ -146,7 +159,27 @@ async function submit() {
           </select>
         </fieldset>
 
-        <div class="outcome" :class="pieceOutcome === 'almacen' ? 'is-warehouse' : 'is-loss'">{{ outcomeText }}</div>
+        <!-- Pieza que no sirve: cuánto se alcanzó a imprimir (reemplaza la pregunta de las horas). -->
+        <PartialPrintFields
+          v-if="partial"
+          ref="partialFields"
+          v-model:percent="printedPercent"
+          v-model:hours="hoursUsed"
+          v-model:postprocess="postprocessDone"
+          :sale="sale"
+          :supplies-consumed="ready"
+        />
+        <template v-else>
+          <fieldset class="question">
+            <legend>¿Dejar registradas las {{ formatNumber(sale.print_hours, 1) }} h de impresión en la impresora?</legend>
+            <label class="option"><input v-model="keepHours" type="radio" :value="true" /> Sí, dejarlas (recomendado)</label>
+            <label class="option"><input v-model="keepHours" type="radio" :value="false" /> No, devolverlas</label>
+            <p class="field-hint">
+              La impresora sí trabajó esas horas. Si no las registras, su % de vida usada quedará subestimado.
+            </p>
+          </fieldset>
+          <div class="outcome is-warehouse">{{ outcomeText }}</div>
+        </template>
 
         <Transition name="redo-q">
           <fieldset v-if="damaged" class="question redo-question">

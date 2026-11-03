@@ -1,4 +1,5 @@
 import uuid
+from datetime import date
 from decimal import Decimal
 
 from fastapi import HTTPException, status
@@ -8,7 +9,8 @@ from sqlalchemy.orm import Session
 from app.dependencies import is_company, is_watcher, readable_user_ids
 from app.models.filament import Filament
 from app.models.printer import Printer
-from app.models.sale import ORDER_STATUSES, Sale
+from app.models.sale import ORDER_STATUSES, STATUS_CANCELLED, Sale
+from app.models.warehouse_item import ITEM_DISCARDED
 from app.models.sale_filament import SaleFilament
 from app.models.supply import Supply
 from app.models.user import User
@@ -25,6 +27,8 @@ from app.schemas.sale import (
     WarehousePieceInfo,
 )
 from app.services.calculator import CostBreakdown, FilamentUsage, SupplyUsage, calculate_costs, money
+from app.services.cancellation import loss_is_editable
+from app.services.cost_allocation import planned_print_hours
 from app.services.inventory import consume_filament
 
 
@@ -268,9 +272,21 @@ def to_sale_response(
     if include_history and sale.origin_pieces:
         p = sale.origin_pieces[0]
         piece = WarehousePieceInfo(id=p.id, status=p.status, cost=p.cost, price=p.price)
+    loss = sale.loss_amount
+    if sale.status == STATUS_CANCELLED and not loss:
+        # Cancelados anteriores al 2026-11-03: al descartar la pieza, la pérdida quedaba en una
+        # pieza "Descartada" del Almacén y no en el pedido. Se muestra igual en el pedido.
+        loss = sum((p.cost for p in sale.origin_pieces if p.status == ITEM_DISCARDED), Decimal(0))
     return SaleResponse(
         cancel_reason=sale.cancel_reason,
-        loss_amount=sale.loss_amount,
+        loss_amount=loss,
+        cancel_printed_percent=sale.cancel_printed_percent,
+        cancel_print_hours=sale.cancel_print_hours,
+        planned_print_hours=planned_print_hours(sale),
+        cancel_postprocess_done=sale.cancel_postprocess_done,
+        cancel_discard_reason=sale.cancel_discard_reason,
+        loss_editable=loss_is_editable(sale, date.today()) if sale.status == STATUS_CANCELLED else False,
+        cancel_supplies_consumed=sale.status == STATUS_CANCELLED and not sale.supplies_returned,
         warehouse_piece=piece,
         status=sale.status,
         promised_delivery_date=sale.promised_delivery_date,

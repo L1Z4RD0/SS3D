@@ -30,6 +30,7 @@ from app.schemas.sale import (
     DeliveryRequest,
     CalendarOrder,
     CancelOrderRequest,
+    CancellationLossRequest,
     DeliveryDateChangeRequest,
     SaleCreateRequest,
     SalePage,
@@ -39,7 +40,12 @@ from app.schemas.sale import (
 )
 from app.services.audit import log_event
 from app.services.calculator import calculate_margin_percent, money, risk_level_for, with_risk
-from app.services.cancellation import cancel_order, check_can_delete, undo_remaining_consumption
+from app.services.cancellation import (
+    cancel_order,
+    check_can_delete,
+    edit_cancellation_loss,
+    undo_remaining_consumption,
+)
 from app.services.sales_export import build_sales_workbook
 from app.services.xlsx import XLSX_MEDIA_TYPE
 from app.services.discord import announce_order, mark_order_deleted, snapshot_before_delete, sync_order
@@ -755,6 +761,9 @@ def cancel_sale(
         discard_reason=payload.discard_reason,
         reason=payload.reason,
         today=payload.today or date.today(),
+        printed_percent=payload.printed_percent,
+        print_hours_used=payload.print_hours_used,
+        postprocess_done=payload.postprocess_done,
     )
     db.flush()
     ip = request.client.host if request.client else None
@@ -879,6 +888,43 @@ def _redo_sale(db: Session, original: Sale, payload: SaleCreateRequest, user: Us
         ip_address=ip,
     )
     return sale
+
+
+@router.put("/{sale_id}/cancellation-loss", response_model=SaleResponse)
+def edit_cancel_loss(
+    sale_id: uuid.UUID,
+    payload: CancellationLossRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Corrige cuánto se alcanzó a imprimir de un cancelado con la pieza dañada (solo durante
+    el mes en que se canceló): recalcula la pérdida y ajusta el inventario."""
+    sale = _get_editable_sale(db, sale_id, current_user)
+    before = sale.loss_amount
+    edit_cancellation_loss(
+        db,
+        sale,
+        current_user,
+        printed_percent=payload.printed_percent,
+        print_hours_used=payload.print_hours_used,
+        postprocess_done=payload.postprocess_done,
+        today=payload.today or date.today(),
+    )
+    log_event(
+        db,
+        user_id=current_user.id,
+        event_type="SALE_CANCEL_LOSS_EDITED",
+        entity_type="sale",
+        entity_id=sale.id,
+        details={"printed_percent": str(sale.cancel_printed_percent), "print_hours": str(sale.cancel_print_hours),
+                 "postprocess_done": sale.cancel_postprocess_done, "loss_before": str(before),
+                 "loss_after": str(sale.loss_amount), "owner_id": str(sale.user_id)},
+        ip_address=request.client.host if request.client else None,
+    )
+    db.commit()
+    db.expire_all()
+    return to_sale_response(_get_listed_sale(db, sale.id, current_user), viewer=current_user, include_history=True)
 
 
 @router.put("/{sale_id}/delivery", response_model=SaleResponse)

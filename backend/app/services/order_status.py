@@ -15,7 +15,7 @@ from app.models.sale import (
 )
 from app.models.sale_status_history import SaleStatusHistory
 from app.models.user import User
-from app.models.warehouse_item import ITEM_SOLD, WarehouseItem
+from app.models.warehouse_item import ITEM_RESERVED, ITEM_SOLD, WarehouseItem
 
 STATUS_LABELS = {
     STATUS_PENDING: "Pendiente",
@@ -62,7 +62,10 @@ def change_status(
     """Aplica una transición validada. Devuelve los estados recorridos (más de uno si se
     salta directo a Entregada: los pasos intermedios quedan registrados con la misma hora)."""
     current = sale.status
-    if current in FINAL_STATUSES:
+    # Corrección: un pedido marcado Entregado por error vuelve a Lista. Deja de contar como
+    # ingreso (todo se calcula solo con los Entregados) y vuelve a contar si se entrega otra vez.
+    undo_delivery = current == STATUS_DELIVERED and target == STATUS_READY
+    if current in FINAL_STATUSES and not undo_delivery:
         raise HTTPException(
             status.HTTP_409_CONFLICT, f"El pedido está {STATUS_LABELS[current]}: es un estado final y no se puede cambiar."
         )
@@ -71,7 +74,9 @@ def change_status(
     if target == current:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"El pedido ya está {STATUS_LABELS[current]}.")
 
-    if target == NEXT_STATUS.get(current):
+    if undo_delivery:
+        path, note = [target], "Corrección: vuelve de Entregada a Lista (deja de contar como ingreso)"
+    elif target == NEXT_STATUS.get(current):
         path, note = [target], None
     elif target == PREV_STATUS.get(current):
         if sale.warehouse_item_id is not None:
@@ -101,6 +106,13 @@ def change_status(
     for step in path:
         record_status(db, sale, step, user, note, at=at)
     sale.status = target
+    if undo_delivery:
+        sale.delivered_date = None
+        if sale.warehouse_item_id is not None:
+            # La pieza del Almacén vuelve a estar Reservada para este pedido.
+            item = db.get(WarehouseItem, sale.warehouse_item_id)
+            if item is not None and item.status == ITEM_SOLD:
+                item.status = ITEM_RESERVED
     if target == STATUS_DELIVERED:
         sale.delivered_date = today
         if sale.warehouse_item_id is not None:

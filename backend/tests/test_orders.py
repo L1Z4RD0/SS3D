@@ -113,7 +113,9 @@ def test_invalid_jumps_are_rejected(client, order, bad):
 def test_final_states_cannot_change(client, order):
     sid, h = order["sale"]["id"], order["h"]
     deliver(client, h, sid)
-    assert _status(client, h, sid, "lista").status_code == 409
+    # Entregada solo puede volver a Lista (corrección, ver test_undo_delivery.py).
+    assert _status(client, h, sid, "en_produccion").status_code == 409
+    assert _status(client, h, sid, "pendiente").status_code == 409
 
 
 def test_cancel_goes_through_cancel_flow(client, order):

@@ -1,13 +1,14 @@
 <script setup>
-import { ref, computed, onMounted } from "vue";
+import { ref, reactive, computed, onMounted } from "vue";
 import * as salesApi from "../api/sales";
 import * as betaApi from "../api/beta";
-import { formatCurrency, formatDate, formatDateTime, todayISO } from "../utils/format";
+import { formatCurrency, formatDate, formatDateTime, formatNumber, todayISO } from "../utils/format";
 import { extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
 import { STATUS_LABELS, OPEN_STATUSES, statusClass, statusOptions, isOverdue } from "../utils/orderStatus";
 import Modal from "./Modal.vue";
 import CancelOrderModal from "./CancelOrderModal.vue";
+import PartialPrintFields from "./PartialPrintFields.vue";
 import LoadingSkeleton from "./LoadingSkeleton.vue";
 
 /* Detalle de un pedido: datos clave, línea de tiempo de estados (cuándo se creó, cómo
@@ -51,6 +52,15 @@ async function applyStatus(opt) {
     });
     if (!ok) return;
     skipConfirmed = true;
+  } else if (opt.kind === "undo") {
+    const ok = await confirmAction({
+      title: "Volver a Lista",
+      message:
+        "El pedido vuelve a Lista y deja de contar como ingreso (Dashboard, Historial y Reparto). " +
+        "Si lo vuelves a entregar, vuelve a contar con la fecha de ese día.",
+      confirmLabel: "Volver a Lista",
+    });
+    if (!ok) return;
   } else if (opt.status === "entregada") {
     const ok = await confirmAction({
       title: "Entregar pedido",
@@ -148,6 +158,39 @@ async function saveDelivery(remove = false) {
 /* -------- Cancelación -------- */
 const showCancel = ref(false);
 const PIECE_STATUS = { en_almacen: "En almacén", reservada: "Reservada", vendida: "Vendida", descartada: "Descartada" };
+
+/* -------- Corregir la pérdida de un cancelado (solo en su mes) -------- */
+const DISCARD_LABELS = { regalada: "Regalada", danada: "Dañada", desechada: "Desechada", otro: "Otro" };
+const editingLoss = ref(false);
+const lossFields = ref(null);
+const lossForm = reactive({ percent: 100, hours: null, postprocess: false });
+function startLossEdit() {
+  const s = sale.value;
+  Object.assign(lossForm, {
+    percent: s.cancel_printed_percent !== null ? Number(s.cancel_printed_percent) : 100,
+    hours: s.cancel_print_hours !== null ? Number(s.cancel_print_hours) : null,
+    postprocess: !!s.cancel_postprocess_done,
+  });
+  editingLoss.value = true;
+}
+async function saveLoss() {
+  busy.value = true;
+  error.value = "";
+  try {
+    sale.value = await salesApi.editCancellationLoss(sale.value.id, {
+      printed_percent: Number(lossForm.percent),
+      print_hours_used: Number(lossForm.hours) || 0,
+      postprocess_done: lossForm.postprocess,
+      today,
+    });
+    editingLoss.value = false;
+    emit("changed", sale.value);
+  } catch (err) {
+    error.value = extractApiError(err, "No se pudo corregir la pérdida.");
+  } finally {
+    busy.value = false;
+  }
+}
 
 function onCancelled(updated) {
   sale.value = updated;
@@ -258,7 +301,34 @@ onMounted(load);
         <span v-if="sale.warehouse_piece">
           Pieza: {{ PIECE_STATUS[sale.warehouse_piece.status] }} · costo {{ formatCurrency(sale.warehouse_piece.cost) }}
         </span>
-        <span v-if="Number(sale.loss_amount) > 0">Pérdida: {{ formatCurrency(sale.loss_amount) }}</span>
+        <span v-if="sale.cancel_discard_reason">Pieza descartada: {{ DISCARD_LABELS[sale.cancel_discard_reason] || sale.cancel_discard_reason }}</span>
+        <span v-if="sale.cancel_printed_percent !== null">
+          Se alcanzó a imprimir el {{ formatNumber(sale.cancel_printed_percent, 0) }} % ·
+          {{ formatNumber(sale.cancel_print_hours, 2) }} h de {{ formatNumber(sale.planned_print_hours, 2) }} h ·
+          {{ sale.cancel_postprocess_done ? "con" : "sin" }} postprocesado
+        </span>
+        <span v-if="Number(sale.loss_amount) > 0"><strong>Pérdida: {{ formatCurrency(sale.loss_amount) }}</strong> · se devuelve a cada dueño en el Reparto del mes</span>
+        <button v-if="sale.loss_editable && sale.can_edit && !editingLoss" type="button" class="link-btn" @click="startLossEdit">
+          Corregir pérdida
+        </button>
+      </div>
+
+      <div v-if="editingLoss" class="loss-edit">
+        <PartialPrintFields
+          ref="lossFields"
+          v-model:percent="lossForm.percent"
+          v-model:hours="lossForm.hours"
+          v-model:postprocess="lossForm.postprocess"
+          :sale="sale"
+          :supplies-consumed="sale.cancel_supplies_consumed"
+        />
+        <div class="delivery-edit-actions">
+          <button type="button" class="btn btn-primary btn-sm" :disabled="busy || !lossFields?.valid" @click="saveLoss">
+            Guardar pérdida
+          </button>
+          <button type="button" class="btn btn-ghost btn-sm" :disabled="busy" @click="editingLoss = false">Cancelar</button>
+        </div>
+        <p class="field-hint">Solo se puede corregir durante el mes en que se canceló. Ajusta el inventario según el cambio.</p>
       </div>
 
       <div v-if="options.length" class="status-actions">
@@ -273,7 +343,13 @@ onMounted(load);
         >
           {{ opt.label }}
         </button>
-        <button type="button" class="btn btn-sm btn-ghost cancel-btn" :disabled="busy" @click="showCancel = true">
+        <button
+          v-if="OPEN_STATUSES.includes(sale.status)"
+          type="button"
+          class="btn btn-sm btn-ghost cancel-btn"
+          :disabled="busy"
+          @click="showCancel = true"
+        >
           Cancelar pedido
         </button>
       </div>
@@ -306,6 +382,10 @@ onMounted(load);
 </template>
 
 <style scoped>
+.loss-edit {
+  margin: 12px 0;
+}
+
 .order-summary {
   display: flex;
   flex-direction: column;

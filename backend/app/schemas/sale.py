@@ -94,6 +94,21 @@ class CancelOrderRequest(BaseModel):
     # rehacer el pedido. Se crea uno nuevo igual, directo En producción, que vuelve a
     # descontar filamento, insumos y horas.
     redo: bool = False
+    # Pieza dañada (En producción "no sirve" o Lista "descartar"): cuánto se alcanzó a
+    # imprimir, las horas que se usaron (si no viene: % × horas del pedido) y si se hizo el
+    # postprocesado. Lo que no se usó vuelve al inventario.
+    printed_percent: Decimal | None = Field(default=None, ge=0, le=100)
+    print_hours_used: Decimal | None = Field(default=None, ge=0)
+    postprocess_done: bool = False
+
+
+class CancellationLossRequest(BaseModel):
+    """Corregir la pérdida de un cancelado con la pieza dañada (solo en el mes en que se canceló)."""
+
+    printed_percent: Decimal = Field(ge=1, le=100)
+    print_hours_used: Decimal | None = Field(default=None, ge=0)
+    postprocess_done: bool = False
+    today: date | None = None
 
 
 class WarehousePieceInfo(BaseModel):
@@ -272,6 +287,16 @@ class SaleResponse(BaseModel):
     warehouse_piece: WarehousePieceInfo | None = None
     # Solo en la respuesta de Cancelar con "rehacer": el pedido nuevo que lo reemplaza.
     redone_as_id: uuid.UUID | None = None
+    # Cancelación con la pieza dañada: % impreso, horas usadas (de las planeadas), si hubo
+    # postprocesado y el motivo del descarte. loss_editable: se puede corregir este mes.
+    cancel_printed_percent: Decimal | None = None
+    cancel_print_hours: Decimal | None = None
+    planned_print_hours: Decimal = Decimal(0)
+    cancel_postprocess_done: bool | None = None
+    cancel_discard_reason: str | None = None
+    loss_editable: bool = False
+    # Si los insumos del pedido cancelado quedaron consumidos (para estimar la pérdida al corregirla).
+    cancel_supplies_consumed: bool = False
 
     model_config = {"from_attributes": True}
 

@@ -1080,6 +1080,9 @@ onMounted(async () => {
                   <span v-if="Number(s.loss_amount) > 0" style="color: var(--danger)" title="Pérdida por la cancelación">
                     −{{ formatCurrency(s.loss_amount) }}
                   </span>
+                  <div v-if="s.cancel_printed_percent !== null && s.cancel_printed_percent !== undefined" class="text-muted text-sm">
+                    {{ Number(s.cancel_printed_percent) }} % impreso
+                  </div>
                   <span v-else class="text-muted">—</span>
                 </td>
                 <td v-else class="text-right mono" :style="{ color: Number(s.profit) < 0 ? 'var(--danger)' : 'var(--success)' }">

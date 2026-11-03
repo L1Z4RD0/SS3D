@@ -8,6 +8,33 @@
    Textos cortos y en el idioma de los usuarios (qué pueden hacer ahora), no técnicos. */
 export const RELEASES = [
   {
+    id: "2026-11-03",
+    date: "3 de noviembre de 2026",
+    title: "Las pérdidas de pedidos cancelados ahora se devuelven",
+    items: [
+      {
+        icon: "📏",
+        title: "¿Cuánto se alcanzó a imprimir?",
+        text: "Al cancelar porque la pieza no sirve, indicas el % impreso, las horas usadas y si hubo postprocesado. Lo que no se usó vuelve al inventario.",
+      },
+      {
+        icon: "🧾",
+        title: "La pérdida siempre se ve",
+        text: "En Ventas, todo pedido cancelado con pieza dañada muestra su pérdida en rojo. Puedes corregirla desde el pedido durante el mismo mes.",
+      },
+      {
+        icon: "⚖️",
+        title: "Se devuelve en el Reparto",
+        text: "Desde noviembre, el Reparto devuelve cada pérdida a quien puso la impresora, el filamento o los insumos, en una tarjeta aparte con todo el detalle.",
+      },
+      {
+        icon: "↩️",
+        title: "Deshacer una entrega",
+        text: "Si marcaste Entregado por error, puedes volver el pedido a Lista: deja de contar como ingreso hasta que lo entregues de nuevo.",
+      },
+    ],
+  },
+  {
     id: "2026-11-02",
     date: "2 de noviembre de 2026",
     title: "El postprocesado se le devuelve al dueño de la impresora",

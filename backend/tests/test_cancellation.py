@@ -77,12 +77,14 @@ def test_cancel_in_production_usable_piece_goes_to_warehouse(client, db, setup):
     assert item.user_id == setup["u"].id and item.name == "Llavero" and item.entry_date == date.today()
 
 
-def test_cancel_in_production_unusable_without_hours_is_loss(client, db, setup):
+def test_cancel_in_production_unusable_without_hours_means_nothing_printed(client, db, setup):
+    """Desde el 2026-11-03: devolver las horas (versión anterior de la app, sin la pregunta del
+    %) significa que no se imprimió nada: vuelve todo y no hay pérdida."""
     _to(client, setup, "en_produccion")
     r = _cancel(client, setup, keep_hours=False, piece_outcome="inutilizable")
     assert r.status_code == 200, r.text
-    assert _stock(db, setup) == (Decimal(900), Decimal(50), Decimal(0))  # horas devueltas
-    assert Decimal(r.json()["loss_amount"]) == MATERIAL + POST  # sin depreciación/energía
+    assert _stock(db, setup) == (Decimal(1000), Decimal(50), Decimal(0))
+    assert Decimal(r.json()["loss_amount"]) == 0
     assert _pieces(db, setup["sale"]["id"]) == []
 
 
@@ -99,12 +101,12 @@ def test_cancel_ready_discard_is_recorded_as_discarded_piece(client, db, setup):
     assert _cancel(client, setup, piece_outcome="descartar").status_code == 400  # falta motivo
     r = _cancel(client, setup, keep_hours=True, piece_outcome="descartar", discard_reason="danada")
     assert r.status_code == 200, r.text
-    item = _pieces(db, setup["sale"]["id"])[0]
-    assert item.status == "descartada" and item.discard_reason == "danada" and item.discarded_at is not None
-    # La pérdida queda en la pieza descartada (no duplicada en el pedido)
-    assert Decimal(r.json()["loss_amount"]) == 0
-    assert db.query(AuditLog).filter(AuditLog.entity_id == item.id,
-                                     AuditLog.event_type == "WAREHOUSE_ITEM_DISCARDED").count() == 1
+    # Desde el 2026-11-03 la pérdida queda en el pedido (no en una pieza "Descartada"), para
+    # que Ventas siempre la muestre. Sin % (app anterior): pieza completa, sin postprocesado.
+    assert _pieces(db, setup["sale"]["id"]) == []
+    data = r.json()
+    assert data["cancel_discard_reason"] == "danada"
+    assert Decimal(data["loss_amount"]) == MATERIAL + SUPPLIES + DEPR + ENERGY
 
 
 @pytest.mark.parametrize("status_path,body", [

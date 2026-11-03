@@ -100,6 +100,13 @@ class Sale(UUIDMixin, TimestampMixin, Base):
     hours_returned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Costo que la cancelación dejó como pérdida (0 si la pieza fue al Almacén).
     loss_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0)
+    # Cancelación con la pieza dañada (desde la migración 0021; NULL en las anteriores): cuánto
+    # se alcanzó a imprimir, cuántas horas se usaron y si hubo postprocesado. La pérdida y lo
+    # que se devuelve al inventario salen de estos datos (ver services/cost_allocation).
+    cancel_printed_percent: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    cancel_print_hours: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    cancel_postprocess_done: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    cancel_discard_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Si este pedido vende una pieza del Almacén, cuál es.
     warehouse_item_id: Mapped[uuid.UUID | None] = mapped_column(

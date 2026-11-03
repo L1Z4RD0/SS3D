@@ -21,6 +21,10 @@ export const changeDeliveryDate = (id, promisedDeliveryDate) =>
 
 export const cancelSale = (id, payload) => client.post(`/api/sales/${id}/cancel`, payload).then((r) => r.data);
 
+// Corrige cuánto se alcanzó a imprimir de un cancelado con la pieza dañada (solo en su mes).
+export const editCancellationLoss = (id, payload) =>
+  client.put(`/api/sales/${id}/cancellation-loss`, payload).then((r) => r.data);
+
 export const changeSaleStatus = (id, payload) =>
   client.post(`/api/sales/${id}/status`, payload).then((r) => r.data);
 

@@ -27,12 +27,12 @@ Reglas (acordadas con los socios):
 import uuid
 from calendar import monthrange
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import or_
+from sqlalchemy import Date, cast, func, or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -42,11 +42,19 @@ from app.models.cash_box import CashBoxClosing, CashBoxWithdrawal
 from app.models.company_expense import CompanyExpense
 from app.models.filament import Filament
 from app.models.printer import Printer
-from app.models.sale import STATUS_DELIVERED, Sale
+from app.models.sale import STATUS_CANCELLED, STATUS_DELIVERED, Sale
+from app.models.warehouse_item import ITEM_DISCARDED, WarehouseItem
 from app.models.user import User
 from app.services.audit import log_event
 from app.services.calculator import money
-from app.services.cost_allocation import SaleCostAllocation, allocate_sale_costs
+from app.services.cancellation import LOCAL_TZ, cancelled_local_date, loss_is_editable
+from app.services.cost_allocation import (
+    SaleCostAllocation,
+    allocate_consumed_costs,
+    allocate_sale_costs,
+    planned_print_hours,
+)
+from app.services.order_status import STATUS_LABELS as STATUS_NAMES
 from app.services.split_export import build_split_workbook
 from app.services.xlsx import XLSX_MEDIA_TYPE
 
@@ -142,6 +150,7 @@ class PartnerLine(BaseModel):
     expense_refund: Decimal = Decimal(0)  # gastos de la Empresa que pagó de su bolsillo
     share: Decimal = Decimal(0)  # su parte del neto
     delivery_refund: Decimal = Decimal(0)  # deliveries que hizo (lo que pagó el cliente)
+    loss_refund: Decimal = Decimal(0)  # lo que puso en pedidos cancelados / piezas descartadas
     total: Decimal = Decimal(0)  # share + todas las devoluciones
 
 
@@ -182,6 +191,37 @@ class DeliveryLine(BaseModel):
     amount: Decimal
 
 
+class LossOwnerPart(BaseModel):
+    """Lo que puso un dueño en una pieza perdida (y se le devuelve)."""
+
+    name: str  # socio, Caja (lo de la Empresa) u otra cuenta
+    machine: Decimal
+    material: Decimal
+    supplies: Decimal
+    postprocess: Decimal
+    total: Decimal
+
+
+class LossLine(BaseModel):
+    """Pedido cancelado con la pieza dañada, o pieza descartada desde el Almacén, del mes."""
+
+    id: uuid.UUID  # el pedido (cancelado u original de la pieza)
+    kind: str  # "cancelado" | "descartada_almacen"
+    loss_date: date
+    client_name: str
+    registered_by: str | None
+    owner_username: str
+    status_before: str | None  # estado del pedido al cancelarlo
+    reason: str | None
+    printed_percent: Decimal | None  # None = cancelado antes de que existiera la pregunta (100%)
+    print_hours: Decimal | None
+    planned_hours: Decimal
+    postprocess_done: bool | None
+    owners: list[LossOwnerPart]
+    total: Decimal
+    editable: bool = False
+
+
 class SplitResponse(BaseModel):
     month: str
     collected_revenue: Decimal
@@ -199,6 +239,10 @@ class SplitResponse(BaseModel):
     gifts: list[GiftLine] = []
     gifts_cost: Decimal = Decimal(0)
     deliveries: list[DeliveryLine]
+    # Pérdidas por pedidos cancelados / piezas descartadas del mes (desde LOSSES_START).
+    losses: list[LossLine] = []
+    losses_total: Decimal = Decimal(0)
+    losses_from: str = ""
 
 
 @dataclass
@@ -208,6 +252,121 @@ class SplitDetails:
 
     sales: list[tuple[Sale, SaleCostAllocation]]
     expenses: list[CompanyExpense]
+    losses: list = None  # list[LossLine] (las mismas de la respuesta)
+
+
+# Las pérdidas por cancelaciones entran al Reparto desde noviembre de 2026: los meses
+# anteriores ya se repartieron y no se tocan.
+LOSSES_START = date(2026, 11, 1)
+DISCARD_LABELS = {"regalada": "Regalada", "danada": "Dañada", "desechada": "Desechada", "otro": "Otro"}
+
+
+def _local_date(column):
+    """Fecha en hora de Chile de una marca de tiempo (se guardan en UTC)."""
+    return cast(func.timezone("America/Santiago", column), Date)
+
+
+def _owner_name(db: Session, user_id: uuid.UUID, username: str) -> str:
+    """A quién se le devuelve: lo de la Empresa va a la Caja; lo de un socio, a él."""
+    if is_company(db.get(User, user_id)):
+        return CASH_BOX
+    return _partner_for_username(username) or username
+
+
+def _loss_parts(db: Session, sale: Sale) -> list[LossOwnerPart]:
+    parts: dict[str, LossOwnerPart] = {}
+    for oc in allocate_consumed_costs(sale).owners:
+        name = _owner_name(db, oc.user_id, oc.username)
+        p = parts.setdefault(name, LossOwnerPart(name=name, machine=0, material=0, supplies=0, postprocess=0, total=0))
+        p.machine += oc.machine
+        p.material += oc.material
+        p.supplies += oc.supplies
+        p.postprocess += oc.postprocess
+        p.total += oc.total
+    return [p for p in parts.values() if p.total]
+
+
+def _status_before_cancel(sale: Sale) -> str | None:
+    steps = sorted(sale.status_history, key=lambda h: h.changed_at)
+    before = [h.status for h in steps if h.status != "cancelado"]
+    return STATUS_NAMES.get(before[-1], before[-1]) if before else None
+
+
+def _losses_between(db: Session, first: date, last: date) -> list[LossLine]:
+    """Pedidos cancelados con costo consumido (pieza dañada) y piezas descartadas desde el
+    Almacén, en el mes. Las piezas que siguen en el Almacén son un activo: no son pérdida
+    (si se venden entran como venta en su mes; si se descartan, aquí en el mes del descarte)."""
+    if last < LOSSES_START:
+        return []
+    first = max(first, LOSSES_START)
+    ids = _involved_user_ids(db)
+    today = date.today()
+    out: list[LossLine] = []
+
+    cancelled = (
+        db.query(Sale)
+        .filter(
+            Sale.status == STATUS_CANCELLED,
+            Sale.warehouse_item_id.is_(None),
+            ~Sale.origin_pieces.any(),
+            _local_date(Sale.cancelled_at) >= first,
+            _local_date(Sale.cancelled_at) <= last,
+            or_(Sale.user_id.in_(ids), Sale.created_by_user_id.in_(ids)),
+        )
+        .order_by(Sale.cancelled_at)
+        .all()
+    )
+    for sale in cancelled:
+        owners = _loss_parts(db, sale)
+        if not owners:
+            continue  # cancelado sin nada consumido (ej. estaba Pendiente)
+        reason = sale.cancel_reason
+        if sale.cancel_discard_reason:
+            label = f"Descartada: {DISCARD_LABELS.get(sale.cancel_discard_reason, sale.cancel_discard_reason)}"
+            reason = f"{label}. {reason}" if reason else label
+        out.append(LossLine(
+            id=sale.id, kind="cancelado", loss_date=cancelled_local_date(sale), client_name=sale.client_name,
+            registered_by=sale.created_by.username if sale.created_by else None, owner_username=sale.owner.username,
+            status_before=_status_before_cancel(sale), reason=reason,
+            printed_percent=sale.cancel_printed_percent, print_hours=sale.cancel_print_hours,
+            planned_hours=planned_print_hours(sale), postprocess_done=sale.cancel_postprocess_done,
+            owners=owners, total=money(sum((p.total for p in owners), Decimal(0))),
+            editable=loss_is_editable(sale, today),
+        ))
+
+    discarded = (
+        db.query(WarehouseItem)
+        .join(Sale, WarehouseItem.origin_sale_id == Sale.id)
+        .filter(
+            WarehouseItem.status == ITEM_DISCARDED,
+            _local_date(WarehouseItem.discarded_at) >= first,
+            _local_date(WarehouseItem.discarded_at) <= last,
+            or_(Sale.user_id.in_(ids), Sale.created_by_user_id.in_(ids)),
+        )
+        .order_by(WarehouseItem.discarded_at)
+        .all()
+    )
+    for item in discarded:
+        origin = item.origin_sale
+        owners = _loss_parts(db, origin)
+        if not owners:
+            continue
+        label = f"Descartada: {DISCARD_LABELS.get(item.discard_reason, item.discard_reason or 'sin motivo')}"
+        reason = f"{label}. {item.notes}" if item.notes else label
+        # Antes del 2026-11-03, descartar al cancelar creaba la pieza ya "Descartada" en el
+        # mismo momento: eso es un cancelado, no una pieza que estuvo en el Almacén.
+        at_cancel = origin.cancelled_at is not None and abs(item.discarded_at - origin.cancelled_at) < timedelta(hours=1)
+        out.append(LossLine(
+            id=origin.id, kind="cancelado" if at_cancel else "descartada_almacen",
+            loss_date=item.discarded_at.astimezone(LOCAL_TZ).date(), client_name=item.name,
+            registered_by=origin.created_by.username if origin.created_by else None,
+            owner_username=origin.owner.username, status_before=_status_before_cancel(origin), reason=reason,
+            printed_percent=None, print_hours=None, planned_hours=planned_print_hours(origin),
+            postprocess_done=None, owners=owners, total=money(sum((p.total for p in owners), Decimal(0))),
+            editable=loss_is_editable(origin, today),
+        ))
+    out.sort(key=lambda l: l.loss_date)
+    return out
 
 
 def compute_split(db: Session, first: date, last: date) -> tuple[SplitDetails, SplitResponse]:
@@ -278,8 +437,17 @@ def compute_split(db: Session, first: date, last: date) -> tuple[SplitDetails, S
             company_cost=money(sale_company_cost),
         ))
 
+    # Pérdidas del mes: lo que cada dueño puso en piezas que no se vendieron se le devuelve.
+    losses = _losses_between(db, first, last)
+    for loss in losses:
+        for part in loss.owners:
+            if part.name not in lines:
+                lines[part.name] = PartnerLine(name=part.name)
+            lines[part.name].loss_refund += part.total
+    losses_total = money(sum((l.total for l in losses), Decimal(0)))
+
     expenses = _expenses_between(db, first, last)
-    details_out = SplitDetails(sales=details, expenses=expenses)
+    details_out = SplitDetails(sales=details, expenses=expenses, losses=losses)
     expenses_total = money(sum((e.amount for e in expenses), Decimal(0)))
     for e in expenses:
         who = next((n for n in lines if n.lower() == e.paid_by.lower()), None)
@@ -287,7 +455,7 @@ def compute_split(db: Session, first: date, last: date) -> tuple[SplitDetails, S
             lines[who].expense_refund += e.amount
 
     partner_refunds = money(sum((l.cost_refund for l in lines.values()), Decimal(0)))
-    net = money(collected - partner_refunds - deliveries_total - expenses_total)
+    net = money(collected - partner_refunds - losses_total - deliveries_total - expenses_total)
     parts = len(names) + 1  # socios + Caja
     share = money(net / parts) if parts else Decimal(0)
     for name in [*names, CASH_BOX]:
@@ -296,7 +464,8 @@ def compute_split(db: Session, first: date, last: date) -> tuple[SplitDetails, S
         line.cost_refund = money(line.cost_refund)
         line.expense_refund = money(line.expense_refund)
         line.delivery_refund = money(line.delivery_refund)
-        line.total = money(line.share + line.cost_refund + line.expense_refund + line.delivery_refund)
+        line.loss_refund = money(line.loss_refund)
+        line.total = money(line.share + line.cost_refund + line.loss_refund + line.expense_refund + line.delivery_refund)
 
     return details_out, SplitResponse(
         month=f"{first:%Y-%m}",
@@ -315,6 +484,9 @@ def compute_split(db: Session, first: date, last: date) -> tuple[SplitDetails, S
         gifts=gifts,
         gifts_cost=money(sum((g.cost for g in gifts), Decimal(0))),
         deliveries=deliveries,
+        losses=losses,
+        losses_total=losses_total,
+        losses_from=f"{LOSSES_START:%Y-%m}",
     )
 
 

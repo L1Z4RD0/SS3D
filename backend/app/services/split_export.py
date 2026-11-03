@@ -17,6 +17,7 @@ from openpyxl.styles import Font
 
 from app.constants import ELECTRICITY_RATE, LABOR_RATE_PER_HOUR, MARGIN_SCENARIOS, RISK_LEVELS
 from app.services import xlsx
+from app.services.cancellation import num
 from app.services.xlsx import Col
 
 PAYMENT_LABELS = {
@@ -85,16 +86,35 @@ def _readme(ws, report, partners: list[str], cash_box: str) -> None:
             "gasto (se contaría dos veces).",
             "Deliveries = suma de los deliveries cobrados (se devuelven a quien los llevó).",
             "Gastos de la Empresa = compras del mes registradas en el Reparto (bolsas, argollas, laca...).",
-            "NETO A REPARTIR = Cobrado − Costos devueltos − Deliveries − Gastos de la Empresa.",
+            "Pérdidas devueltas = lo que cada dueño puso en pedidos cancelados con la pieza dañada (y en piezas "
+            "descartadas desde el Almacén) en el mes. Ver la sección de pérdidas más abajo.",
+            "NETO A REPARTIR = Cobrado − Costos devueltos − Pérdidas devueltas − Deliveries − Gastos de la Empresa.",
             f"Se reparte en partes iguales entre {', '.join(partners)} y la {cash_box} ({report.parts} partes): "
             "Parte de cada uno = Neto ÷ partes.",
-            "TOTAL A RECIBIR de cada uno = su parte + sus costos devueltos + los gastos que pagó de su bolsillo + "
-            "sus deliveries.",
+            "TOTAL A RECIBIR de cada uno = su parte + sus costos devueltos + sus pérdidas devueltas + los gastos "
+            "que pagó de su bolsillo + sus deliveries.",
+        ]),
+        ("Pérdidas por pedidos cancelados (desde noviembre de 2026)", [
+            "Cuando un pedido se cancela porque la pieza se dañó (En producción \"no sirve\" o Lista \"descartarla\"), "
+            "se indica qué % de la pieza se alcanzó a imprimir, cuántas horas de impresión se usaron y si se hizo el "
+            "postprocesado. Solo eso es pérdida: el filamento y las horas que no se usaron vuelven al inventario.",
+            "Material perdido = % impreso × costo del material de la pieza completa (de cada dueño de filamento).",
+            "Máquina perdida = (horas usadas ÷ horas del pedido) × (depreciación + luz). Es del DUEÑO DE LA IMPRESORA.",
+            "Postprocesado perdido = el costo del postprocesado, solo si se alcanzó a hacer (dueño de la impresora).",
+            "Insumos: si el pedido estaba En producción se devuelven al inventario (no son pérdida); si estaba Lista "
+            "ya se pusieron y son pérdida de su dueño.",
+            f"Cada pérdida se le devuelve a quien puso el recurso (lo de la Empresa, a la {cash_box}) y se resta del "
+            "neto: la absorben todos y no solo el dueño. Cuenta en el mes en que se canceló.",
+            "Una pieza que fue al Almacén NO es pérdida (se puede revender): si se vende entra como venta en su mes; "
+            "si después se descarta, es pérdida del mes del descarte.",
+            "El % de un cancelado se puede corregir en Zola solo durante el mes en que se canceló.",
+            "Cancelados anteriores a esta regla (sin % registrado) cuentan la pieza completa, como se guardaron.",
         ]),
         ("Cómo leer este archivo", [
             "Resumen: los totales con su fórmula y, al final, la cuadratura: a dónde va cada peso cobrado.",
             "A cada uno: lo que recibe cada socio y la Caja, con el detalle de cada parte.",
             "Pedidos: cada pedido cobrado y cuánto aporta al neto. Costos por dueño: el detalle de cada costo.",
+            "Pérdidas: cada pedido cancelado del mes con lo que se alcanzó a imprimir y a quién se le devuelve.",
             "Gastos, Deliveries y Fuera del reparto: el detalle de cada uno.",
             "Los totales usan fórmulas de Excel: si corrigen un monto, los totales se recalculan.",
         ]),
@@ -114,19 +134,22 @@ def _per_person(ws, report) -> int:
     """Lo que recibe cada uno. Devuelve la fila del total (la usa la cuadratura del Resumen)."""
     row = xlsx.title(ws, f"A cada uno · {_month_label(report.month)}", "BETA · guía para el reparto de fin de mes")
     row = xlsx.note(ws, row, (
-        "Total a recibir = Su parte + Costos devueltos + Gastos que pagó + Deliveries. Su parte es igual para "
+        "Total a recibir = Su parte + Costos devueltos + Pérdidas devueltas + Gastos que pagó + Deliveries. Su parte es igual para "
         "todos (Neto ÷ Partes). Costos devueltos: lo que puso de su bolsillo en máquina, material e insumos (hoja "
-        "Costos por dueño). Gastos que pagó: compras de la Empresa que pagó él (hoja Gastos). Deliveries: los que "
+        "Costos por dueño). Pérdidas devueltas: lo que puso en pedidos cancelados (hoja Pérdidas). Gastos que "
+        "pagó: compras de la Empresa que pagó él (hoja Gastos). Deliveries: los que "
         "llevó (hoja Deliveries)."), span=6)
     cols = [Col("Quién", 26), Col("Su parte", 14, "money"), Col("Costos devueltos", 15, "money"),
-            Col("Gastos que pagó", 15, "money"), Col("Deliveries", 13, "money"), Col("Total a recibir", 16, "money")]
+            Col("Pérdidas devueltas", 15, "money"), Col("Gastos que pagó", 15, "money"), Col("Deliveries", 13, "money"),
+            Col("Total a recibir", 16, "money")]
     head = row + 1
     rows = []
     for i, p in enumerate(report.partners):
         r = head + 1 + i
         name = f"{p.name} (caja de la Empresa)" if p.is_cash_box else p.name
-        rows.append([name, p.share, p.cost_refund, p.expense_refund, p.delivery_refund, f"=SUM(B{r}:E{r})"])
-    end = xlsx.table(ws, head, cols, rows, totals={1: "sum", 2: "sum", 3: "sum", 4: "sum", 5: "sum"})
+        rows.append([name, p.share, p.cost_refund, p.loss_refund, p.expense_refund, p.delivery_refund,
+                     f"=SUM(B{r}:F{r})"])
+    end = xlsx.table(ws, head, cols, rows, totals={1: "sum", 2: "sum", 3: "sum", 4: "sum", 5: "sum", 6: "sum"})
     return end - 2
 
 
@@ -143,16 +166,19 @@ def _summary(ws, report, details, cash_box: str, totals_row: int) -> None:
         ("Costos devueltos", report.partner_cost_refunds,
          f"Máquina + material + insumos + postprocesado de los socios y la Empresa (a la {cash_box}). Hoja Costos por "
          "dueño."),
+        ("Pérdidas devueltas (cancelados)", report.losses_total,
+         f"Lo que cada dueño puso en {len(report.losses)} pedido(s) cancelado(s) o pieza(s) descartada(s) del mes "
+         "(hoja Pérdidas)."),
         ("Deliveries", report.deliveries_total, "Lo que pagaron los clientes por el envío (hoja Deliveries)."),
         ("Gastos de la Empresa", report.expenses_total, "Compras del mes registradas en el Reparto (hoja Gastos)."),
-        ("NETO A REPARTIR", f"={b(0)}-{b(1)}-{b(2)}-{b(3)}",
-         "Cobrado − Costos devueltos − Deliveries − Gastos de la Empresa."),
+        ("NETO A REPARTIR", f"={b(0)}-{b(1)}-{b(2)}-{b(3)}-{b(4)}",
+         "Cobrado − Costos devueltos − Pérdidas devueltas − Deliveries − Gastos de la Empresa."),
         ("Partes", report.parts, f"Socios + la {cash_box}, en partes iguales."),
-        ("Parte de cada uno", f"=ROUND({b(4)}/{b(5)},2)", "Neto ÷ Partes."),
+        ("Parte de cada uno", f"=ROUND({b(5)}/{b(6)},2)", "Neto ÷ Partes."),
     ]
     row = xlsx.key_values(ws, row, items)
-    ws[b(5)].number_format = "0"
-    for offset in (4, 6):
+    ws[b(6)].number_format = "0"
+    for offset in (5, 7):
         ws[b(offset)].font = Font(bold=True)
         ws[f"A{first + offset}"].font = Font(bold=True)
 
@@ -178,7 +204,7 @@ def _summary(ws, report, details, cash_box: str, totals_row: int) -> None:
     q = row + 1
     xlsx.key_values(ws, row, [
         ("Cobrado en el mes", f"={b(0)}", "Desde Totales del mes."),
-        ("− Total a recibir (todos)", f"='A cada uno'!F{totals_row}", "Suma de la hoja A cada uno."),
+        ("− Total a recibir (todos)", f"='A cada uno'!G{totals_row}", "Suma de la hoja A cada uno."),
         ("− Gastos pagados con dinero de la Caja", report.expenses_total - expense_refunds,
          "Gastos de la Empresa que no pagó un socio de su bolsillo (ya salieron de la Caja)."),
         ("− Delivery sin asignar", report.unassigned_delivery, "Queda pendiente hasta indicar quién lo llevó."),
@@ -284,6 +310,37 @@ def _outside(ws, report) -> None:
                totals={2: "sum"})
 
 
+def _losses(ws, report, details) -> None:
+    row = xlsx.title(ws, f"Pérdidas por pedidos cancelados · {_month_label(report.month)}",
+                     "Lo que cada dueño puso en piezas que no se vendieron: se le devuelve y se resta del neto")
+    if report.month < report.losses_from:
+        xlsx.note(ws, row, "Las pérdidas por cancelaciones entran al Reparto desde noviembre de 2026. Este mes no "
+                           "las incluye (ya se había repartido).", span=8)
+        return
+    row = xlsx.note(ws, row, (
+        "Material = % impreso × material de la pieza completa. Máquina = (horas usadas ÷ horas del pedido) × "
+        "(depreciación + luz). Postprocesado solo si se hizo. Insumos solo si ya se habían puesto (pedido Lista). "
+        "Sin % = cancelado antes de la regla: cuenta la pieza completa."), span=10)
+    cols = [Col("Fecha", 12, "date"), Col("Trabajo", 26), Col("Tipo", 16), Col("Registrado por", 18),
+            Col("Estado al cancelar", 14), Col("Motivo", 30), Col("% impreso", 10), Col("Horas usadas", 10, "hours"),
+            Col("Horas del pedido", 10, "hours"), Col("Postprocesado", 13), Col("Pérdida", 13, "money")]
+    kinds = {"cancelado": "Pedido cancelado", "descartada_almacen": "Descartada del Almacén"}
+    rows = []
+    for l in report.losses:
+        post = "" if l.postprocess_done is None else ("Sí" if l.postprocess_done else "No")
+        pct = f"{num(l.printed_percent)} %" if l.printed_percent is not None else "100 % (sin dato)"
+        rows.append([l.loss_date, l.client_name, kinds.get(l.kind, l.kind), l.registered_by or "", l.status_before or "",
+                     l.reason or "", pct, l.print_hours, l.planned_hours, post, l.total])
+    row = xlsx.table(ws, row + 1, cols, rows, totals={10: "sum"}, freeze=True)
+    row = xlsx.section(ws, row, "A quién se le devuelve cada pérdida")
+    cols = [Col("Fecha", 12, "date"), Col("Trabajo", 26), Col("Se devuelve a", 18),
+            Col("Máquina (depreciación + luz)", 15, "money"), Col("Material", 13, "money"), Col("Insumos", 12, "money"),
+            Col("Postprocesado", 13, "money"), Col("Total", 13, "money")]
+    rows = [[l.loss_date, l.client_name, o.name, o.machine, o.material, o.supplies, o.postprocess, o.total]
+            for l in report.losses for o in l.owners]
+    xlsx.table(ws, row, cols, rows, totals={3: "sum", 4: "sum", 5: "sum", 6: "sum", 7: "sum"})
+
+
 def build_split_workbook(report, details, partners: list[str], cash_box: str, company_names: set[str]) -> bytes:
     lower = {p.lower(): p for p in partners}
 
@@ -298,6 +355,7 @@ def build_split_workbook(report, details, partners: list[str], cash_box: str, co
     _summary(summary_ws, report, details, cash_box, totals_row)
     _orders(xlsx.sheet(wb, "Pedidos"), report, details)
     _owner_costs(xlsx.sheet(wb, "Costos por dueño"), report, details, partner_for, company_names)
+    _losses(xlsx.sheet(wb, "Pérdidas"), report, details)
     _expenses(xlsx.sheet(wb, "Gastos"), report, details, cash_box, people)
     _deliveries(xlsx.sheet(wb, "Deliveries"), report)
     _outside(xlsx.sheet(wb, "Fuera del reparto"), report)

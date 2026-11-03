@@ -224,7 +224,7 @@ def test_dashboard_open_orders_losses_and_warehouse_value(client, make):
     d = client.post("/api/sales", headers=h, json=sale_payload(p, f, 100)).json()
     client.post(f"/api/sales/{d['id']}/status", headers=h, json={"status": "en_produccion"})
     lost = client.post(f"/api/sales/{d['id']}/cancel", headers=h,
-                       json={"keep_hours": False, "piece_outcome": "inutilizable"}).json()
+                       json={"piece_outcome": "inutilizable", "printed_percent": 100}).json()
     piece, _ = _piece_for(client, h, p, f)
 
     s = client.get("/api/dashboard/summary", headers=h,

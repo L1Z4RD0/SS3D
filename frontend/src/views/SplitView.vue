@@ -1,7 +1,7 @@
 <script setup>
 import { ref, reactive, computed, watch, nextTick, onMounted } from "vue";
 import * as betaApi from "../api/beta";
-import { formatCurrency, formatDate, todayISO } from "../utils/format";
+import { formatCurrency, formatDate, formatNumber, todayISO } from "../utils/format";
 import { isValidNumber, extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
 import StatCard from "../components/StatCard.vue";
@@ -304,6 +304,7 @@ async function removeWithdrawal(w) {
                 <th>Quién</th>
                 <th class="text-right">Su parte</th>
                 <th class="text-right">Costos devueltos</th>
+                <th class="text-right">Pérdidas devueltas</th>
                 <th class="text-right">Gastos que pagó</th>
                 <th class="text-right">Deliveries</th>
                 <th class="text-right">Total a recibir</th>
@@ -317,6 +318,7 @@ async function removeWithdrawal(w) {
                 </td>
                 <td class="text-right mono">{{ formatCurrency(p.share) }}</td>
                 <td class="text-right mono">{{ Number(p.cost_refund) ? formatCurrency(p.cost_refund) : "—" }}</td>
+                <td class="text-right mono">{{ Number(p.loss_refund) ? formatCurrency(p.loss_refund) : "—" }}</td>
                 <td class="text-right mono">{{ Number(p.expense_refund) ? formatCurrency(p.expense_refund) : "—" }}</td>
                 <td class="text-right mono">{{ Number(p.delivery_refund) ? formatCurrency(p.delivery_refund) : "—" }}</td>
                 <td class="text-right mono"><strong>{{ formatCurrency(p.total) }}</strong></td>
@@ -340,6 +342,11 @@ async function removeWithdrawal(w) {
             (<strong>{{ formatCurrency(report.deliveries_total) }}</strong> este mes): no se reparte.
           </li>
           <li>La reserva por riesgo de fallo es ganancia común.</li>
+          <li>
+            Las <strong>pérdidas de pedidos cancelados</strong> (lo que se alcanzó a imprimir de una pieza dañada) se le
+            devuelven a quien puso cada recurso y se restan del neto<template v-if="Number(report.losses_total)">
+              ({{ formatCurrency(report.losses_total) }} este mes)</template>. Ver la tarjeta de pérdidas más abajo.
+          </li>
           <li>
             Los <strong>regalos</strong> quedan fuera del reparto: no entra dinero, así que su costo lo absorbe quien
             regaló<template v-if="report.gifts?.length">
@@ -521,6 +528,61 @@ async function removeWithdrawal(w) {
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div class="card losses-card">
+        <div class="card-header">
+          <h3>⚠️ Pérdidas por pedidos cancelados</h3>
+          <span class="text-muted text-sm">Lo que se alcanzó a gastar en piezas que no se vendieron: se le devuelve a su dueño</span>
+        </div>
+        <p v-if="month < report.losses_from" class="text-muted text-sm">
+          Las pérdidas por cancelaciones entran al Reparto desde noviembre de 2026. Este mes no las incluye (ya se repartió).
+        </p>
+        <p v-else-if="!report.losses.length" class="text-muted text-sm">Sin pedidos cancelados con pérdida este mes.</p>
+        <template v-else>
+          <div v-for="l in report.losses" :key="l.id + l.kind" class="loss-item">
+            <div class="loss-head">
+              <div>
+                <strong>{{ l.client_name }}</strong>
+                <span class="badge" :class="l.kind === 'cancelado' ? 'badge-danger' : 'badge-neutral'" style="margin-left: 6px">
+                  {{ l.kind === "cancelado" ? "Cancelado" : "Descartada del Almacén" }}
+                </span>
+                <div class="text-muted text-sm">
+                  {{ formatDate(l.loss_date) }} · registrado por {{ l.registered_by || "—" }}
+                  <template v-if="l.status_before"> · estaba {{ l.status_before }}</template>
+                  <template v-if="l.reason"> · {{ l.reason }}</template>
+                </div>
+                <div class="text-sm">
+                  <template v-if="l.printed_percent !== null">
+                    Se imprimió el <strong>{{ Number(l.printed_percent) }} %</strong> ·
+                    {{ formatNumber(l.print_hours, 2) }} h de {{ formatNumber(l.planned_hours, 2) }} h ·
+                    {{ l.postprocess_done ? "con" : "sin" }} postprocesado
+                  </template>
+                  <span v-else class="text-muted">Pieza completa (cancelado antes de registrar el % impreso)</span>
+                  <span v-if="l.editable" class="text-muted"> · se puede corregir este mes desde el pedido</span>
+                </div>
+              </div>
+              <strong class="mono loss-total">−{{ formatCurrency(l.total) }}</strong>
+            </div>
+            <div class="loss-owners">
+              <span v-for="o in l.owners" :key="o.name" class="loss-owner">
+                Se le devuelve a <strong>{{ o.name }}</strong>: {{ formatCurrency(o.total) }}
+                <small class="text-muted">
+                  ({{ [
+                    Number(o.machine) ? `máquina ${formatCurrency(o.machine)}` : "",
+                    Number(o.material) ? `material ${formatCurrency(o.material)}` : "",
+                    Number(o.supplies) ? `insumos ${formatCurrency(o.supplies)}` : "",
+                    Number(o.postprocess) ? `postprocesado ${formatCurrency(o.postprocess)}` : "",
+                  ].filter(Boolean).join(" + ") }})
+                </small>
+              </span>
+            </div>
+          </div>
+          <div class="mini-line loss-sum">
+            <strong>Total devuelto por pérdidas (se resta del neto)</strong>
+            <strong class="mono">{{ formatCurrency(report.losses_total) }}</strong>
+          </div>
+        </template>
       </div>
 
       <div v-if="report.gifts?.length" class="card">
@@ -735,6 +797,36 @@ async function removeWithdrawal(w) {
   .closing-fields {
     grid-template-columns: 1fr;
   }
+}
+
+.loss-item {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.loss-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+.loss-total {
+  color: var(--danger);
+  white-space: nowrap;
+}
+.loss-owners {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 6px;
+  font-size: 0.84rem;
+}
+.loss-owner {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--surface-alt);
+}
+.loss-sum {
+  border-bottom: none;
 }
 
 .text-danger {

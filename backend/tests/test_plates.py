@@ -111,10 +111,11 @@ def test_cancel_in_production_keeping_hours_keeps_plate_hours(client, db, shop):
     sale = client.post("/api/sales", headers=h, json=body).json()
     client.post(f"/api/sales/{sale['id']}/status", headers=h, json={"status": "en_produccion"})
     r = client.post(f"/api/sales/{sale['id']}/cancel", headers=h,
-                    json={"keep_hours": False, "piece_outcome": "inutilizable"})
+                    json={"piece_outcome": "inutilizable", "printed_percent": 50})
     assert r.status_code == 200, r.text
-    # Material usado (queda como pérdida), horas devueltas en ambas impresoras.
-    assert _state(db, shop) == (Decimal(840), Decimal(0), Decimal(0))
+    # Se imprimió la mitad: la mitad de los 160 g y de las horas de cada impresora (2 h + 3 h)
+    # queda consumida; el resto vuelve al inventario y a cada impresora.
+    assert _state(db, shop) == (Decimal(920), Decimal(1), Decimal("1.5"))
     assert Decimal(r.json()["loss_amount"]) > 0
 
 
