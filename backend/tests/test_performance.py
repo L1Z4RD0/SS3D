@@ -1,5 +1,6 @@
-"""Rendimiento por cuenta (solo Empresa): ingresos a quien registró, costos a quien puso
-cada recurso y "todas juntas" sin contar dos veces una venta."""
+"""Rendimiento por cuenta (solo Empresa): ingresos al dueño de la venta (el de la impresora),
+"gestionadas" a quien la registró para otro, costos a quien puso cada recurso y "todas
+juntas" sin contar dos veces una venta."""
 from datetime import date
 from decimal import Decimal
 
@@ -40,12 +41,12 @@ def test_only_company_sees_performance(client, make, biz):
     assert client.get("/api/performance", headers=make.headers(make.user())).status_code == 403
 
 
-def test_revenue_to_registrant_costs_to_resource_owner(client, biz):
+def test_revenue_to_owner_managed_to_registrant_costs_to_resource_owner(client, biz):
     today = date.today()
     # Diego vende con lo suyo.
     a = client.post("/api/sales", headers=biz["hd"], json=sale_payload(biz["pd"], biz["fd"], 100, price=20000)).json()
     deliver(client, biz["hd"], a["id"], today)
-    # La Empresa vende en su nombre con la impresora de Diego y SU filamento.
+    # La Empresa registra una venta con la impresora de Diego y SU filamento: es de Diego.
     body = sale_payload(biz["pd"], biz["fc"], 50, price=15000, owner_id=biz["company"].id)
     b = client.post("/api/sales", headers=biz["hc"], json=body)
     assert b.status_code == 201, b.text
@@ -58,10 +59,11 @@ def test_revenue_to_registrant_costs_to_resource_owner(client, biz):
     D, C, S = biz["diego"].username, biz["company"].username, biz["sntg"].username
     assert [a["username"] for a in data["accounts"]] == sorted([D, S], key=str.lower) + [C]  # Empresa al final
 
-    # Ingresos: cada venta a quien la registró.
-    assert num(acc[D]["registered"]["revenue"]) == 20000 and acc[D]["registered"]["jobs"] == 1
-    assert num(acc[C]["registered"]["revenue"]) == 15000 and acc[C]["registered"]["jobs"] == 1
-    assert acc[S]["registered"]["jobs"] == 0
+    # Ingresos: las dos ventas son de Diego; la Empresa solo gestionó una.
+    assert num(acc[D]["sales"]["revenue"]) == 35000 and acc[D]["sales"]["jobs"] == 2
+    assert num(acc[C]["sales"]["revenue"]) == 0 and acc[C]["sales"]["jobs"] == 0
+    assert acc[C]["managed"]["jobs"] == 1 and num(acc[C]["managed"]["revenue"]) == 15000
+    assert acc[D]["managed"]["jobs"] == 0 and acc[S]["sales"]["jobs"] == 0
 
     # Costos: la máquina de ambas ventas es de Diego; el material de B es de la Empresa.
     machine_b = Decimal(b["depreciation_cost"]) + Decimal(b["energy_cost"])
@@ -77,17 +79,34 @@ def test_revenue_to_registrant_costs_to_resource_owner(client, biz):
     # Todas juntas: cada venta una sola vez.
     combined = data["combined"]
     assert combined["jobs"] == 2 and num(combined["revenue"]) == 35000
-    assert combined["mixed_sales"] == 1  # B usó la máquina de Diego
+    assert combined["mixed_sales"] == 1  # B usó el filamento de la Empresa
     assert len(data["months"]) == 1
     month = data["months"][0]
     assert month["combined"]["jobs"] == 2
     assert num(month["accounts"][str(biz["diego"].id)]["own_cost"]) == num(acc[D]["own_costs"]["total"])
+    assert month["accounts"][str(biz["company"].id)]["managed_jobs"] == 1
+
+
+def test_old_company_sale_with_partner_printer_counts_for_the_partner(client, db, biz):
+    """Antes del 2026-11-05 la Empresa podía quedar como dueña de una venta hecha con la
+    impresora de un socio: Rendimiento la cuenta del socio igual."""
+    from app.models.sale import Sale
+
+    today = date.today()
+    s = client.post("/api/sales", headers=biz["hc"], json=sale_payload(biz["ps"], price=9000)).json()
+    deliver(client, biz["hc"], s["id"], today)
+    db.get(Sale, s["id"]).user_id = biz["company"].id  # como quedaban antes
+    db.commit()
+    _, acc = _perf(client, biz["hc"], date_from=str(today), date_to=str(today))
+    assert num(acc[biz["sntg"].username]["sales"]["revenue"]) == 9000
+    assert acc[biz["company"].username]["sales"]["jobs"] == 0
+    assert acc[biz["company"].username]["managed"]["jobs"] == 1
 
 
 def test_date_range_filters_by_delivery_date(client, biz):
     a = client.post("/api/sales", headers=biz["hd"], json=sale_payload(biz["pd"], price=5000)).json()
     deliver(client, biz["hd"], a["id"], date(2026, 9, 15))
     data, acc = _perf(client, biz["hc"], date_from="2026-10-01", date_to="2026-10-31")
-    assert acc[biz["diego"].username]["registered"]["jobs"] == 0
+    assert acc[biz["diego"].username]["sales"]["jobs"] == 0
     data, acc = _perf(client, biz["hc"], date_from="2026-09-01", date_to="2026-09-30")
-    assert acc[biz["diego"].username]["registered"]["jobs"] == 1
+    assert acc[biz["diego"].username]["sales"]["jobs"] == 1

@@ -8,6 +8,18 @@
    Textos cortos y en el idioma de los usuarios (qué pueden hacer ahora), no técnicos. */
 export const RELEASES = [
   {
+    id: "2026-11-05-b",
+    date: "5 de noviembre de 2026",
+    title: "Rendimiento: cada venta es de su dueño",
+    items: [
+      {
+        icon: "📊",
+        title: "Ingresos del dueño de la impresora",
+        text: "En Rendimiento, los ingresos y la ganancia de cada venta ahora son del dueño de la impresora, igual que en su cuenta. Las ventas que la Empresa registra para los socios aparecen como \"Gestionadas\", no como ingresos suyos. El Reparto no cambia.",
+      },
+    ],
+  },
+  {
     id: "2026-11-05",
     date: "5 de noviembre de 2026",
     title: "Cobros con fecha y módulos que cargan al instante",

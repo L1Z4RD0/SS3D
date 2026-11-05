@@ -9,9 +9,10 @@ import MonthlyTrendChart from "../components/MonthlyTrendChart.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import Icon from "../components/Icon.vue";
 
-/* Rendimiento por cuenta (solo la cuenta Empresa). Ingresos, ganancia y pedidos: de la cuenta
-   que REGISTRÓ la venta. Costos, horas y filamento: de quien puso cada recurso (impresora,
-   filamento, insumos). "Todas juntas" cuenta cada venta una sola vez. */
+/* Rendimiento por cuenta (solo la cuenta Empresa). Ingresos, ganancia y pedidos: del DUEÑO de
+   la venta (el de la impresora). "Gestionadas": las que una cuenta registró para otra (la
+   Empresa). Costos, horas y filamento: de quien puso cada recurso (impresora, filamento,
+   insumos). "Todas juntas" cuenta cada venta una sola vez. */
 const ACCOUNT_COLORS = ["#5b4bf5", "#17b3a3", "#f0ad4e", "#d7473f", "#3567d6"];
 const MONTHS = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 const ALL = "todas";
@@ -102,8 +103,8 @@ const seriesFor = (field) =>
 const view = computed(() => {
   if (!data.value) return null;
   if (current.value) {
-    const r = current.value.registered;
-    return { jobs: r.jobs, revenue: r.revenue, profit: r.profit, margin: r.margin_percent };
+    const r = current.value.sales;
+    return { jobs: r.jobs, revenue: r.revenue, profit: r.profit, margin: r.margin_percent, managed: current.value.managed };
   }
   const c = data.value.combined;
   return { jobs: c.jobs, revenue: c.revenue, profit: c.profit, margin: c.margin_percent };
@@ -129,6 +130,7 @@ const METRICS = [
   { key: "profit", label: "Ganancia", format: formatCurrency },
   { key: "own_cost", label: "Costos propios", format: formatCurrency },
   { key: "jobs", label: "Pedidos", format: (v) => `${Math.round(v)}` },
+  { key: "managed_jobs", label: "Gestionadas", format: (v) => `${Math.round(v)}` },
 ];
 const metric = ref("revenue");
 const metricInfo = computed(() => METRICS.find((m) => m.key === metric.value));
@@ -150,8 +152,8 @@ const rangeLabel = computed(() => {
   <div>
     <div class="page-header">
       <p class="page-subtitle">
-        Diego, Sntg y la Empresa por separado y todas juntas. <strong>Ingresos y ganancia</strong>: de la cuenta que
-        registró cada venta. <strong>Costos</strong>: de quien puso cada recurso (impresora, filamento, insumos).
+        Diego, Sntg y la Empresa por separado y todas juntas. <strong>Ingresos y ganancia</strong>: del dueño de cada
+        venta (el de la impresora). <strong>Costos</strong>: de quien puso cada recurso (impresora, filamento, insumos).
       </p>
     </div>
 
@@ -201,9 +203,10 @@ const rangeLabel = computed(() => {
 
       <div class="grid grid-cols-4" style="margin-bottom: 20px">
         <StatCard
-          :label="current ? 'Pedidos que registró' : 'Pedidos'"
+          :label="current ? 'Sus pedidos' : 'Pedidos'"
           :value="formatNumber(view.jobs, 0)"
           :spark="seriesFor('jobs')"
+          :meta="view.managed?.jobs ? `Gestionó ${view.managed.jobs} de otras cuentas (${formatCurrency(view.managed.revenue)})` : ''"
         />
         <StatCard
           :label="current ? 'Ingresos de sus ventas' : 'Ingresos'"
@@ -247,8 +250,8 @@ const rangeLabel = computed(() => {
           </ul>
         </div>
         <p class="rule-note">
-          Las ventas que registró otra cuenta con recursos de {{ current.username }} suman aquí sus costos (máquina,
-          material o insumos), pero sus ingresos quedan en la cuenta que las registró.
+          Aquí se suman los costos de todo lo que puso {{ current.username }} (máquina, material o insumos), en sus
+          ventas y en las de otras cuentas.
         </p>
       </div>
 
@@ -319,6 +322,7 @@ const rangeLabel = computed(() => {
               <tr>
                 <th>Cuenta</th>
                 <th class="text-right">Pedidos</th>
+                <th class="text-right" title="Ventas que registró para otra cuenta">Gestionadas</th>
                 <th class="text-right">Ingresos</th>
                 <th class="text-right">Ganancia</th>
                 <th class="text-right">Margen</th>
@@ -330,10 +334,11 @@ const rangeLabel = computed(() => {
             <tbody>
               <tr v-for="a in accounts" :key="a.user_id" :class="{ 'row-selected': selected === a.user_id }" @click="selected = a.user_id">
                 <td><i class="dot" :style="{ background: a.color }"></i><strong>{{ a.username }}</strong></td>
-                <td class="text-right mono">{{ a.registered.jobs }}</td>
-                <td class="text-right mono">{{ formatCurrency(a.registered.revenue) }}</td>
-                <td class="text-right mono" style="color: var(--success)">{{ formatCurrency(a.registered.profit) }}</td>
-                <td class="text-right">{{ formatPercent(a.registered.margin_percent) }}</td>
+                <td class="text-right mono">{{ a.sales.jobs }}</td>
+                <td class="text-right mono text-muted">{{ a.managed.jobs || "—" }}</td>
+                <td class="text-right mono">{{ formatCurrency(a.sales.revenue) }}</td>
+                <td class="text-right mono" style="color: var(--success)">{{ formatCurrency(a.sales.profit) }}</td>
+                <td class="text-right">{{ formatPercent(a.sales.margin_percent) }}</td>
                 <td class="text-right mono">{{ formatCurrency(a.own_costs.total) }}</td>
                 <td class="text-right mono">{{ formatNumber(a.own_costs.print_hours, 1) }}</td>
                 <td class="text-right mono">{{ formatNumber(a.own_costs.filament_g, 0) }} g</td>
@@ -341,6 +346,7 @@ const rangeLabel = computed(() => {
               <tr class="row-total" :class="{ 'row-selected': selected === ALL }" @click="selected = ALL">
                 <td><strong>Todas juntas</strong></td>
                 <td class="text-right mono">{{ data.combined.jobs }}</td>
+                <td class="text-right mono text-muted">—</td>
                 <td class="text-right mono">{{ formatCurrency(data.combined.revenue) }}</td>
                 <td class="text-right mono" style="color: var(--success)">{{ formatCurrency(data.combined.profit) }}</td>
                 <td class="text-right">{{ formatPercent(data.combined.margin_percent) }}</td>
@@ -352,9 +358,9 @@ const rangeLabel = computed(() => {
           </table>
         </div>
         <p class="rule-note">
-          Ingresos, ganancia y pedidos son de la cuenta que registró la venta; costos propios, horas y filamento, de
-          quien puso cada recurso. Por eso una venta de la Empresa hecha con la impresora de un socio suma sus ingresos a
-          la Empresa y el costo de la máquina al socio. Solo pedidos Entregados, por su fecha de entrega.
+          Ingresos, ganancia y pedidos son del dueño de la venta (el dueño de la impresora); costos propios, horas y
+          filamento, de quien puso cada recurso. Una venta que la Empresa registró con la impresora de un socio es del
+          socio: a la Empresa solo le suma en "Gestionadas". Solo pedidos Entregados, por su fecha de entrega.
         </p>
       </div>
     </template>

@@ -2,8 +2,11 @@
 separado y todas juntas.
 
 Regla de atribución (acordada con los socios):
-- Ingresos, ganancia y pedidos: de la cuenta que REGISTRÓ la venta. Así la Empresa lleva el
-  registro de lo que vende, aunque use máquinas o materiales de los socios.
+- Ingresos, ganancia y pedidos: del DUEÑO de la venta (el dueño de la impresora), igual que
+  en la cuenta de cada uno. Hasta el 2026-11-05 eran de la cuenta que la registró, y la
+  Empresa aparecía con los ingresos de ventas que solo gestionó.
+- "Gestionadas": las ventas que una cuenta registró para otra (lo que hace la Empresa). Solo
+  informa cuánto gestionó; no son ingresos suyos.
 - Costos: de quien puso cada recurso (ver cost_allocation): la máquina (depreciación + luz)
   al dueño de la impresora, el material al dueño de cada filamento, los insumos al dueño de
   cada insumo. La cuenta que registra no carga con costos que no son suyos.
@@ -70,7 +73,8 @@ class OwnCosts:
 
 @dataclass
 class Month:
-    registered: dict = field(default_factory=lambda: defaultdict(Totals))
+    owned: dict = field(default_factory=lambda: defaultdict(Totals))
+    managed: dict = field(default_factory=lambda: defaultdict(Totals))
     own_costs: dict = field(default_factory=lambda: defaultdict(Decimal))
     combined: Totals = field(default_factory=Totals)
 
@@ -93,6 +97,18 @@ def _usage_by_owner(sale: Sale) -> tuple[dict, dict]:
         # Ventas antiguas sin líneas de filamento: el material era del dueño de la venta.
         grams[sale.user_id] += sale.grams_used - plate_grams
     return hours, grams
+
+
+def _sale_owner(sale: Sale, users: dict) -> uuid.UUID:
+    """Dueño de la venta: el dueño de la impresora. Las ventas que la Empresa registró a su
+    nombre antes del 2026-11-05 con la impresora de un socio se cuentan del socio (la misma
+    corrección que se aplica al editarlas). Las del Almacén quedan como están."""
+    registrant = users.get(sale.created_by_user_id)
+    printer_owner = sale.printer.user_id
+    if (sale.warehouse_item_id is None and registrant is not None and registrant.is_company
+            and sale.user_id != printer_owner and printer_owner in users):
+        return printer_owner
+    return sale.user_id
 
 
 def account_performance(db: Session, company: User, date_from: date | None, date_to: date | None) -> dict:
@@ -119,7 +135,8 @@ def account_performance(db: Session, company: User, date_from: date | None, date
         query = query.filter(Sale.delivered_date <= date_to)
     sales = query.order_by(Sale.delivered_date).all()
 
-    registered: dict[uuid.UUID, Totals] = defaultdict(Totals)
+    owned: dict[uuid.UUID, Totals] = defaultdict(Totals)
+    managed: dict[uuid.UUID, Totals] = defaultdict(Totals)
     own: dict[uuid.UUID, OwnCosts] = defaultdict(OwnCosts)
     combined = Totals()
     combined_hours = combined_grams = shared_cost = Decimal(0)
@@ -127,13 +144,17 @@ def account_performance(db: Session, company: User, date_from: date | None, date
     months: dict[str, Month] = defaultdict(Month)
 
     for sale in sales:
-        # Quién la registró. Ventas sin registrador conocido (usuario eliminado) quedan en el dueño.
-        registrant = sale.created_by_user_id if sale.created_by_user_id in users else sale.user_id
-        registered[registrant].add(sale)
+        owner = _sale_owner(sale, users)
+        owned[owner].add(sale)
         combined.add(sale)
         month = months[sale.delivered_date.strftime("%Y-%m")]
-        month.registered[registrant].add(sale)
+        month.owned[owner].add(sale)
         month.combined.add(sale)
+        # La registró otra cuenta para el dueño (la Empresa gestionando ventas de los socios).
+        registrant = sale.created_by_user_id
+        if registrant in users and registrant != owner:
+            managed[registrant].add(sale)
+            month.managed[registrant].add(sale)
 
         allocation = allocate_sale_costs(sale)
         shared_cost += sale.shipping_cost
@@ -159,7 +180,7 @@ def account_performance(db: Session, company: User, date_from: date | None, date
             combined_grams += g
         for uid in owners_here:
             own[uid].sales_with_resources += 1
-        if owners_here - {registrant}:
+        if owners_here - {owner}:
             mixed_sales += 1
 
     return {
@@ -170,7 +191,8 @@ def account_performance(db: Session, company: User, date_from: date | None, date
                 "user_id": u.id,
                 "username": u.username,
                 "is_company": u.is_company,
-                "registered": registered[u.id].as_dict(),
+                "sales": owned[u.id].as_dict(),
+                "managed": managed[u.id].as_dict(),
                 "own_costs": own[u.id].as_dict(),
             }
             for u in ordered
@@ -182,14 +204,15 @@ def account_performance(db: Session, company: User, date_from: date | None, date
             # Delivery (de quien lo llevó): no es de una cuenta. El postprocesado ya está en los
             # costos propios del dueño de la impresora.
             "shared_cost": money(shared_cost),
-            # Ventas registradas por una cuenta que usaron recursos de otra.
+            # Ventas que usaron recursos de una cuenta distinta a la del dueño.
             "mixed_sales": mixed_sales,
         },
         "months": [
             {
                 "month": key,
                 "accounts": {
-                    str(u.id): {**months[key].registered[u.id].as_dict(), "own_cost": money(months[key].own_costs[u.id])}
+                    str(u.id): {**months[key].owned[u.id].as_dict(), "own_cost": money(months[key].own_costs[u.id]),
+                                "managed_jobs": months[key].managed[u.id].jobs}
                     for u in ordered
                 },
                 "combined": months[key].combined.as_dict(),

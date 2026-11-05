@@ -414,3 +414,29 @@
 **¿Generó migración de Alembic?:** Sí: `0022_payment_due.py`, dos columnas opcionales en `sales` (`payment_due_date`, `paid_date`). NULL en los existentes; no toca datos. **Correr el SQL en Supabase antes del push.**
 
 **Cambios grandes o riesgosos:** Un "Por cobrar" ya no se puede entregar sin decir cómo pagó o hasta cuándo tiene plazo (con la app anterior en caché el servidor responde con ese mensaje). Las ventas nuevas de la Empresa quedan a nombre del socio dueño de la impresora, así que aparecen en el Dashboard y el Historial de ese socio (antes en los de la Empresa); el Reparto y Rendimiento no cambian (cuentan por dueño de cada recurso y por quién registró). Con la memoria de consultas, un cambio hecho por otro socio puede tardar hasta una visita en verse (se actualiza en segundo plano). Tests nuevos: `tests/test_payment_due.py` (8, incluye el delivery de la Calculadora) y 4 tests ajustados a la regla del dueño de la impresora.
+
+## [2026-11-05] - Rendimiento: ingresos del dueño de la venta y "Gestionadas"
+
+**Qué se hizo:** En Rendimiento (cuenta Empresa), los ingresos, la ganancia y los pedidos ahora son del dueño de la venta (el dueño de la impresora), no de la cuenta que la registró. Nueva cifra "Gestionadas": las ventas que una cuenta registró para otra (columna en la tabla, métrica en el gráfico y nota bajo "Sus pedidos"). Las ventas antiguas que la Empresa dejó a su nombre con la impresora de un socio se cuentan del socio (misma corrección que al editarlas), sin necesidad del SQL opcional. Las del Almacén no cambian.
+
+**Por qué:** La Empresa aparecía con los ingresos de ventas que solo gestionó y Diego/Sntg en $0, aunque en sus cuentas personales sí las veían.
+
+**¿Generó migración de Alembic?:** No.
+
+**Cambios grandes o riesgosos:** Solo cambia lo que muestra Rendimiento; el Reparto no usa esta regla y no cambia. La respuesta de `/api/performance` cambia `registered` por `sales` + `managed` (solo la usa esa pantalla). Tests: `test_performance.py` ajustado + 1 nuevo (197 en total, todos OK).
+
+**Evidencia (verificación local, 2026-11-05):**
+- Tests del backend: `pytest` → 197 passed (incluye `test_revenue_to_owner_managed_to_registrant_costs_to_resource_owner` y el nuevo `test_old_company_sale_with_partner_printer_counts_for_the_partner`).
+- Build del frontend (`vite build`) sin errores.
+- Prueba en la app local (base de desarrollo, nunca Supabase), cuenta Simple_Solutions3D, Rendimiento → "Este mes" (noviembre 2026), con 2 ventas registradas por la Empresa con impresoras de Diego y Sntg y entregadas:
+
+  | Cuenta | Pedidos | Gestionadas | Ingresos | Costos propios |
+  |---|---|---|---|---|
+  | Diego | 4 | — | $45.000 | $14.469 |
+  | Sntg | 2 | — | $22.000 | $9.244 |
+  | Simple_Solutions3D | 0 | 2 | $0 | $570 (su filamento) |
+  | Todas juntas | 6 | — | $67.000 | $24.283 |
+
+  Antes del cambio esas 2 ventas ($27.000) aparecían como ingresos de Simple_Solutions3D. En la pestaña de la Empresa se lee "Gestionó 2 de otras cuentas ($27.000)".
+- Capturas (computador 1440 px y celular 390 px, "Todas juntas" y "Simple_Solutions3D") revisadas y aprobadas antes del push; guardadas fuera del repo en `~/Escritorio/Zola_Rendimiento_Dueno/`.
+- El Reparto no se tocó: `compute_split` no usa quién registró ni el dueño de la venta.
