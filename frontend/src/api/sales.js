@@ -25,6 +25,9 @@ export const cancelSale = (id, payload) => client.post(`/api/sales/${id}/cancel`
 export const editCancellationLoss = (id, payload) =>
   client.put(`/api/sales/${id}/cancellation-loss`, payload).then((r) => r.data);
 
+// Cobro de un pedido entregado que quedó "Por cobrar" (cuenta en el Reparto del mes en que pagó).
+export const registerPayment = (id, payload) => client.post(`/api/sales/${id}/payment`, payload).then((r) => r.data);
+
 export const changeSaleStatus = (id, payload) =>
   client.post(`/api/sales/${id}/status`, payload).then((r) => r.data);
 

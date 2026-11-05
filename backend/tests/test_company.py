@@ -219,7 +219,7 @@ def test_monthly_split(client, db, make, biz, monkeypatch):
     # 3) Venta por cobrar: no entra (queda como pendiente).
     c = client.post("/api/sales", headers=biz["hd"],
                     json=sale_payload(biz["pd"], price=7000, payment_method="por_cobrar")).json()
-    deliver(client, biz["hd"], c["id"], today)
+    deliver(client, biz["hd"], c["id"], today, payment_due_date=today)
     # 4) Pendiente (no entregada): no aparece.
     client.post("/api/sales", headers=biz["hd"], json=sale_payload(biz["pd"], price=99999))
     # Gasto de la Empresa pagado por Sntg (se le devuelve) y otro por la Caja.
@@ -348,14 +348,17 @@ def _machine_by_owner(sale):
     return {o["username"]: Decimal(o["machine"]) for o in sale["cost_by_owner"] if Decimal(o["machine"]) > 0}
 
 
-def test_company_sale_in_own_name_with_partner_printer(client, db, biz):
+def test_company_sale_belongs_to_the_printer_owner(client, db, biz):
     from app.models.printer import Printer
 
     body = sale_payload(biz["pd"], biz["fs"], 100, owner_id=biz["company"].id, price=15000)
     r = client.post("/api/sales", headers=biz["hc"], json=body)
     assert r.status_code == 201, r.text
     sale = r.json()
-    assert sale["owner_id"] == str(biz["company"].id)  # la venta queda en la Empresa
+    # La venta es del dueño de la impresora (Diego), aunque se pida a nombre de la Empresa;
+    # quién la registró queda aparte.
+    assert sale["owner_id"] == str(biz["diego"].id)
+    assert sale["created_by_user_id"] == str(biz["company"].id)
     owners = {o["username"]: o for o in sale["cost_by_owner"]}
     # Depreciación + luz al dueño de la impresora (Diego); el filamento al suyo (Sntg).
     assert Decimal(owners[biz["diego"].username]["machine"]) == Decimal(sale["depreciation_cost"]) + Decimal(sale["energy_cost"])
@@ -375,6 +378,7 @@ def test_company_can_switch_to_the_other_partner_printer(client, db, biz):
     assert r.status_code == 200, r.text
     assert r.json()["printer_name"] == "Ender Sntg"
     assert set(_machine_by_owner(r.json())) == {biz["sntg"].username}
+    assert r.json()["owner_id"] == str(biz["sntg"].id)  # cambia de dueño con la impresora
     db.expire_all()
     assert db.get(Printer, biz["pd"].id).hours_used == 0 and db.get(Printer, biz["ps"].id).hours_used == Decimal(2)
 
@@ -384,15 +388,21 @@ def test_partner_cannot_use_another_partners_printer(client, biz):
     assert r.status_code == 404
 
 
-def test_plain_watcher_still_sells_only_with_the_owner_printer(client, make, biz):
+def test_plain_watcher_sale_belongs_to_printer_owner_and_cannot_mix(client, make, biz):
     w = make.user("watcher", "obs")
     make.assign(w, biz["diego"])
     make.assign(w, biz["sntg"])
-    r = client.post("/api/sales", headers=make.headers(w), json=sale_payload(biz["ps"], owner_id=biz["diego"].id))
+    hw = make.headers(w)
+    # La venta es del dueño de la impresora (Sntg), aunque se pida para Diego.
+    r = client.post("/api/sales", headers=hw, json=sale_payload(biz["ps"], owner_id=biz["diego"].id))
+    assert r.status_code == 201, r.text
+    assert r.json()["owner_id"] == str(biz["sntg"].id)
+    # Un observador común no mezcla inventarios: impresora de Sntg con filamento de Diego, no.
+    r = client.post("/api/sales", headers=hw, json=sale_payload(biz["ps"], biz["fd"], 50))
     assert r.status_code == 404
 
 
-def test_calculator_company_sale_defaults_to_company_with_partner_printer(client, biz):
+def test_calculator_company_sale_belongs_to_printer_owner(client, biz):
     body = {"printer_id": str(biz["pd"].id), "filaments": [{"filament_id": str(biz["fs"].id), "grams_used": 50}],
             "print_hours": 1, "postprocess_hours": 0, "shipping_cost": 0, "supplies": [],
             "sale_date": str(date.today()), "client_name": "X", "payment_method": "efectivo",
@@ -400,7 +410,7 @@ def test_calculator_company_sale_defaults_to_company_with_partner_printer(client
     r = client.post("/api/calculator/quote/save-as-sale", headers=biz["hc"], json=body)
     assert r.status_code == 201, r.text
     sale = r.json()
-    assert sale["owner_id"] == str(biz["company"].id)
+    assert sale["owner_id"] == str(biz["diego"].id) and sale["created_by_user_id"] == str(biz["company"].id)
     assert set(_machine_by_owner(sale)) == {biz["diego"].username}
     # Un socio desde la Calculadora sigue vendiendo solo lo suyo (la venta es del dueño de la impresora).
     r = client.post("/api/calculator/quote/save-as-sale", headers=biz["hd"],

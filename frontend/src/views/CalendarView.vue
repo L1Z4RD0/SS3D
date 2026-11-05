@@ -2,6 +2,15 @@
 import { ref, computed, watch, onMounted } from "vue";
 import * as salesApi from "../api/sales";
 import { formatCurrency, formatDate, toLocalISODate, todayISO } from "../utils/format";
+import {
+  CALENDAR_VIEWS,
+  CALENDAR_VIEW_KEY,
+  addDays,
+  atNoon,
+  calendarRange,
+  parseISO,
+  readSavedCalendarView,
+} from "../utils/calendarRange";
 import { extractApiError } from "../utils/validation";
 import { useAuthStore } from "../stores/auth";
 import { STATUS_LABELS, statusClass, isOverdue } from "../utils/orderStatus";
@@ -13,25 +22,13 @@ import OrderStatusModal from "../components/OrderStatusModal.vue";
 const auth = useAuthStore();
 const today = todayISO();
 
-const VIEWS = [
-  { key: "month", label: "Mes" },
-  { key: "week", label: "Semana" },
-  { key: "day", label: "Día" },
-];
+const VIEWS = CALENDAR_VIEWS;
 const WEEKDAYS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
 const MAX_PER_CELL = 3;
 
-const VIEW_KEY = "zola:calendar:view";
-function readSavedView() {
-  try {
-    const v = localStorage.getItem(VIEW_KEY);
-    return VIEWS.some((x) => x.key === v) ? v : "month";
-  } catch {
-    return "month";
-  }
-}
+const VIEW_KEY = CALENDAR_VIEW_KEY;
 
-const view = ref(readSavedView());
+const view = ref(readSavedCalendarView());
 const cursor = ref(parseISO(today));
 const showCancelled = ref(false);
 // Estados visibles (leyenda clickeable). Cancelados se controlan aparte.
@@ -51,37 +48,7 @@ watch(view, (v) => {
   }
 });
 
-/* -------- Fechas (siempre en hora local, como strings YYYY-MM-DD) --------
-   Todas las fechas se fijan al MEDIODÍA: en Chile el cambio de horario de verano ocurre
-   a medianoche (ese día las 00:00 no existen), y con fechas a medianoche un día podía
-   correrse una hora y caerse del calendario. */
-function atNoon(y, m, d) {
-  return new Date(y, m, d, 12);
-}
-function parseISO(iso) {
-  const [y, m, d] = iso.split("-").map(Number);
-  return atNoon(y, m - 1, d);
-}
-function addDays(date, n) {
-  return atNoon(date.getFullYear(), date.getMonth(), date.getDate() + n);
-}
-function startOfWeek(date) {
-  // Semana de lunes a domingo.
-  return addDays(date, -((date.getDay() + 6) % 7));
-}
-
-const range = computed(() => {
-  const c = cursor.value;
-  if (view.value === "month") {
-    const first = startOfWeek(atNoon(c.getFullYear(), c.getMonth(), 1));
-    return { from: first, to: addDays(first, 41), count: 42 };
-  }
-  if (view.value === "week") {
-    const from = startOfWeek(c);
-    return { from, to: addDays(from, 6), count: 7 };
-  }
-  return { from: c, to: c, count: 1 };
-});
+const range = computed(() => calendarRange(view.value, cursor.value));
 
 // Por cantidad de días (no comparando horas), para que siempre salgan 42 / 7 / 1.
 const days = computed(() => Array.from({ length: range.value.count }, (_, i) => addDays(range.value.from, i)));

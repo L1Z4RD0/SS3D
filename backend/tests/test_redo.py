@@ -114,4 +114,5 @@ def test_redo_keeps_registrant_for_company_sale(client, db, make):
                     json={"keep_hours": True, "piece_outcome": "inutilizable", "redo": True})
     assert r.status_code == 200, r.text
     new = client.get(f"/api/sales/{r.json()['redone_as_id']}", headers=hc).json()
-    assert new["created_by_user_id"] == str(company.id) and new["owner_id"] == str(company.id)
+    # Lo registró la Empresa; es del dueño de la impresora (el socio).
+    assert new["created_by_user_id"] == str(company.id) and new["owner_id"] == str(partner.id)

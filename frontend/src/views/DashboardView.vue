@@ -616,6 +616,14 @@ onMounted(() => {
   .hero {
     padding: 18px;
   }
+  /* En el celular el anillo decorativo queda en la esquina: su punto ya no pasa por encima
+     del saludo ni del monto. */
+  .hero-ring {
+    width: 150px;
+    height: 150px;
+    right: -75px;
+    top: -75px;
+  }
   .hero-grid {
     grid-template-columns: 1fr;
     gap: 6px;

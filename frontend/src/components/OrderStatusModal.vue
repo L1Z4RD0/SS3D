@@ -2,7 +2,8 @@
 import { ref, reactive, computed, onMounted } from "vue";
 import * as salesApi from "../api/sales";
 import * as betaApi from "../api/beta";
-import { formatCurrency, formatDate, formatDateTime, formatNumber, todayISO } from "../utils/format";
+import { formatCurrency, formatDate, formatDateTime, formatLongDate, formatNumber, todayISO } from "../utils/format";
+import { DELIVERY_PAYMENT_CHOICES, dueInfo, isUnpaid } from "../utils/payment";
 import { extractApiError } from "../utils/validation";
 import { confirmAction } from "../composables/useConfirm";
 import { STATUS_LABELS, OPEN_STATUSES, statusClass, statusOptions, isOverdue } from "../utils/orderStatus";
@@ -16,6 +17,8 @@ import LoadingSkeleton from "./LoadingSkeleton.vue";
    Calendario. El servidor valida cada cambio; aquí solo se muestran los permitidos. */
 const props = defineProps({
   saleId: { type: String, required: true },
+  // Abre directo el paso de entrega (botón rápido "Entregar" de un pedido Por cobrar).
+  startDelivery: { type: Boolean, default: false },
 });
 const emit = defineEmits(["close", "changed"]);
 
@@ -33,6 +36,10 @@ async function load() {
   error.value = "";
   try {
     sale.value = await salesApi.getSale(props.saleId);
+    if (props.startDelivery && isUnpaid(sale.value)) {
+      const opt = options.value.find((o) => o.status === "entregada");
+      if (opt) applyStatus(opt);
+    }
   } catch (err) {
     error.value = extractApiError(err, "No se pudo cargar el pedido.");
   } finally {
@@ -41,6 +48,12 @@ async function load() {
 }
 
 async function applyStatus(opt) {
+  // "Por cobrar": al entregar es obligatorio decir cómo pagó o hasta cuándo tiene plazo.
+  if (opt.status === "entregada" && isUnpaid(sale.value)) {
+    Object.assign(payForm, { choice: "", due_date: "" });
+    deliveryPrompt.value = opt;
+    return;
+  }
   let skipConfirmed = false;
   if (opt.kind === "skip") {
     const ok = await confirmAction({
@@ -80,6 +93,60 @@ async function applyStatus(opt) {
     emit("changed", sale.value);
   } catch (err) {
     error.value = extractApiError(err, "No se pudo cambiar el estado.");
+  } finally {
+    busy.value = false;
+  }
+}
+
+/* -------- Pago de un pedido "Por cobrar" -------- */
+const paymentInfo = computed(() => dueInfo(sale.value, today));
+const deliveryPrompt = ref(null); // opción "Entregar" que espera el pago
+const payForm = reactive({ choice: "", due_date: "" }); // choice: efectivo | transferencia | pendiente
+const payFormError = computed(() => {
+  if (!payForm.choice) return "Elige cómo pagó o si aún no paga.";
+  if (payForm.choice === "pendiente" && !payForm.due_date) return "Indica la fecha máxima de pago.";
+  if (payForm.choice === "pendiente" && payForm.due_date < today) return "La fecha máxima no puede ser anterior a hoy.";
+  return "";
+});
+
+async function confirmDeliveryWithPayment() {
+  if (payFormError.value) return;
+  const opt = deliveryPrompt.value;
+  busy.value = true;
+  error.value = "";
+  try {
+    sale.value = await salesApi.changeSaleStatus(sale.value.id, {
+      status: "entregada",
+      skip_confirmed: opt.kind === "skip",
+      today,
+      ...(payForm.choice === "pendiente" ? { payment_due_date: payForm.due_date } : { payment_method: payForm.choice }),
+    });
+    deliveryPrompt.value = null;
+    emit("changed", sale.value);
+  } catch (err) {
+    error.value = extractApiError(err, "No se pudo entregar el pedido.");
+  } finally {
+    busy.value = false;
+  }
+}
+
+// Cobro posterior de un pedido entregado sin pagar.
+const registeringPayment = ref(false);
+const paymentForm = reactive({ payment_method: "", paid_date: today });
+function startRegisterPayment() {
+  Object.assign(paymentForm, { payment_method: "", paid_date: today });
+  registeringPayment.value = true;
+}
+async function savePayment() {
+  if (!paymentForm.payment_method || !paymentForm.paid_date) return;
+  busy.value = true;
+  error.value = "";
+  try {
+    sale.value = await salesApi.registerPayment(sale.value.id, { ...paymentForm });
+    registeringPayment.value = false;
+    emit("changed", sale.value);
+  } catch (err) {
+    error.value = extractApiError(err, "No se pudo registrar el pago.");
   } finally {
     busy.value = false;
   }
@@ -157,6 +224,7 @@ async function saveDelivery(remove = false) {
 
 /* -------- Cancelación -------- */
 const showCancel = ref(false);
+const PAYMENT_LABEL = Object.fromEntries(salesApi.PAYMENT_METHODS.map((m) => [m.value, m.label]));
 const PIECE_STATUS = { en_almacen: "En almacén", reservada: "Reservada", vendida: "Vendida", descartada: "Descartada" };
 
 /* -------- Corregir la pérdida de un cancelado (solo en su mes) -------- */
@@ -232,7 +300,51 @@ onMounted(load);
           </template>
           <dt>Precio</dt>
           <dd class="mono">{{ formatCurrency(sale.price) }}</dd>
-          <dt>Inventario de</dt>
+          <dt>Pago</dt>
+          <dd>
+            <template v-if="isUnpaid(sale)">
+              <span v-if="paymentInfo" class="pay-due" :class="{ 'is-overdue': paymentInfo.overdue }">{{ paymentInfo.text }}</span>
+              <span v-else>Por cobrar <span class="text-muted">(se elige cómo pagó al entregarlo)</span></span>
+              <button
+                v-if="sale.status === 'entregada' && sale.can_edit && !registeringPayment"
+                type="button"
+                class="link-btn"
+                @click="startRegisterPayment"
+              >
+                Registrar pago
+              </button>
+            </template>
+            <template v-else>
+              {{ PAYMENT_LABEL[sale.payment_method] || sale.payment_method }}
+              <span v-if="sale.paid_date" class="text-muted">· cobrado el {{ formatLongDate(sale.paid_date) }}</span>
+            </template>
+            <div v-if="registeringPayment" class="delivery-edit pay-register">
+              <select v-model="paymentForm.payment_method" aria-label="Cómo pagó">
+                <option value="" disabled>¿Cómo pagó?</option>
+                <option v-for="c in DELIVERY_PAYMENT_CHOICES" :key="c.value" :value="c.value">{{ c.label }}</option>
+              </select>
+              <input
+                v-model="paymentForm.paid_date"
+                type="date"
+                :min="sale.delivered_date"
+                :max="today"
+                aria-label="Día en que pagó"
+              />
+              <div class="delivery-edit-actions">
+                <button
+                  type="button"
+                  class="btn btn-primary btn-sm"
+                  :disabled="busy || !paymentForm.payment_method || !paymentForm.paid_date"
+                  @click="savePayment"
+                >
+                  Guardar pago
+                </button>
+                <button type="button" class="btn btn-ghost btn-sm" :disabled="busy" @click="registeringPayment = false">Cancelar</button>
+              </div>
+              <span class="field-hint">En el Reparto cuenta en el mes en que pagó.</span>
+            </div>
+          </dd>
+          <dt>Venta de</dt>
           <dd>{{ sale.owner_username }}</dd>
           <dt>Registrada por</dt>
           <dd>{{ sale.created_by_username || "Usuario eliminado" }}</dd>
@@ -331,7 +443,34 @@ onMounted(load);
         <p class="field-hint">Solo se puede corregir durante el mes en que se canceló. Ajusta el inventario según el cambio.</p>
       </div>
 
-      <div v-if="options.length" class="status-actions">
+      <div v-if="deliveryPrompt" class="pay-prompt">
+        <strong>¿Cómo pagó?</strong>
+        <p class="field-hint">El pedido está <strong>Por cobrar</strong>: para entregarlo indica cómo pagó o, si aún no paga, hasta cuándo tiene plazo.</p>
+        <div class="pay-choices" role="radiogroup" aria-label="Pago al entregar">
+          <label v-for="c in DELIVERY_PAYMENT_CHOICES" :key="c.value" class="pay-choice" :class="{ active: payForm.choice === c.value }">
+            <input v-model="payForm.choice" type="radio" :value="c.value" /> {{ c.label }}
+          </label>
+          <label class="pay-choice" :class="{ active: payForm.choice === 'pendiente' }">
+            <input v-model="payForm.choice" type="radio" value="pendiente" /> Aún no paga
+          </label>
+        </div>
+        <div v-if="payForm.choice === 'pendiente'" class="field pay-due-field">
+          <label for="pay-due">Fecha máxima de pago</label>
+          <input id="pay-due" v-model="payForm.due_date" type="date" :min="today" />
+          <span v-if="payForm.due_date && payForm.due_date >= today" class="pay-due">
+            Cobrar el {{ formatLongDate(payForm.due_date) }}
+          </span>
+          <span class="field-hint">Queda Por cobrar y no entra al Reparto hasta que registres el pago.</span>
+        </div>
+        <div class="delivery-edit-actions">
+          <button type="button" class="btn btn-primary btn-sm" :disabled="busy || !!payFormError" @click="confirmDeliveryWithPayment">
+            {{ deliveryPrompt.kind === "skip" ? "Entregar directo" : "Marcar entregado" }}
+          </button>
+          <button type="button" class="btn btn-ghost btn-sm" :disabled="busy" @click="deliveryPrompt = null">Cancelar</button>
+        </div>
+      </div>
+
+      <div v-else-if="options.length" class="status-actions">
         <button
           v-for="opt in options"
           :key="opt.status + opt.kind"
@@ -353,7 +492,7 @@ onMounted(load);
           Cancelar pedido
         </button>
       </div>
-      <p v-else-if="!sale.can_edit" class="field-hint">
+      <p v-else-if="!sale.can_edit && !deliveryPrompt" class="field-hint">
         Solo lectura: este pedido lo gestiona {{ sale.owner_username }}.
       </p>
 
@@ -382,6 +521,71 @@ onMounted(load);
 </template>
 
 <style scoped>
+.pay-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--primary);
+  background: var(--surface-alt);
+}
+
+.pay-prompt .field-hint {
+  margin: 0;
+}
+
+.pay-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pay-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pay-choice.active {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.pay-choice input {
+  width: auto;
+  margin: 0;
+}
+
+.pay-due-field input {
+  width: auto;
+}
+
+.pay-due {
+  font-weight: 700;
+  color: var(--warning, #b7791f);
+}
+
+.pay-due.is-overdue {
+  color: var(--danger);
+}
+
+.pay-register {
+  margin-top: 6px;
+}
+
+.pay-register select {
+  width: auto;
+}
+
 .loss-edit {
   margin: 12px 0;
 }

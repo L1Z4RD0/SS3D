@@ -72,9 +72,10 @@ class QuoteResponse(BaseModel):
 
 class SaveQuoteAsSaleRequest(QuoteRequest):
     sale_date: str
-    # Solo la cuenta Empresa: a nombre de quién queda la venta (por defecto, la Empresa).
-    # Para el resto, la venta es del dueño de la impresora.
+    # Ya no se usa: la venta es siempre del dueño de la impresora (se acepta por compatibilidad).
     owner_id: uuid.UUID | None = None
+    # Quién lleva el delivery (el monto es shipping_cost): se le devuelve en el Reparto.
+    delivery_by: str | None = Field(default=None, max_length=60)
     # Fecha de entrega comprometida (si no viene, la del pedido).
     promised_delivery_date: date | None = None
     client_name: str = Field(min_length=1, max_length=160)

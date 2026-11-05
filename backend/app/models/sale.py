@@ -82,6 +82,11 @@ class Sale(UUIDMixin, TimestampMixin, Base):
     payment_method: Mapped[str] = mapped_column(Text, nullable=False)
     # De dónde salió la venta (app.constants.SALE_SOURCES). NULL en las anteriores a 0019.
     sale_source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # "Por cobrar" (desde la migración 0022): al entregarlo se elige cómo pagó o, si aún no
+    # paga, hasta cuándo tiene plazo (payment_due_date). paid_date es el día en que se cobró;
+    # el Reparto lo cuenta en ese mes (NULL: en el mes de la entrega, como siempre).
+    payment_due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    paid_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # ---- Ciclo de vida del pedido ----

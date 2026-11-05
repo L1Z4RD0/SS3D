@@ -67,7 +67,13 @@ function removePlate(key) {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+}
+
+.extra-plates-head > div {
+  flex: 1 1 220px;
+  min-width: 0;
 }
 
 .extra-plates-head .field-hint {

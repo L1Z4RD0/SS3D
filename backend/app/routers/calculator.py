@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.constants import ELECTRICITY_RATE, LABOR_RATE_PER_HOUR, MARGIN_SCENARIO_PERCENTS
 from app.database import get_db
-from app.dependencies import get_current_user, is_company
+from app.dependencies import get_current_user
 from app.models.sale import Sale
 from app.models.sale_supply import SaleSupply
 from app.models.user import User
@@ -111,13 +111,11 @@ def save_quote_as_sale(
 
     # La venta es del dueño de la impresora y los filamentos e insumos tienen que ser de ese
     # mismo dueño (un observador puede cotizar mezclando, pero no vender así). La Empresa no
-    # tiene impresora: usa la de un socio, la venta queda a su nombre (o de quien elija) y
+    # tiene impresora: usa la de un socio, la venta queda a nombre de ese socio y
     # puede combinar recursos de todos; cada costo queda a cuenta de su dueño.
     printer = resolve_printer(db, current_user, payload.printer_id)
-    if is_company(current_user):
-        owner_id = resolve_sale_owner(db, current_user, payload.owner_id or current_user.id)
-    else:
-        owner_id = resolve_sale_owner(db, current_user, printer.user_id)
+    # La venta es siempre del dueño de la impresora (también si la registra la Empresa).
+    owner_id = resolve_sale_owner(db, current_user, printer.user_id)
     allowed = sale_resource_owner_ids(db, owner_id, current_user)
     if printer.user_id not in allowed:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Impresora no encontrada")
@@ -177,6 +175,7 @@ def save_quote_as_sale(
         postprocess_cost=breakdown.postprocess_cost,
         supplies_cost=breakdown.supplies_cost,
         shipping_cost=breakdown.shipping_cost,
+        delivery_by=(payload.delivery_by or "").strip() or None,
         total_cost=breakdown.total_cost,
         profit=scenario.profit,
         margin_percent=calculate_margin_percent(scenario.price, breakdown.total_cost),

@@ -218,7 +218,7 @@ def _orders(ws, report, details) -> None:
         "Aporte al neto = Precio cobrado − Costos devueltos (socios y Empresa) − Delivery. La suma de los aportes menos los "
         "Gastos de la Empresa es el Neto a repartir."), span=12)
     cols = [Col("Entregado", 12, "date"), Col("Trabajo", 28), Col("Cuenta dueña", 20), Col("Registrada por", 20),
-            Col("Pago", 14), Col("Precio cobrado", 14, "money"), Col("Costos devueltos", 15, "money"),
+            Col("Pago", 26), Col("Precio cobrado", 14, "money"), Col("Costos devueltos", 15, "money"),
             Col("De eso, de la Empresa (vuelve a la Caja)", 15, "money"), Col("De eso, postprocesado (al dueño de la impresora)", 15, "money"),
             Col("Reserva por riesgo (en la ganancia)", 15, "money"), Col("Delivery", 12, "money"),
             Col("Lo llevó", 14), Col("Aporte al neto", 15, "money")]
@@ -231,7 +231,9 @@ def _orders(ws, report, details) -> None:
         refunded = sum(line.refunds.values(), Decimal(0))
         rows.append([sale.delivered_date, sale.client_name, sale.owner.username,
                      sale.created_by.username if sale.created_by else "",
-                     PAYMENT_LABELS.get(sale.payment_method, sale.payment_method), sale.total_price, refunded,
+                     PAYMENT_LABELS.get(sale.payment_method, sale.payment_method)
+                     + (f" (cobrado el {sale.paid_date:%d-%m-%Y})" if sale.paid_date else ""),
+                     sale.total_price, refunded,
                      line.company_cost, sale.postprocess_cost, sale.risk_amount, sale.shipping_cost,
                      sale.delivery_by or ("sin asignar" if sale.shipping_cost else ""), f"=F{r}-G{r}-K{r}"])
     xlsx.table(ws, row, cols, rows, totals={5: "sum", 6: "sum", 7: "sum", 8: "sum", 9: "sum", 10: "sum", 12: "sum"},
@@ -297,11 +299,21 @@ def _deliveries(ws, report) -> None:
                          Col("Monto", 13, "money")], rows, totals={3: "sum"})
 
 
+def _pending_note(p) -> str:
+    if p.paid_date:
+        return f"Cobrado el {p.paid_date:%d-%m-%Y} (entra ese mes)"
+    if p.payment_due_date:
+        return f"Cobrar el {p.payment_due_date:%d-%m-%Y}"
+    return "Sin fecha de pago"
+
+
 def _outside(ws, report) -> None:
     row = xlsx.title(ws, "Fuera del reparto", "Pedidos entregados en el mes que no se reparten")
     row = xlsx.section(ws, row, "Por cobrar (entran el mes en que se cobren)")
-    row = xlsx.table(ws, row, [Col("Entregado", 12, "date"), Col("Trabajo", 30), Col("Precio", 13, "money")],
-                     [[p.delivered_date, p.client_name, p.price] for p in report.pending], totals={2: "sum"})
+    row = xlsx.table(ws, row, [Col("Entregado", 12, "date"), Col("Trabajo", 30), Col("Precio", 13, "money"),
+                               Col("Cobro", 26)],
+                     [[p.delivered_date, p.client_name, p.price, _pending_note(p)] for p in report.pending],
+                     totals={2: "sum"})
     row = xlsx.section(ws, row, "Regalos (su costo lo absorbe cada dueño de lo que se usó)")
     xlsx.table(ws, row, [Col("Entregado", 12, "date"), Col("Trabajo", 30), Col("Costo", 13, "money"),
                          Col("Lo absorbe", 40)],

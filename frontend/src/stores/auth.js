@@ -2,6 +2,8 @@ import { defineStore } from "pinia";
 import * as authApi from "../api/auth";
 import { isSessionEndedError, refreshSession, setAccessToken, setUnauthorizedHandler } from "../api/client";
 import { extractApiError } from "../utils/validation";
+import { clearApiCache } from "../api/cache";
+import { startPrefetch, stopPrefetch } from "../api/prefetch";
 
 export const useAuthStore = defineStore("auth", {
   state: () => ({
@@ -24,7 +26,9 @@ export const useAuthStore = defineStore("auth", {
       try {
         const { access_token } = await authApi.login(username, password);
         setAccessToken(access_token);
+        clearApiCache(); // nada de la sesión anterior
         this.user = await authApi.fetchMe();
+        startPrefetch(this);
         return true;
       } catch (err) {
         this.error = extractApiError(err, "No se pudo iniciar sesión.");
@@ -39,6 +43,8 @@ export const useAuthStore = defineStore("auth", {
       } catch {
         // ignore network errors on logout
       }
+      stopPrefetch();
+      clearApiCache();
       setAccessToken(null);
       this.user = null;
     },
@@ -46,6 +52,7 @@ export const useAuthStore = defineStore("auth", {
       try {
         await refreshSession();
         this.user = await authApi.fetchMe();
+        startPrefetch(this);
       } catch (err) {
         // Solo un 401/403 cierra la sesión. Un fallo pasajero (sin red, backend despertando)
         // deja al usuario como estaba, en vez de sacarlo al login con la sesión aún válida.
@@ -59,6 +66,8 @@ export const useAuthStore = defineStore("auth", {
     },
     init() {
       setUnauthorizedHandler(() => {
+        stopPrefetch();
+        clearApiCache();
         this.user = null;
       });
       return this.tryRestoreSession();

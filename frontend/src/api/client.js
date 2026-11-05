@@ -1,5 +1,6 @@
 import axios from "axios";
 import { requestFinished, requestStarted } from "../composables/useRequestActivity";
+import { clearApiCache, createCachedGet } from "./cache";
 
 // En producción la app llama a /api en su MISMO dominio y Vercel lo reenvía al backend
 // (vercel.json). Así la cookie de sesión es "propia" del sitio: Safari/iPhone y Brave bloquean
@@ -92,8 +93,17 @@ export function refreshSession() {
   return refreshPromise;
 }
 
+// POST que solo calculan (no cambian datos): no borran la memoria de consultas. El precio
+// sugerido se recalcula mientras se escribe en el formulario de venta.
+const READ_ONLY_POSTS = ["/api/calculator/quote", "/api/auth/me/release-seen"];
+const isMutation = (config) =>
+  !!config?.method && config.method.toLowerCase() !== "get" && !READ_ONLY_POSTS.includes(config.url);
+
 client.interceptors.request.use((config) => {
-  requestStarted();
+  // La precarga en segundo plano no enciende la barra de actividad.
+  if (!config.silent) requestStarted();
+  // Un cambio (crear, editar, borrar...) deja vieja la memoria de consultas.
+  if (isMutation(config)) clearApiCache();
   if (accessToken) {
     config.headers.Authorization = `Bearer ${accessToken}`;
   }
@@ -102,13 +112,16 @@ client.interceptors.request.use((config) => {
 
 client.interceptors.response.use(
   (response) => {
-    requestFinished();
+    if (!response.config?.silent) requestFinished();
+    // Otra vez al terminar: una consulta que se respondió durante el cambio no debe quedar.
+    if (isMutation(response.config)) clearApiCache();
     return response;
   },
   async (error) => {
     // Si la petición nunca llegó a enviarse (error en el interceptor de salida) no hay nada
     // que descontar; en cualquier otro caso esta petición terminó.
-    if (error.config) requestFinished();
+    if (error.config && !error.config.silent) requestFinished();
+    if (isMutation(error.config)) clearApiCache();
     const original = error.config;
     const status = error.response?.status;
 
@@ -140,5 +153,8 @@ client.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+// Las consultas GET pasan por la memoria de la sesión (ver cache.js).
+client.get = createCachedGet(client.get.bind(client));
 
 export default client;

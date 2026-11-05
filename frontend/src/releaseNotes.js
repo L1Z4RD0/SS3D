@@ -8,6 +8,43 @@
    Textos cortos y en el idioma de los usuarios (qué pueden hacer ahora), no técnicos. */
 export const RELEASES = [
   {
+    id: "2026-11-05",
+    date: "5 de noviembre de 2026",
+    title: "Cobros con fecha y módulos que cargan al instante",
+    items: [
+      {
+        icon: "💳",
+        title: "Por cobrar: se paga al entregar",
+        text: "Un pedido Por cobrar sigue así mientras se fabrica. Al entregarlo eliges si pagó en efectivo o transferencia, o si aún no paga, hasta qué día tiene plazo.",
+      },
+      {
+        icon: "📅",
+        title: "\"Cobrar el 12 de noviembre\"",
+        text: "Los pedidos entregados sin pagar muestran cuándo cobrar (en rojo si ya venció). Cuando paguen, usa \"Registrar pago\" en el pedido: el Reparto lo cuenta en el mes en que se cobró.",
+      },
+      {
+        icon: "⚡",
+        title: "Todo carga una vez",
+        text: "Al entrar se cargan Dashboard, Calculadora y Ventas, y el resto en segundo plano. Cambiar de módulo ya no vuelve a cargar todo.",
+      },
+      {
+        icon: "🖨️",
+        title: "La venta es de quien pone la impresora",
+        text: "Ya no se elige \"Venta para\": la venta es del dueño de la impresora y \"Registrada por\" muestra quién la anotó. Si mezclas filamentos de otra cuenta, cada costo sigue siendo de su dueño.",
+      },
+      {
+        icon: "🛵",
+        title: "Delivery desde la Calculadora",
+        text: "Al calcular puedes indicar el monto del delivery y quién lo lleva; queda guardado en la venta.",
+      },
+      {
+        icon: "📱",
+        title: "Se ve bien en cualquier pantalla",
+        text: "En celular, tablet y notebook las ventas se muestran como tarjetas ordenadas y ya no se cortan botones ni columnas.",
+      },
+    ],
+  },
+  {
     id: "2026-11-03",
     date: "3 de noviembre de 2026",
     title: "Las pérdidas de pedidos cancelados ahora se devuelven",

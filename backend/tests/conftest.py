@@ -130,9 +130,10 @@ def make(db):
     return Factory(db)
 
 
-def deliver(client, headers, sale_id, today=None):
-    """Marca un pedido como Entregado (saltando pasos, con la confirmación)."""
-    body = {"status": "entregada", "skip_confirmed": True}
+def deliver(client, headers, sale_id, today=None, **extra):
+    """Marca un pedido como Entregado (saltando pasos, con la confirmación). extra: p. ej. el
+    payment_method o la payment_due_date que exige un pedido "Por cobrar"."""
+    body = {"status": "entregada", "skip_confirmed": True, **{k: str(v) for k, v in extra.items()}}
     if today is not None:
         body["today"] = str(today)
     r = client.post(f"/api/sales/{sale_id}/status", headers=headers, json=body)

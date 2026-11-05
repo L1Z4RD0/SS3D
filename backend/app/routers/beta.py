@@ -32,7 +32,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import Date, cast, func, or_
+from sqlalchemy import and_, Date, cast, func, or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -109,8 +109,11 @@ def _delivered_sales(db: Session, first: date, last: date) -> list[Sale]:
         db.query(Sale)
         .filter(
             Sale.status == STATUS_DELIVERED,
-            Sale.delivered_date >= first,
-            Sale.delivered_date <= last,
+            # Entregados en el mes, o cobrados en el mes (un "Por cobrar" de otro mes).
+            or_(
+                and_(Sale.delivered_date >= first, Sale.delivered_date <= last),
+                and_(Sale.paid_date >= first, Sale.paid_date <= last),
+            ),
             or_(Sale.user_id.in_(ids), Sale.created_by_user_id.in_(ids)),
         )
         .order_by(Sale.delivered_date, Sale.created_at)
@@ -157,6 +160,8 @@ class PartnerLine(BaseModel):
 class SplitSaleLine(BaseModel):
     id: uuid.UUID
     delivered_date: date
+    # Solo si estaba "Por cobrar": día en que se cobró (el pedido cuenta en ese mes).
+    paid_date: date | None = None
     client_name: str
     owner_username: str
     created_by_username: str | None
@@ -181,6 +186,9 @@ class PendingLine(BaseModel):
     delivered_date: date
     client_name: str
     price: Decimal
+    # Plazo para pagar y, si ya se cobró en un mes posterior, cuándo (entra en ese mes).
+    payment_due_date: date | None = None
+    paid_date: date | None = None
 
 
 class DeliveryLine(BaseModel):
@@ -384,6 +392,9 @@ def compute_split(db: Session, first: date, last: date) -> tuple[SplitDetails, S
     unassigned_delivery = Decimal(0)
 
     for sale in _delivered_sales(db, first, last):
+        delivered_here = first <= sale.delivered_date <= last
+        if not delivered_here and sale.payment_method in (UNCOLLECTED, GIFT):
+            continue  # solo llegó por la fecha de cobro, pero ya no está cobrado
         if sale.payment_method == GIFT:
             # Regalo: no entró dinero. Nada se devuelve ni se reparte; cada dueño absorbe lo suyo.
             absorbed = {}
@@ -393,10 +404,16 @@ def compute_split(db: Session, first: date, last: date) -> tuple[SplitDetails, S
             gifts.append(GiftLine(id=sale.id, delivered_date=sale.delivered_date, client_name=sale.client_name,
                                   cost=money(sale.total_cost), absorbed_by=absorbed))
             continue
-        if sale.payment_method == UNCOLLECTED:
+        # Un "Por cobrar" cuenta el mes en que se cobra (los anteriores a este cambio no tienen
+        # fecha de cobro: cuentan en el mes de la entrega, como siempre).
+        collected_on = sale.paid_date or sale.delivered_date
+        if sale.payment_method == UNCOLLECTED or collected_on > last:
             pending.append(PendingLine(id=sale.id, delivered_date=sale.delivered_date, client_name=sale.client_name,
-                                       price=sale.total_price))
+                                       price=sale.total_price, payment_due_date=sale.payment_due_date,
+                                       paid_date=sale.paid_date))
             continue
+        if collected_on < first:
+            continue  # se cobró en un mes anterior (no debería pasar: se cobra después de entregar)
 
         collected += sale.total_price
         # Delivery: lo cobrado por el envío es de quien lo llevó.
@@ -430,7 +447,7 @@ def compute_split(db: Session, first: date, last: date) -> tuple[SplitDetails, S
             refunds[name] = refunds.get(name, Decimal(0)) + oc.total
         company_cost += sale_company_cost
         sale_lines.append(SplitSaleLine(
-            id=sale.id, delivered_date=sale.delivered_date, client_name=sale.client_name,
+            id=sale.id, delivered_date=sale.delivered_date, paid_date=sale.paid_date, client_name=sale.client_name,
             owner_username=sale.owner.username,
             created_by_username=sale.created_by.username if sale.created_by else None,
             payment_method=sale.payment_method, price=sale.total_price, refunds=refunds,

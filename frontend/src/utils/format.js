@@ -52,3 +52,12 @@ export function currentMonthRange() {
   const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
   return { date_from: toLocalISODate(first), date_to: toLocalISODate(last) };
 }
+
+// "12 de noviembre" (con el año solo si no es el actual).
+export function formatLongDate(value) {
+  if (!value) return "-";
+  const d = new Date(value.length === 10 ? `${value}T00:00:00` : value);
+  const opts = { day: "numeric", month: "long" };
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
+  return d.toLocaleDateString("es-CL", opts);
+}

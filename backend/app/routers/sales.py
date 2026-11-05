@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.constants import ELECTRICITY_RATE, LABOR_RATE_PER_HOUR, NO_SALE_SOURCE, SALE_SOURCES
 from app.database import get_db
-from app.dependencies import get_current_user, is_watcher, readable_user_ids
+from app.dependencies import get_current_user, is_company, is_watcher, readable_user_ids
 from app.models.sale import (
     ORDER_STATUSES,
     STATUS_CANCELLED,
@@ -26,7 +26,9 @@ from app.models.sale_plate import SalePlate
 from app.schemas.calculator import FilamentUsageInput, PlateInput, SupplyUsageInput
 from app.schemas.sale import (
     GIFT_PAYMENT_METHOD,
+    UNPAID_PAYMENT_METHOD,
     AddPlateRequest,
+    RegisterPaymentRequest,
     DeliveryRequest,
     CalendarOrder,
     CancelOrderRequest,
@@ -62,12 +64,15 @@ from app.services.sale_plates import (
 from app.services.order_status import (
     LOCKED_PRODUCTION_STATUSES,
     OPEN_STATUSES,
+    PAYMENT_LABELS,
     STATUS_LABELS,
     change_status,
+    long_date,
     record_status,
     start_as_pending,
 )
 from app.services.sale_builder import (
+    sale_owner_from_printer,
     apply_filaments_to_sale,
     build_cost_breakdown,
     can_edit_sale,
@@ -347,6 +352,7 @@ def calendar_orders(
             delivered_date=s.delivered_date,
             price=s.total_price,
             payment_method=s.payment_method,
+            payment_due_date=s.payment_due_date,
             printer_name=s.printer.name,
             owner_id=s.user_id,
             owner_username=s.owner.username,
@@ -407,9 +413,9 @@ def _create_sale(
 ) -> tuple[Sale, list]:
     """Registra una venta (sin confirmar la transacción). La usan Nueva venta y Rehacer un
     pedido con la pieza dañada, así ambos descuentan inventario y calculan costos igual."""
-    # La venta usa solo el inventario de un dueño: el propio usuario, o el usuario
-    # asignado que eligió el observador. Así los inventarios nunca se mezclan.
-    owner_id = resolve_sale_owner(db, current_user, payload.owner_id)
+    # La venta es del dueño de la impresora (un observador o la Empresa la registran con la
+    # impresora de un socio: la venta es de ese socio). payload.owner_id ya no se usa.
+    owner_id = sale_owner_from_printer(db, current_user, payload.printer_id)
     # Un socio vende solo con lo suyo. Si vende la Empresa, la impresora, los filamentos,
     # los insumos y las planchas pueden ser de cualquiera de los socios que observa o
     # propios (la Empresa no tiene impresora): cada costo queda a cuenta de su dueño.
@@ -537,6 +543,16 @@ def update_sale(
         changes["price"] = Decimal(0)
         sale.risk_percent = sale.risk_amount = 0  # un regalo no cobra reserva por riesgo
 
+    # Pedido entregado "Por cobrar" al que se le cambia el pago: queda cobrado hoy (el Reparto
+    # lo cuenta en este mes). Si vuelve a "Por cobrar", deja de estar cobrado.
+    new_method = changes.get("payment_method")
+    if sale.status == STATUS_DELIVERED and new_method and new_method != sale.payment_method:
+        if sale.payment_method == UNPAID_PAYMENT_METHOD:
+            sale.paid_date = date.today()
+            sale.payment_due_date = None
+        elif new_method == UNPAID_PAYMENT_METHOD:
+            sale.paid_date = None
+
     # ---- Reglas según el estado del pedido ----
     if sale.status == STATUS_CANCELLED:
         raise HTTPException(status.HTTP_409_CONFLICT, "Un pedido cancelado no se puede editar.")
@@ -581,6 +597,9 @@ def update_sale(
             _set_price(sale, changes["price"])
             sale.profit = money(sale.base_price - sale.total_cost)
             sale.margin_percent = calculate_margin_percent(sale.base_price, sale.total_cost)
+        if not from_warehouse and is_company(sale.created_by) and sale.user_id != sale.printer.user_id:
+            # Venta de la Empresa que quedó a nombre de otro: es del dueño de la impresora.
+            sale.user_id = sale.printer.user_id
         exhausted_filaments = []
     else:
         exhausted_filaments = _update_full(db, sale, payload, changes, current_user)
@@ -612,7 +631,8 @@ def update_sale(
 def _update_full(db: Session, sale: Sale, payload: SaleUpdateRequest, changes: dict, current_user: User):
     """Edición completa (Pendiente y Entregada): igual que siempre, devuelve lo que usaba
     la venta y vuelve a descontar lo nuevo, recalculando costos."""
-    # El dueño de una venta no cambia al editarla: sus recursos siguen siendo los suyos.
+    # Los recursos posibles son los mismos que al crearla. Una venta de la Empresa cambia de
+    # dueño solo si se cambia la impresora por la de otro socio (ver abajo).
     owner_ids = sale_resource_owner_ids(db, sale.user_id, sale.created_by)
 
     old_printer = sale.printer
@@ -641,6 +661,9 @@ def _update_full(db: Session, sale: Sale, payload: SaleUpdateRequest, changes: d
 
     # Mismos dueños posibles que al crearla (la Empresa: impresora de cualquier socio).
     printer = resolve_printer(db, current_user, new_printer_id, owner_ids)
+    if is_company(sale.created_by):
+        # La venta es del dueño de la impresora: si se cambia por la de otro socio, cambia de dueño.
+        sale.user_id = printer.user_id
     resolved_supplies = (
         resolve_supplies(db, current_user, new_supplies, owner_ids)
         if new_supplies is not None
@@ -721,7 +744,9 @@ def change_sale_status(
     sale = _get_editable_sale(db, sale_id, current_user)
     previous = sale.status
     path = change_status(
-        db, sale, payload.status, current_user, skip_confirmed=payload.skip_confirmed, today=payload.today or date.today()
+        db, sale, payload.status, current_user, skip_confirmed=payload.skip_confirmed,
+        today=payload.today or date.today(), payment_method=payload.payment_method,
+        payment_due_date=payload.payment_due_date,
     )
     log_event(
         db,
@@ -730,6 +755,45 @@ def change_sale_status(
         entity_type="sale",
         entity_id=sale.id,
         details={"from": previous, "to": sale.status, "steps": path, "owner_id": str(sale.user_id)},
+        ip_address=request.client.host if request.client else None,
+    )
+    db.commit()
+    db.expire_all()
+    background_tasks.add_task(sync_order, sale.id)
+    return to_sale_response(_get_listed_sale(db, sale.id, current_user), viewer=current_user, include_history=True)
+
+
+@router.post("/{sale_id}/payment", response_model=SaleResponse)
+def register_payment(
+    sale_id: uuid.UUID,
+    payload: RegisterPaymentRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Cobro de un pedido entregado que quedó "Por cobrar". El Reparto lo cuenta en el mes en
+    que se cobró."""
+    sale = _get_editable_sale(db, sale_id, current_user)
+    if sale.status != STATUS_DELIVERED or sale.payment_method != UNPAID_PAYMENT_METHOD:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Solo se registra el pago de un pedido entregado Por cobrar.")
+    paid = payload.paid_date or date.today()
+    if sale.delivered_date is not None and paid < sale.delivered_date:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "La fecha de pago no puede ser anterior a la entrega.")
+    sale.payment_method = payload.payment_method
+    sale.paid_date = paid
+    record_status(db, sale, STATUS_DELIVERED, current_user,
+                  f"Pago registrado: {PAYMENT_LABELS.get(payload.payment_method, payload.payment_method)}"
+                  f" el {long_date(paid)}")
+    log_event(
+        db,
+        user_id=current_user.id,
+        event_type="SALE_PAYMENT_REGISTERED",
+        entity_type="sale",
+        entity_id=sale.id,
+        details={"payment_method": payload.payment_method, "paid_date": str(paid),
+                 "due_date": str(sale.payment_due_date) if sale.payment_due_date else None,
+                 "owner_id": str(sale.user_id)},
         ip_address=request.client.host if request.client else None,
     )
     db.commit()

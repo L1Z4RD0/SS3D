@@ -13,6 +13,10 @@ PAYMENT_METHODS = ("efectivo", "transferencia", "debito", "credito", "por_cobrar
 # Pagar "por cortesía" es regalar: el pedido se registra con precio $0 y sus costos
 # (material, horas, insumos) quedan igual, como pérdida. El servidor fuerza el $0.
 GIFT_PAYMENT_METHOD = "cortesia"
+# Pedido entregado que el cliente aún no paga.
+UNPAID_PAYMENT_METHOD = "por_cobrar"
+# Formas en que se puede cobrar un pedido "Por cobrar".
+PAID_METHODS = ("efectivo", "transferencia", "debito", "credito")
 
 
 class SaleCreateRequest(BaseModel):
@@ -78,6 +82,18 @@ class SaleStatusChangeRequest(BaseModel):
     skip_confirmed: bool = False
     # Día local del usuario (para la fecha real de entrega). Si no viene, hoy del servidor.
     today: date | None = None
+    # Al entregar un pedido "Por cobrar" es obligatorio uno de los dos: cómo pagó, o (si aún
+    # no paga) hasta qué día tiene plazo para pagar.
+    payment_method: str | None = Field(default=None, pattern="^(" + "|".join(PAID_METHODS) + ")$")
+    payment_due_date: date | None = None
+
+
+class RegisterPaymentRequest(BaseModel):
+    """Cobro de un pedido entregado que quedó "Por cobrar"."""
+
+    payment_method: str = Field(pattern="^(" + "|".join(PAID_METHODS) + ")$")
+    # Día en que se cobró (el Reparto lo cuenta en ese mes). Si no viene, hoy del servidor.
+    paid_date: date | None = None
 
 
 class CancelOrderRequest(BaseModel):
@@ -134,6 +150,7 @@ class CalendarOrder(BaseModel):
     delivered_date: date | None
     price: Decimal
     payment_method: str
+    payment_due_date: date | None = None
     printer_name: str
     owner_id: uuid.UUID
     owner_username: str
@@ -250,6 +267,9 @@ class SaleResponse(BaseModel):
     margin_percent: Decimal
     payment_method: str
     sale_source: str | None = None
+    # "Por cobrar": plazo para pagar (si se entregó sin pagar) y día en que se cobró.
+    payment_due_date: date | None = None
+    paid_date: date | None = None
     notes: str | None
     # Ciclo de vida del pedido
     status: str

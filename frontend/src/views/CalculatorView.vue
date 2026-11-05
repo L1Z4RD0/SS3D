@@ -5,6 +5,7 @@ import { DEFAULT_RISK_LEVEL, RISK_LEVELS } from "../api/calculator";
 import * as printersApi from "../api/printers";
 import * as inventoryApi from "../api/inventory";
 import * as quotesApi from "../api/quotes";
+import * as betaApi from "../api/beta";
 import { PAYMENT_METHODS, GIFT_PAYMENT_METHOD } from "../api/sales";
 import { BUSINESS_NAME, BUSINESS_LOGO_URL } from "../utils/business";
 import { formatCurrency, todayISO } from "../utils/format";
@@ -46,8 +47,17 @@ const form = reactive({
   print_hours: null,
   postprocess_hours: 0,
   shipping_cost: 0,
+  // Quién lleva el delivery (opcional): se guarda en la venta y se le devuelve en el Reparto.
+  delivery_by: "",
   risk_level: DEFAULT_RISK_LEVEL,
 });
+
+// Personas sugeridas para "¿Quién lo lleva?" (los socios; se puede escribir otro nombre).
+const deliveryPeople = ref([]);
+betaApi
+  .getBetaAccess()
+  .then((a) => (deliveryPeople.value = a.partners.filter((p) => p !== "Caja")))
+  .catch(() => {});
 
 /* -------- Filament selection (single vs multicolor) -------- */
 const isMulticolor = ref(false);
@@ -386,10 +396,9 @@ const manualPriceBreakdown = computed(() => {
    recursos de varios usuarios, pero para guardar como venta todo debe ser del dueño de
    la impresora. Para los demás roles todo es propio y esto no aplica. */
 const printerOwnerId = computed(() => printers.value.find((p) => p.id === form.printer_id)?.owner_id || null);
-// La Empresa no tiene impresora: usa la de un socio y elige a nombre de quién queda la venta
-// (por defecto, la Empresa). Para los demás, la venta es del dueño de la impresora.
-const companySaleOwnerId = ref("");
-const saleOwnerId = computed(() => (auth.isCompany ? companySaleOwnerId.value || null : printerOwnerId.value));
+// La venta es siempre del dueño de la impresora, también si la registra la Empresa (que no
+// tiene impresora: usa la de un socio). Quién la registró queda aparte.
+const saleOwnerId = computed(() => printerOwnerId.value);
 // Dueños distintos en la cotización (solo la Empresa puede guardarla así): se avisa y se
 // confirma al guardar, para que no haya confusiones con a quién va cada costo.
 const mixedOwnerNames = computed(() => [...new Set(resourceOwners.value.map((r) => r.owner).filter(Boolean))]);
@@ -424,9 +433,6 @@ function openSaveModal(scenario) {
       : null;
   saveError.value = "";
   saveSuccess.value = "";
-  if (auth.isCompany && !companySaleOwnerId.value) {
-    companySaleOwnerId.value = observedUsers.value.find((u) => u.is_self)?.id || auth.user?.id || "";
-  }
   showSaveModal.value = true;
 }
 
@@ -465,8 +471,8 @@ async function confirmSaveAsSale() {
       payment_method: saveForm.payment_method,
       sale_source: saveForm.sale_source,
       notes: saveForm.notes || null,
+      delivery_by: Number(form.shipping_cost) ? form.delivery_by?.trim() || null : null,
       chosen_margin_percent: selectedScenario.value.margin_percent,
-      ...(auth.isCompany && companySaleOwnerId.value ? { owner_id: companySaleOwnerId.value } : {}),
       // Regalo: el servidor lo registra en $0 e ignora escenario y precio manual.
       manual_price: !saveIsGift.value && useManualPrice.value ? Number(manualPrice.value) : null,
     });
@@ -671,6 +677,7 @@ function resetForm() {
   form.print_hours = null;
   form.postprocess_hours = 0;
   form.shipping_cost = 0;
+  form.delivery_by = "";
   form.risk_level = DEFAULT_RISK_LEVEL;
   isMulticolor.value = false;
   singleFilamentId.value = "";
@@ -784,7 +791,7 @@ onMounted(() => {
 
           <div v-else class="field">
             <label>Filamentos usados</label>
-            <div class="flex gap-2">
+            <div class="flex gap-2 add-row">
               <button
                 type="button"
                 class="btn btn-secondary"
@@ -828,9 +835,24 @@ onMounted(() => {
               <label>Horas de postprocesado</label>
               <input v-model.number="form.postprocess_hours" type="number" min="0" step="0.1" />
             </div>
-            <div class="field" style="grid-column: span 2">
+            <div class="field">
               <label>Delivery (CLP)</label>
               <input v-model.number="form.shipping_cost" type="number" min="0" step="1" />
+              <span class="field-hint">Lo paga el cliente y se le devuelve a quien lo lleve.</span>
+            </div>
+            <div class="field">
+              <label>¿Quién lo lleva? (opcional)</label>
+              <input
+                v-model="form.delivery_by"
+                list="calc-delivery-people"
+                maxlength="60"
+                placeholder="Ej: Omar"
+                :disabled="!Number(form.shipping_cost)"
+              />
+              <datalist id="calc-delivery-people">
+                <option v-for="p in deliveryPeople" :key="p" :value="p" />
+              </datalist>
+              <span v-if="!Number(form.shipping_cost)" class="field-hint">Primero indica el monto del delivery.</span>
             </div>
           </div>
 
@@ -846,7 +868,7 @@ onMounted(() => {
 
           <div class="field">
             <label>Consumibles usados</label>
-            <div class="flex gap-2">
+            <div class="flex gap-2 add-row">
               <select v-model="newSupplyId" style="flex: 1">
                 <option value="" disabled>Selecciona un insumo</option>
                 <option v-for="s in supplies" :key="s.id" :value="s.id">{{ supplyLabel(s) }}</option>
@@ -1065,29 +1087,22 @@ onMounted(() => {
             filamentos y los insumos deben ser del mismo usuario<template v-if="auth.isCompany"> (o de la Empresa)</template>.
           </div>
           <template v-else-if="auth.isCompany">
-            <div class="field" style="margin-bottom: 10px">
-              <label>Venta a nombre de</label>
-              <select v-model="companySaleOwnerId" required>
-                <option v-for="u in observedUsers" :key="u.id" :value="u.id">
-                  {{ u.is_self ? `${u.username} (Empresa)` : u.username }}
-                </option>
-              </select>
-            </div>
             <div class="alert" :class="companyMixed ? 'alert-warning' : 'alert-info'" style="margin-bottom: 14px">
-              <template v-if="companyMixed">
-                <strong>⚠️ Materiales de {{ mixedOwnerNames.length }} dueños distintos:</strong> {{ mixedOwnersText }}.
-              </template>
-              La venta queda a nombre de <strong>{{ ownerName(saleOwnerId) || "la Empresa" }}</strong>, registrada por ti.
-              <template v-if="printerOwnerId">
-                La impresora es de <strong>{{ ownerName(printerOwnerId) }}</strong>: la depreciación y la luz quedan a su
-                cuenta.
-              </template>
-              Se descuenta del inventario de cada dueño y cada costo queda a cuenta de quien puso el recurso.
+              <span>
+                <template v-if="companyMixed">
+                  <strong>⚠️ Materiales de {{ mixedOwnerNames.length }} dueños distintos:</strong> {{ mixedOwnersText }}.
+                </template>
+                La venta es de <strong>{{ ownerName(saleOwnerId) || "el dueño de la impresora" }}</strong> (dueño de la
+                impresora) y queda registrada por ti; la depreciación y la luz quedan a su cuenta. Se descuenta del
+                inventario de cada dueño y cada costo queda a cuenta de quien puso el recurso.
+              </span>
             </div>
           </template>
           <div v-else class="alert alert-info" style="margin-bottom: 14px">
-            Venta para <strong>{{ ownerName(saleOwnerId) }}</strong>: se descuenta de su inventario y quedará registrada
-            como hecha por ti ({{ auth.user?.username }}).
+            <span>
+              Venta de <strong>{{ ownerName(saleOwnerId) }}</strong> (dueño de la impresora): se descuenta de su inventario
+              y quedará registrada como hecha por ti ({{ auth.user?.username }}).
+            </span>
           </div>
         </template>
         <div class="form-grid">
@@ -1104,6 +1119,9 @@ onMounted(() => {
             <select v-model="saveForm.payment_method">
               <option v-for="pm in PAYMENT_METHODS" :key="pm.value" :value="pm.value">{{ pm.label }}</option>
             </select>
+            <span v-if="saveForm.payment_method === 'por_cobrar'" class="field-hint">
+              Se mantiene Por cobrar mientras se fabrica. Al entregarlo se elige cómo pagó o hasta cuándo tiene plazo.
+            </span>
           </div>
           <div class="field">
             <label>Trabajo</label>

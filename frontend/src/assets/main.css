@@ -172,6 +172,23 @@ button {
   flex-wrap: wrap;
 }
 
+/* Fila "elegir + cantidad + Agregar" (filamentos, insumos): en pantallas angostas el selector
+   ocupa su propia línea en vez de quedar aplastado. */
+.add-row {
+  flex-wrap: wrap;
+}
+.add-row > select,
+.add-row > button:first-child {
+  flex: 1 1 180px !important;
+  min-width: 0;
+}
+
+/* Botones del encabezado de una tarjeta: en pantallas angostas bajan a otra línea en vez de
+   quedar cortados (ej. "+ Nuevo filamento" en Inventario). */
+.card-header .flex {
+  flex-wrap: wrap;
+}
+
 .card-header h2, .card-header h3 {
   font-size: 1.05rem;
 }

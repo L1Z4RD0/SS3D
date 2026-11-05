@@ -23,6 +23,7 @@ import HoursMinutesInput from "../components/HoursMinutesInput.vue";
 import AddPlateModal from "../components/AddPlateModal.vue";
 import { platesPayload, platesError } from "../utils/plates";
 import OrderStatusModal from "../components/OrderStatusModal.vue";
+import { dueInfo, isUnpaid } from "../utils/payment";
 import { STATUS_LABELS, NEXT_ACTION, OPEN_STATUSES, statusClass, isOverdue } from "../utils/orderStatus";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import { showToast } from "../composables/useToast";
@@ -311,7 +312,6 @@ const emptyForm = () => ({
   delivered_date: "",
   client_name: "",
   buyer_name: "",
-  owner_id: "", // solo observador: de quién es el inventario de esta venta
   printer_id: "",
   print_hours: 0,
   postprocess_hours: 0,
@@ -339,15 +339,21 @@ const productionLocked = computed(
 );
 
 /* -------- Inventario disponible para la venta --------
-   Usuario normal: todo lo suyo. Observador: solo lo del usuario elegido en "Venta para". */
-const saleOwnerId = computed(() => (auth.isWatcher ? form.owner_id : null));
+   La venta es del dueño de la impresora (no de quien la registra). Usuario normal: todo lo
+   suyo. Observador: elige la impresora de cualquiera de sus usuarios y usa solo lo de ese
+   dueño. La Empresa además puede mezclar filamentos e insumos de otras cuentas (material
+   mixto: cada costo queda a cuenta de su dueño). */
+const saleOwnerId = computed(() =>
+  auth.isWatcher ? printers.value.find((p) => p.id === form.printer_id)?.owner_id || null : null
+);
+const saleOwnerName = computed(() => (saleOwnerId.value ? ownerName(saleOwnerId.value) : ""));
 function ownedBySaleOwner(item) {
   return !auth.isWatcher || item.owner_id === saleOwnerId.value;
 }
 // La Empresa puede combinar materiales de todos los socios que observa y los propios (ej.
 // impresora de Diego + filamento de Sntg). Cada costo queda a cuenta de su dueño.
 function usableInSale(item) {
-  return ownedBySaleOwner(item) || (auth.isCompany && !!saleOwnerId.value);
+  return auth.isCompany || ownedBySaleOwner(item);
 }
 
 // De quién es cada recurso de la venta. Si hay más de un dueño se avisa (y se confirma al
@@ -378,9 +384,11 @@ const mixedOwnersText = computed(() =>
   resourceOwnerSummary.value.map((o) => `${o.name} (${o.what.join(", ")})`).join(" · ")
 );
 const ownerPrinters = computed(() => printers.value.filter(ownedBySaleOwner));
-// Impresora principal de la venta. La Empresa no tiene impresora propia: puede usar la de
-// cualquier socio (la depreciación y la luz quedan a cuenta del dueño de esa impresora).
-const salePrinters = computed(() => (auth.isCompany ? printers.value.filter(usableInSale) : ownerPrinters.value));
+// Impresora principal de la venta: un observador (y la Empresa, que no tiene impresora
+// propia) ve las de todos sus usuarios; la que elija define de quién es la venta.
+const salePrinters = computed(() => (auth.isWatcher ? printers.value : ownerPrinters.value));
+// Un observador común no mezcla inventarios: sin impresora elegida aún no sabe de quién usar.
+const needsPrinterFirst = computed(() => auth.isWatcher && !auth.isCompany && !saleOwnerId.value);
 // La Empresa mezcla su filamento con el del socio: el selector muestra de quién es cada uno.
 const pickerOwnerNames = computed(() =>
   auth.isCompany ? Object.fromEntries(observedUsers.value.map((u) => [u.id, u.username])) : {}
@@ -388,14 +396,15 @@ const pickerOwnerNames = computed(() =>
 const ownerFilaments = computed(() => filaments.value.filter(usableInSale));
 const ownerSupplies = computed(() => supplies.value.filter(usableInSale));
 
-// Al cambiar de usuario se vacía lo elegido: eran recursos del inventario anterior.
-function onOwnerChange() {
-  form.printer_id = "";
+// Un observador común que cambia a la impresora de otro usuario: se vacían los filamentos e
+// insumos elegidos (eran del inventario del dueño anterior). La Empresa puede mezclarlos.
+watch(saleOwnerId, (now, before) => {
+  if (auth.isCompany || !before || now === before || editingId.value) return;
   filamentRows.value = [];
   supplyRows.value = [];
   newFilamentId.value = "";
   newSupplyId.value = "";
-}
+});
 
 /* -------- Precio: el sistema sugiere, el usuario decide --------
    Con los datos del trabajo se calculan en vivo los mismos escenarios de la
@@ -624,8 +633,6 @@ function openCreate() {
   editingId.value = null;
   editingSale.value = null;
   Object.assign(form, emptyForm());
-  // Con un solo usuario asignado no hay nada que elegir.
-  if (auth.isWatcher && observedUsers.value.length === 1) form.owner_id = observedUsers.value[0].id;
   supplyRows.value = [];
   filamentRows.value = [];
   extraPlates.value = [];
@@ -641,8 +648,6 @@ function openEdit(sale) {
     sale_date: sale.sale_date,
     client_name: sale.client_name,
     buyer_name: sale.buyer_name || "",
-    // El dueño de una venta no cambia al editarla.
-    owner_id: sale.owner_id,
     printer_id: sale.printer_id,
     print_hours: Number(sale.print_hours),
     postprocess_hours: Number(sale.postprocess_hours),
@@ -691,7 +696,6 @@ function buildPayload() {
     ...orderData,
     sale_date: form.sale_date,
     // Solo al crear y solo el observador: el dueño no se cambia al editar.
-    ...(auth.isWatcher && !editingId.value ? { owner_id: form.owner_id } : {}),
     ...buildJobPayload(),
   };
   // Al editar, las planchas no viajan: se agregan o quitan desde el detalle de costos.
@@ -719,7 +723,6 @@ function validateJobInputs() {
 }
 
 function validateSaleForm() {
-  if (auth.isWatcher && !form.owner_id) return "Selecciona el usuario para el que registras la venta.";
   // Obligatoria en las ventas nuevas; las antiguas pueden seguir sin fuente.
   if (!editingId.value && !form.sale_source) return "Elige la fuente de venta: Instagram, Facebook o Personal.";
   if (!form.printer_id) return "Selecciona una impresora.";
@@ -814,6 +817,10 @@ async function handleDelete(sale) {
 
 /* -------- Estados del pedido -------- */
 const statusModalSaleId = ref(null);
+const statusModalDelivers = ref(false);
+watch(statusModalSaleId, (id) => {
+  if (!id) statusModalDelivers.value = false;
+});
 // Cambio desde el detalle del pedido. Si se canceló y se rehízo, se muestra el pedido nuevo.
 async function onOrderChanged(s) {
   if (s?.redone_as_id) {
@@ -832,6 +839,12 @@ const advancingId = ref(null);
 async function advance(sale) {
   const next = NEXT_ACTION[sale.status];
   if (!next) return;
+  if (next.status === "entregada" && isUnpaid(sale)) {
+    // "Por cobrar": se entrega desde el detalle, donde se elige cómo pagó o hasta cuándo tiene plazo.
+    statusModalDelivers.value = true;
+    statusModalSaleId.value = sale.id;
+    return;
+  }
   if (next.status === "entregada") {
     const ok = await confirmAction({
       title: "Entregar pedido",
@@ -1001,16 +1014,16 @@ onMounted(async () => {
         <p>Ajusta los filtros o crea una venta nueva.</p>
       </div>
       <template v-else>
-        <div class="table-wrap">
-          <table>
+        <div class="table-wrap sales-table-wrap">
+          <table class="sales-table">
             <thead>
               <tr>
                 <th><button type="button" class="th-sort" :class="{ on: sort.by === 'fecha' }" @click="sortBy('fecha')">Pedido <span>{{ sortArrow("fecha") }}</span></button></th>
                 <th>Estado</th>
                 <th><button type="button" class="th-sort" :class="{ on: sort.by === 'cliente' }" @click="sortBy('cliente')">Cliente <span>{{ sortArrow("cliente") }}</span></button></th>
-                <th v-if="auth.isWatcher">Inventario de</th>
+                <th v-if="auth.isWatcher" class="col-owner">Venta de</th>
                 <th>Registrada por</th>
-                <th>Impresora</th>
+                <th class="col-printer">Impresora</th>
                 <th v-for="col in MONEY_COLUMNS" :key="col.by" class="text-right">
                   <button type="button" class="th-sort" :class="{ on: sort.by === col.by }" @click="sortBy(col.by)">
                     <span>{{ sortArrow(col.by) }}</span> {{ col.label }}
@@ -1022,12 +1035,12 @@ onMounted(async () => {
             </thead>
             <tbody>
               <template v-for="s in sales" :key="s.id">
-              <tr :class="{ 'row-expanded': expandedCostId === s.id, 'row-flash': flashedId === s.id }">
-                <td>
-                  {{ formatDate(s.sale_date) }}
+              <tr class="sale-row" :class="{ 'row-expanded': expandedCostId === s.id, 'row-flash': flashedId === s.id }">
+                <td class="c-date" data-label="Pedido">
+                  <span class="nowrap">{{ formatDate(s.sale_date) }}</span>
                   <div class="text-sm" :class="isOverdue(s, today) ? 'overdue-text' : 'text-muted'">{{ deliveryLabel(s) }}</div>
                 </td>
-                <td>
+                <td class="c-status">
                   <div class="flex items-center gap-2" style="flex-wrap: wrap">
                     <span class="badge" :class="statusClass(s.status)">{{ STATUS_LABELS[s.status] }}</span>
                     <span v-if="isOverdue(s, today)" class="badge badge-overdue">Atrasado</span>
@@ -1042,7 +1055,7 @@ onMounted(async () => {
                     {{ NEXT_ACTION[s.status].label }}
                   </button>
                 </td>
-                <td>
+                <td class="c-client">
                   <strong>{{ s.client_name }}</strong>
                   <span v-if="s.warehouse_item_id" class="badge piece-en_almacen" style="margin-left: 6px">Pieza del Almacén</span>
                   <span v-if="s.payment_method === GIFT_PAYMENT_METHOD" class="badge badge-gift" style="margin-left: 6px">🎁 Regalo</span>
@@ -1053,16 +1066,20 @@ onMounted(async () => {
                     :title="`Costos: ${s.cost_by_owner.map((o) => o.username).join(', ')}`"
                   >Materiales mixtos</span>
                   <div v-if="s.buyer_name" class="text-muted text-sm">{{ s.buyer_name }}</div>
+                  <!-- Notebooks: la impresora (y de quién es la venta) van aquí para que la tabla quepa. -->
+                  <div class="text-muted text-sm compact-only">
+                    🖨️ {{ s.printer_name }}<template v-if="auth.isWatcher"> · venta de {{ s.owner_username }}</template>
+                  </div>
                 </td>
-                <td v-if="auth.isWatcher">{{ s.owner_username }}</td>
-                <td>
+                <td v-if="auth.isWatcher" class="c-owner" data-label="Venta de">{{ s.owner_username }}</td>
+                <td class="c-seller" data-label="Registrada por">
                   <span class="seller-tag" :class="{ 'is-other': s.created_by_user_id !== s.owner_id }">
                     {{ sellerLabel(s) }}
                   </span>
                 </td>
-                <td>{{ s.printer_name }}</td>
-                <td class="text-right mono">{{ formatCurrency(s.price) }}</td>
-                <td class="text-right">
+                <td class="c-printer" data-label="Impresora">{{ s.printer_name }}</td>
+                <td class="text-right mono c-money c-price" data-label="Precio">{{ formatCurrency(s.price) }}</td>
+                <td class="text-right c-money c-cost" data-label="Costo">
                   <button
                     type="button"
                     class="cost-toggle mono"
@@ -1076,7 +1093,7 @@ onMounted(async () => {
                   </button>
                 </td>
                 <!-- Un cancelado no dejó ganancia: se muestra su pérdida (si la hubo). -->
-                <td v-if="s.status === 'cancelado'" class="text-right mono">
+                <td v-if="s.status === 'cancelado'" class="text-right mono c-money c-profit" data-label="Pérdida">
                   <span v-if="Number(s.loss_amount) > 0" style="color: var(--danger)" title="Pérdida por la cancelación">
                     −{{ formatCurrency(s.loss_amount) }}
                   </span>
@@ -1085,18 +1102,21 @@ onMounted(async () => {
                   </div>
                   <span v-else class="text-muted">—</span>
                 </td>
-                <td v-else class="text-right mono" :style="{ color: Number(s.profit) < 0 ? 'var(--danger)' : 'var(--success)' }">
+                <td v-else class="text-right mono c-money c-profit" data-label="Ganancia" :style="{ color: Number(s.profit) < 0 ? 'var(--danger)' : 'var(--success)' }">
                   {{ formatCurrency(s.profit) }}
                 </td>
-                <td class="text-right">{{ s.status === "cancelado" ? "—" : formatPercent(s.margin_percent) }}</td>
-                <td>
+                <td class="text-right c-money c-margin" data-label="Margen">{{ s.status === "cancelado" ? "—" : formatPercent(s.margin_percent) }}</td>
+                <td class="c-pay" data-label="Pago">
                   <span class="badge badge-neutral">{{ paymentLabel(s.payment_method) }}</span>
+                  <div v-if="dueInfo(s, today)" class="due-tag" :class="{ 'is-overdue': dueInfo(s, today).overdue }">
+                    {{ dueInfo(s, today).text }}
+                  </div>
                   <div v-if="s.sale_source" class="source-tag" :style="{ '--source-color': saleSourceInfo(s.sale_source).color }">
                     <Icon :name="saleSourceInfo(s.sale_source).icon" :size="12" />
                     {{ saleSourceInfo(s.sale_source).label }}
                   </div>
                 </td>
-                <td class="text-right">
+                <td class="text-right c-actions">
                   <div class="flex gap-2" style="justify-content: flex-end">
                     <button class="btn btn-icon btn-ghost" title="Estado y línea de tiempo" @click="statusModalSaleId = s.id">
                       <Icon name="history" :size="16" />
@@ -1204,25 +1224,18 @@ onMounted(async () => {
     <Modal persistent v-if="showModal" :title="editingId ? 'Editar venta' : 'Nueva venta'" width="680px" @close="showModal = false">
       <form @submit.prevent="handleSubmit">
         <div v-if="editingSale" class="alert alert-info" style="margin-bottom: 14px">
-          Inventario de <strong>{{ editingSale.owner_username }}</strong> · Registrada por
+          Venta de <strong>{{ editingSale.owner_username }}</strong> · Registrada por
           <strong>{{ sellerLabel(editingSale) }}</strong>
         </div>
-        <div v-else-if="auth.isWatcher" class="field" style="margin-bottom: 14px">
-          <label>Venta para (usuario dueño del inventario)</label>
-          <select v-model="form.owner_id" required @change="onOwnerChange">
-            <option value="" disabled>Selecciona un usuario</option>
-            <option v-for="u in observedUsers" :key="u.id" :value="u.id">
-              {{ u.is_self ? `${u.username} (Empresa)` : u.username }}
-            </option>
-          </select>
-          <span v-if="auth.isCompany" class="field-hint">
-            La venta queda a nombre de este usuario. Puedes usar la impresora, los filamentos y los insumos de
-            cualquier socio o de la Empresa: cada costo queda a cuenta de su dueño (la depreciación y la luz, del dueño
-            de la impresora) y se descuenta de su inventario.
+        <div v-else-if="auth.isWatcher" class="alert alert-info" style="margin-bottom: 14px">
+          <span v-if="auth.isCompany">
+            La venta es del <strong>dueño de la impresora</strong> que elijas y queda registrada por ti. Puedes usar
+            filamentos e insumos de cualquier socio o de la Empresa (material mixto): cada costo queda a cuenta de su
+            dueño y se descuenta de su inventario.
           </span>
-          <span v-else class="field-hint">
-            Solo se usan la impresora, los filamentos y los insumos de este usuario. La venta aparecerá en su registro
-            indicando que la hiciste tú ({{ auth.user?.username }}).
+          <span v-else>
+            La venta es del <strong>dueño de la impresora</strong> que elijas y solo usa su inventario. Aparecerá en su
+            registro indicando que la hiciste tú ({{ auth.user?.username }}).
           </span>
         </div>
         <div v-if="fromWarehouse" class="alert alert-warning" style="margin-bottom: 14px">
@@ -1254,6 +1267,9 @@ onMounted(async () => {
             <select v-model="form.payment_method">
               <option v-for="pm in PAYMENT_METHODS" :key="pm.value" :value="pm.value">{{ pm.label }}</option>
             </select>
+            <span v-if="form.payment_method === 'por_cobrar'" class="field-hint">
+              Se mantiene Por cobrar mientras se fabrica. Al entregarlo se elige cómo pagó o hasta cuándo tiene plazo.
+            </span>
           </div>
           <div class="field">
             <label>Trabajo</label>
@@ -1266,12 +1282,15 @@ onMounted(async () => {
           <SaleSourcePicker v-model="form.sale_source" :required="!editingId" class="form-span" />
           <div class="field">
             <label>Impresora</label>
-            <select v-model="form.printer_id" required :disabled="productionLocked || (auth.isWatcher && !form.owner_id)">
-              <option value="" disabled>{{ auth.isWatcher && !form.owner_id ? "Primero elige el usuario" : "Selecciona" }}</option>
+            <select v-model="form.printer_id" required :disabled="productionLocked">
+              <option value="" disabled>Selecciona</option>
               <option v-for="p in salePrinters" :key="p.id" :value="p.id">
-                {{ auth.isCompany ? withOwner(p.name, p.owner_id) : p.name }}
+                {{ auth.isWatcher ? withOwner(p.name, p.owner_id) : p.name }}
               </option>
             </select>
+            <span v-if="auth.isWatcher && saleOwnerName" class="field-hint">
+              La venta es de <strong>{{ saleOwnerName }}</strong> (dueño de la impresora). Queda registrada por ti.
+            </span>
           </div>
           <div class="field">
             <label>Tiempo de impresión</label>
@@ -1297,12 +1316,12 @@ onMounted(async () => {
 
         <div class="field mt-2">
           <label>Filamentos usados (opcional, puede ser más de uno)</label>
-          <div class="flex gap-2">
+          <div class="flex gap-2 add-row">
             <button
               type="button"
               class="btn btn-secondary"
               style="flex: 1; justify-content: flex-start; overflow: hidden"
-              :disabled="productionLocked || (auth.isWatcher && !form.owner_id)"
+              :disabled="productionLocked || needsPrinterFirst"
               @click="showFilamentPicker = true"
             >
               <span v-if="newFilamentId" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ filamentSummary(newFilamentId) }}</span>
@@ -1330,8 +1349,8 @@ onMounted(async () => {
 
         <div class="field mt-2">
           <label>Consumibles usados</label>
-          <div class="flex gap-2">
-            <select v-model="newSupplyId" style="flex: 1" :disabled="productionLocked">
+          <div class="flex gap-2 add-row">
+            <select v-model="newSupplyId" style="flex: 1" :disabled="productionLocked || needsPrinterFirst">
               <option value="" disabled>Selecciona un insumo</option>
               <option v-for="s in ownerSupplies" :key="s.id" :value="s.id">{{ auth.isCompany ? withOwner(s.name, s.owner_id) : s.name }}</option>
             </select>
@@ -1364,7 +1383,7 @@ onMounted(async () => {
           :filaments="selectableFilaments"
           :owner-names="pickerOwnerNames"
           :default-printer-id="form.printer_id"
-          :disabled="auth.isWatcher && !form.owner_id"
+          :disabled="needsPrinterFirst"
         />
         <div v-if="mixedOwners" class="alert alert-warning mixed-owners mt-2" role="alert">
           <strong>⚠️ Materiales de {{ resourceOwnerSummary.length }} dueños distintos:</strong> {{ mixedOwnersText }}.
@@ -1458,6 +1477,7 @@ onMounted(async () => {
     <OrderStatusModal
       v-if="statusModalSaleId"
       :sale-id="statusModalSaleId"
+      :start-delivery="statusModalDelivers"
       @close="statusModalSaleId = null"
       @changed="onOrderChanged"
     />
@@ -1531,6 +1551,149 @@ onMounted(async () => {
   font-weight: 700;
   white-space: nowrap;
 }
+/* ---- Hoja de ventas: en pantallas angostas (celular, tablet, notebook chico) cada venta es
+   una tarjeta (hasta 1380 px) en vez de una fila de 11 columnas que había que desplazar de lado. ---- */
+.sales-table .nowrap {
+  white-space: nowrap;
+}
+.sales-table .compact-only {
+  display: none;
+}
+/* Pantallas medianas (1381–1600 px): misma tabla, más compacta. La impresora y "Venta de" pasan bajo
+   el cliente, así caben todas las columnas sin desplazar de lado. */
+@media (min-width: 1381px) and (max-width: 1600px) {
+  .sales-table .col-printer,
+  .sales-table .col-owner,
+  .sales-table .c-printer,
+  .sales-table .c-owner {
+    display: none;
+  }
+  .sales-table .compact-only {
+    display: block;
+  }
+  .sales-table thead th,
+  .sales-table tbody td {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .sales-table .c-actions .btn-icon {
+    width: 30px;
+    height: 30px;
+  }
+  .sales-table .c-actions .flex {
+    gap: 2px !important;
+  }
+}
+@media (max-width: 1380px) {
+  .sales-table-wrap {
+    border: none;
+    overflow: visible;
+  }
+  .sales-table {
+    min-width: 0;
+  }
+  .sales-table thead {
+    display: none;
+  }
+  .sales-table,
+  .sales-table tbody {
+    display: block;
+  }
+  .sales-table tr.sale-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px 14px;
+    align-items: start;
+    padding: 14px;
+    margin-bottom: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+  }
+  .sales-table tr.sale-row.row-expanded {
+    margin-bottom: 0;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  .sales-table tr.sale-row:hover {
+    background: var(--surface);
+  }
+  .sales-table tr.sale-row > td {
+    display: block;
+    min-width: 0;
+    padding: 0;
+    border: none;
+    text-align: left;
+  }
+  .sales-table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    color: var(--text-muted);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .sales-table tr.sale-row {
+    grid-template-areas:
+      "client client client actions"
+      "status status date date"
+      "price cost profit margin"
+      "pay pay seller printer"
+      "owner owner . .";
+  }
+  .sales-table .c-client { grid-area: client; font-size: 0.95rem; }
+  .sales-table .c-actions { grid-area: actions; }
+  .sales-table .c-status { grid-area: status; }
+  .sales-table .c-date { grid-area: date; }
+  .sales-table .c-price { grid-area: price; }
+  .sales-table .c-cost { grid-area: cost; }
+  .sales-table .c-profit { grid-area: profit; }
+  .sales-table .c-margin { grid-area: margin; }
+  .sales-table .c-pay { grid-area: pay; }
+  .sales-table .c-seller { grid-area: seller; }
+  .sales-table .c-printer { grid-area: printer; }
+  .sales-table .c-owner { grid-area: owner; }
+  .sales-table .c-money .cost-toggle {
+    padding: 0;
+  }
+  .sales-table tr.cost-detail-row {
+    display: block;
+    margin-bottom: 12px;
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+  }
+  .sales-table tr.cost-detail-row > td {
+    display: block;
+    border: none;
+  }
+}
+@media (max-width: 560px) {
+  .sales-table tr.sale-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      "client actions"
+      "status date"
+      "price cost"
+      "profit margin"
+      "pay pay"
+      "seller printer"
+      "owner owner";
+  }
+}
+.due-tag {
+  margin-top: 4px;
+  max-width: 150px;
+  color: var(--warning);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.due-tag.is-overdue {
+  color: var(--danger);
+}
 .quick-status {
   position: relative;
   display: inline-flex;
@@ -1587,8 +1750,10 @@ onMounted(async () => {
 /* Quién registró la venta. Resaltado cuando no fue el dueño del inventario (ej. un
    observador), para que el dueño lo note de inmediato. */
 .seller-tag {
+  display: inline-block;
+  max-width: 100%;
   font-size: 0.82rem;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .seller-tag.is-other {

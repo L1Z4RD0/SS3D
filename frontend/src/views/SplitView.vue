@@ -519,7 +519,10 @@ async function removeWithdrawal(w) {
                   </div>
                 </td>
                 <td>{{ s.owner_username }}</td>
-                <td>{{ paymentLabel[s.payment_method] || s.payment_method }}</td>
+                <td>
+                  {{ paymentLabel[s.payment_method] || s.payment_method }}
+                  <div v-if="s.paid_date" class="text-muted text-sm">cobrado el {{ formatDate(s.paid_date) }}</div>
+                </td>
                 <td class="text-right mono">{{ formatCurrency(s.price) }}</td>
                 <td v-for="n in refundNames" :key="n" class="text-right mono">
                   {{ s.refunds[n] ? formatCurrency(s.refunds[n]) : "—" }}
@@ -606,7 +609,13 @@ async function removeWithdrawal(w) {
           <div class="card-header"><h3>Por cobrar</h3></div>
           <div v-if="!report.pending.length" class="text-muted text-sm">Nada pendiente de cobro este mes.</div>
           <div v-for="p in report.pending" :key="p.id" class="mini-line">
-            <span>{{ formatDate(p.delivered_date) }} · {{ p.client_name }}</span>
+            <span>
+              {{ formatDate(p.delivered_date) }} · {{ p.client_name }}
+              <span v-if="p.paid_date" class="text-muted text-sm">· cobrado el {{ formatDate(p.paid_date) }} (entra ese mes)</span>
+              <span v-else-if="p.payment_due_date" class="text-sm" :class="p.payment_due_date < todayISO() ? 'text-danger' : 'text-muted'">
+                · cobrar el {{ formatDate(p.payment_due_date) }}
+              </span>
+            </span>
             <span class="mono">{{ formatCurrency(p.price) }}</span>
           </div>
         </div>
@@ -793,6 +802,11 @@ async function removeWithdrawal(w) {
   .expense-form,
   .withdrawal-form {
     grid-template-columns: 1fr 1fr;
+  }
+  /* "Para qué se usó" / concepto: a lo ancho, para que se lea lo que se escribe. */
+  .expense-form > :nth-child(2),
+  .withdrawal-form > :nth-child(2) {
+    grid-column: 1 / -1;
   }
   .closing-fields {
     grid-template-columns: 1fr;

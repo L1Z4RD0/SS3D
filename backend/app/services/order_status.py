@@ -15,6 +15,7 @@ from app.models.sale import (
 )
 from app.models.sale_status_history import SaleStatusHistory
 from app.models.user import User
+from app.schemas.sale import UNPAID_PAYMENT_METHOD
 from app.models.warehouse_item import ITEM_RESERVED, ITEM_SOLD, WarehouseItem
 
 STATUS_LABELS = {
@@ -56,8 +57,44 @@ def start_as_pending(sale: Sale, promised_delivery_date: date | None) -> None:
     sale.delivered_date = None
 
 
+PAYMENT_LABELS = {"efectivo": "efectivo", "transferencia": "transferencia", "debito": "débito", "credito": "crédito"}
+MONTHS_ES = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre",
+             "noviembre", "diciembre")
+
+
+def long_date(d: date) -> str:
+    """12 de noviembre (con el año solo si no es el actual)."""
+    text = f"{d.day} de {MONTHS_ES[d.month - 1]}"
+    return text if d.year == date.today().year else f"{text} de {d.year}"
+
+
+def _settle_on_delivery(sale: Sale, payment_method: str | None, due_date: date | None, today: date) -> str | None:
+    """Entregar un pedido "Por cobrar" obliga a decir cómo pagó o, si aún no paga, hasta
+    cuándo tiene plazo. Valida antes de tocar nada; devuelve la nota para el historial."""
+    if sale.payment_method != UNPAID_PAYMENT_METHOD:
+        return None
+    if payment_method:
+        return f"Pagó al entregar: {PAYMENT_LABELS.get(payment_method, payment_method)}"
+    if due_date is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "El pedido está Por cobrar: indica cómo pagó o, si aún no paga, la fecha máxima de pago.",
+        )
+    if due_date < today:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "La fecha máxima de pago no puede ser anterior a hoy.")
+    return f"Entregado sin pagar: cobrar el {long_date(due_date)}"
+
+
 def change_status(
-    db: Session, sale: Sale, target: str, user: User, *, skip_confirmed: bool, today: date
+    db: Session,
+    sale: Sale,
+    target: str,
+    user: User,
+    *,
+    skip_confirmed: bool,
+    today: date,
+    payment_method: str | None = None,
+    payment_due_date: date | None = None,
 ) -> list[str]:
     """Aplica una transición validada. Devuelve los estados recorridos (más de uno si se
     salta directo a Entregada: los pasos intermedios quedan registrados con la misma hora)."""
@@ -102,12 +139,23 @@ def change_status(
             f"No se puede pasar de {STATUS_LABELS[current]} a {STATUS_LABELS.get(target, target)}.",
         )
 
+    payment_note = _settle_on_delivery(sale, payment_method, payment_due_date, today) if target == STATUS_DELIVERED else None
+
     at = utcnow()
     for step in path:
-        record_status(db, sale, step, user, note, at=at)
+        step_note = note
+        if step == STATUS_DELIVERED and payment_note:
+            step_note = f"{note}. {payment_note}" if note else payment_note
+        record_status(db, sale, step, user, step_note, at=at)
     sale.status = target
     if undo_delivery:
         sale.delivered_date = None
+        # Si era "Por cobrar" y se cobró, vuelve a "Por cobrar": el cobro se registra de
+        # nuevo al entregarlo otra vez.
+        if sale.paid_date is not None:
+            sale.payment_method = UNPAID_PAYMENT_METHOD
+        sale.paid_date = None
+        sale.payment_due_date = None
         if sale.warehouse_item_id is not None:
             # La pieza del Almacén vuelve a estar Reservada para este pedido.
             item = db.get(WarehouseItem, sale.warehouse_item_id)
@@ -115,6 +163,13 @@ def change_status(
                 item.status = ITEM_RESERVED
     if target == STATUS_DELIVERED:
         sale.delivered_date = today
+        if payment_note:
+            if payment_method:
+                sale.payment_method = payment_method
+                sale.paid_date = today
+                sale.payment_due_date = None
+            else:
+                sale.payment_due_date = payment_due_date
         if sale.warehouse_item_id is not None:
             # La pieza del Almacén se entregó: pasa de Reservada a Vendida.
             item = db.get(WarehouseItem, sale.warehouse_item_id)

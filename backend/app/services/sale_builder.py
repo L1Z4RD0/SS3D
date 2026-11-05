@@ -92,6 +92,19 @@ def resolve_sale_owner(db: Session, user: User, owner_id: uuid.UUID | None) -> u
     return owner_id
 
 
+def sale_owner_from_printer(db: Session, user: User, printer_id: uuid.UUID) -> uuid.UUID:
+    """De quién es la venta: del dueño de la impresora con que se imprime.
+
+    - Un usuario normal vende con su impresora: la venta es suya.
+    - Un observador (y la Empresa, que no tiene impresora) usa la impresora de uno de sus
+      usuarios asignados: la venta es de ese dueño, no de quien la registra (eso queda en
+      "registrada por"). Si mezcla filamentos o insumos de otra cuenta, cada costo sigue
+      siendo de su dueño (material mixto, ver cost_allocation)."""
+    if not is_watcher(user):
+        return resolve_sale_owner(db, user, None)
+    return resolve_printer(db, user, printer_id).user_id
+
+
 def resolve_printer(
     db: Session, user: User, printer_id: uuid.UUID, allowed_user_ids: list[uuid.UUID] | None = None
 ) -> Printer:
@@ -350,6 +363,8 @@ def to_sale_response(
         profit=sale.profit,
         margin_percent=sale.margin_percent,
         payment_method=sale.payment_method,
+        payment_due_date=sale.payment_due_date,
+        paid_date=sale.paid_date,
         sale_source=sale.sale_source,
         notes=sale.notes,
         supplies_used=[
