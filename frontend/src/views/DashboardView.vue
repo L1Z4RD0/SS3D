@@ -4,6 +4,7 @@ import * as dashboardApi from "../api/dashboard";
 import * as historyApi from "../api/history";
 import * as printersApi from "../api/printers";
 import * as salesApi from "../api/sales";
+import { getPerformance } from "../api/performance";
 import { sparkPath } from "../utils/motion";
 import { PAYMENT_METHODS } from "../api/sales";
 import { formatCurrency, formatNumber, formatPercent, currentMonthRange } from "../utils/format";
@@ -23,6 +24,12 @@ const byPayment = ref([]);
 const bySource = ref([]);
 const stockAlerts = ref([]);
 const loading = ref(true);
+
+/* La Empresa es la central: además del total, ve cuánto vendió cada cuenta y sus propios
+   costos (filamento e insumos de la Empresa usados en las ventas). Sale de Rendimiento. */
+const central = ref(null);
+const centralAccounts = computed(() => central.value?.accounts || []);
+const companyCosts = computed(() => centralAccounts.value.find((a) => a.is_company)?.own_costs || null);
 
 const filters = reactive(currentMonthRange());
 
@@ -110,6 +117,7 @@ async function loadAll() {
 
     // Aparte y tolerante: si falla, el resto del Dashboard se muestra igual.
     const sourcePromise = dashboardApi.getBySource(params).catch(() => []);
+    const centralPromise = auth.isCompany ? getPerformance(params).catch(() => null) : Promise.resolve(null);
     const [s, p, pm, alerts] = await Promise.all([
       dashboardApi.getSummary(params),
       dashboardApi.getByPrinter(params),
@@ -121,6 +129,7 @@ async function loadAll() {
     byPayment.value = pm;
     stockAlerts.value = alerts;
     bySource.value = (await sourcePromise).map((r) => ({ source: r.sale_source, jobs: r.jobs, revenue: r.revenue }));
+    central.value = await centralPromise;
   } finally {
     loading.value = false;
   }
@@ -147,7 +156,11 @@ onMounted(() => {
         <img :src="BUSINESS_LOGO_URL" alt="Logo del negocio" class="dashboard-logo" />
         <div>
           <h1>{{ BUSINESS_NAME }}</h1>
-          <p v-if="auth.isWatcher" class="page-subtitle">
+          <p v-if="auth.isCompany" class="page-subtitle">
+            Central de la Empresa: el total de los pedidos entregados de todas las cuentas (cada venta una sola vez) y
+            los costos propios de la Empresa
+          </p>
+          <p v-else-if="auth.isWatcher" class="page-subtitle">
             Resumen de los pedidos entregados que registraste con el inventario de los usuarios que observas
           </p>
           <p v-else class="page-subtitle">
@@ -156,7 +169,7 @@ onMounted(() => {
           </p>
           <p class="page-subtitle" style="font-size: 0.8rem">
             Solo cuentan los pedidos <strong>Entregados</strong>, según su fecha de entrega. Los pedidos abiertos aún no
-            suman ingresos.
+            suman ingresos. Los ingresos son el precio de las impresiones: el <strong>delivery va aparte</strong>.
           </p>
         </div>
       </div>
@@ -225,6 +238,12 @@ onMounted(() => {
           color="var(--warning)"
         />
         <StatCard label="Costo total" :value="formatCurrency(summary.total_cost)" />
+        <!-- No es ingreso ni costo: se le devuelve a quien lo llevó. -->
+        <StatCard
+          label="Delivery cobrado"
+          :value="formatCurrency(summary.total_delivery || 0)"
+          meta="Aparte de los ingresos: se devuelve a quien lo llevó"
+        />
         <StatCard label="Horas impresas" :value="formatNumber(summary.total_print_hours, 1)" :spark="spark('hours')" color="var(--info)" />
         <StatCard label="Filamento usado" :value="`${formatNumber(summary.total_filament_used_g, 0)} g`" />
         <StatCard label="Luz gastada" :value="formatCurrency(summary.total_energy)" />
@@ -234,6 +253,68 @@ onMounted(() => {
         <StatCard label="Pérdidas (cancelaciones y descartes)" :value="formatCurrency(summary.total_losses)" />
         <!-- Costo de las piezas En almacén y Reservadas (hoy). -->
         <StatCard label="Valor en Almacén" :value="formatCurrency(summary.warehouse_value)" />
+      </div>
+
+      <!-- Solo la Empresa: lo que vendió cada cuenta y los costos propios de la Empresa. -->
+      <div v-if="auth.isCompany && central" class="grid grid-cols-2" style="margin-bottom: 20px; align-items: start">
+        <div v-reveal class="card glow">
+          <div class="card-header">
+            <h3>Ventas por cuenta</h3>
+            <span class="text-muted text-sm">La venta es del dueño de la impresora</span>
+          </div>
+          <div class="table-wrap">
+            <table class="central-table">
+              <thead>
+                <tr>
+                  <th>Cuenta</th>
+                  <th class="text-right">Pedidos</th>
+                  <th class="text-right">Ingresos</th>
+                  <th class="text-right">Ganancia</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="a in centralAccounts" :key="a.user_id">
+                  <td><strong>{{ a.username }}</strong></td>
+                  <td class="text-right mono">{{ a.sales.jobs }}</td>
+                  <td class="text-right mono">{{ formatCurrency(a.sales.revenue) }}</td>
+                  <td class="text-right mono" style="color: var(--success)">{{ formatCurrency(a.sales.profit) }}</td>
+                </tr>
+                <tr class="central-total">
+                  <td><strong>Total</strong></td>
+                  <td class="text-right mono">{{ central.combined.jobs }}</td>
+                  <td class="text-right mono">{{ formatCurrency(central.combined.revenue) }}</td>
+                  <td class="text-right mono" style="color: var(--success)">{{ formatCurrency(central.combined.profit) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="central-note">
+            Ingresos sin delivery. La ganancia de cada venta es la que después se reparte entre los socios y la Caja
+            (ver Reparto).
+          </p>
+        </div>
+        <div v-if="companyCosts" v-reveal="0.08" class="card glow">
+          <div class="card-header">
+            <h3>Costos de la Empresa</h3>
+            <span class="text-muted text-sm">Lo que puso la Empresa en las ventas</span>
+          </div>
+          <dl class="central-costs">
+            <div><dt>Filamento de la Empresa</dt><dd class="mono">{{ formatCurrency(companyCosts.material) }}</dd></div>
+            <div><dt>Insumos de la Empresa</dt><dd class="mono">{{ formatCurrency(companyCosts.supplies) }}</dd></div>
+            <div v-if="Number(companyCosts.machine) || Number(companyCosts.postprocess)">
+              <dt>Máquina y postprocesado</dt>
+              <dd class="mono">{{ formatCurrency(Number(companyCosts.machine) + Number(companyCosts.postprocess)) }}</dd>
+            </div>
+            <div class="central-costs-total">
+              <dt>Total a devolver a la Caja</dt>
+              <dd class="mono">{{ formatCurrency(companyCosts.total) }}</dd>
+            </div>
+          </dl>
+          <p class="central-note">
+            {{ formatNumber(companyCosts.filament_g, 0) }} g de filamento de la Empresa en
+            {{ companyCosts.sales_with_resources }} pedido(s). El Reparto le devuelve estos costos a la Caja.
+          </p>
+        </div>
       </div>
 
       <div class="grid" :class="printers.length ? 'grid-cols-2' : ''" style="margin-bottom: 20px; align-items: start">
@@ -380,6 +461,47 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.central-table {
+  min-width: 0;
+}
+.central-total td {
+  border-top: 2px solid var(--border);
+}
+.central-note {
+  margin: 12px 0 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+.central-costs {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+.central-costs div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+.central-costs div:last-child {
+  border-bottom: none;
+}
+.central-costs dt {
+  color: var(--text-muted);
+}
+.central-costs dd {
+  margin: 0;
+  font-weight: 700;
+}
+.central-costs-total dt,
+.central-costs-total dd {
+  color: var(--text);
+  font-weight: 700;
+}
+
 /* ---------- Medidor de stock: se llena cuando la tarjeta aparece ---------- */
 .stock-cell {
   display: inline-flex;

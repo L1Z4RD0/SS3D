@@ -419,8 +419,13 @@ const manualPrice = ref(null);
 // Al editar: precio con que se guardó la venta. Si el usuario lo deja tal cual, no se
 // manda precio y el backend conserva exactamente lo cobrado.
 const originalPrice = ref(null);
+const originalDelivery = ref(null);
 let suggestSeq = 0;
 let suggestTimer = null;
+
+// Delivery del formulario: va aparte del precio de la impresión.
+const formDelivery = computed(() => Math.max(0, Number(form.shipping_cost) || 0));
+const pieceOf = (total) => Math.max(0, Number(total) - formDelivery.value);
 
 const selectedScenario = computed(
   () => suggestion.value?.scenarios.find((s) => s.margin_percent === selectedMargin.value) || null
@@ -428,9 +433,12 @@ const selectedScenario = computed(
 
 const manualPriceBreakdown = computed(() => {
   if (!useManualPrice.value || !isValidNumber(manualPrice.value, { min: 0, allowZero: false })) return null;
+  // El precio a mano es el de la impresión: el delivery se suma aparte al total a cobrar.
   const price = Number(manualPrice.value);
+  const delivery = formDelivery.value;
+  const total = price + delivery;
   const cost = suggestion.value ? Number(suggestion.value.breakdown.total_cost) : null;
-  return { price, profit: cost === null ? null : price - cost };
+  return { price, delivery, total, profit: cost === null ? null : total - cost };
 });
 
 // Planchas adicionales de un pedido nuevo. En un pedido ya registrado se gestionan desde
@@ -498,7 +506,7 @@ watch(
 watch(useManualPrice, (on) => {
   if (!on || manualPrice.value) return;
   // Parte del escenario elegido redondeado como guía; el usuario lo ajusta.
-  manualPrice.value = selectedScenario.value ? Math.round(Number(selectedScenario.value.price)) : null;
+  manualPrice.value = selectedScenario.value ? Math.round(pieceOf(selectedScenario.value.price)) : null;
 });
 
 function resetPricing() {
@@ -508,6 +516,7 @@ function resetPricing() {
   useManualPrice.value = false;
   manualPrice.value = null;
   originalPrice.value = null;
+  originalDelivery.value = null;
 }
 
 const isGift = computed(() => form.payment_method === GIFT_PAYMENT_METHOD);
@@ -515,9 +524,11 @@ const isGift = computed(() => form.payment_method === GIFT_PAYMENT_METHOD);
 function buildPricingPayload() {
   if (isGift.value) return { price: 0 };
   if (useManualPrice.value) {
-    const price = Number(manualPrice.value);
-    if (originalPrice.value !== null && price === originalPrice.value) return {};
-    return { price };
+    // Precio de la impresión, sin delivery: el servidor le suma el delivery al total.
+    const piece = Number(manualPrice.value);
+    const sameDelivery = originalDelivery.value !== null && formDelivery.value === originalDelivery.value;
+    if (originalPrice.value !== null && piece === originalPrice.value && sameDelivery) return {};
+    return { piece_price: piece };
   }
   return { price: Number(selectedScenario.value.price) };
 }
@@ -669,9 +680,10 @@ function openEdit(sale) {
   resetPricing();
   // La venta ya tiene un precio acordado: se abre con ese precio fijado a mano para
   // no cambiarlo sin querer. Desmarcando la casilla se puede elegir un escenario.
-  originalPrice.value = Number(sale.price);
+  originalPrice.value = Number(sale.piece_price ?? sale.price);
+  originalDelivery.value = Number(sale.shipping_cost) || 0;
   useManualPrice.value = true;
-  manualPrice.value = Number(sale.price);
+  manualPrice.value = originalPrice.value;
   formError.value = "";
   showModal.value = true;
 }
@@ -1078,7 +1090,10 @@ onMounted(async () => {
                   </span>
                 </td>
                 <td class="c-printer" data-label="Impresora">{{ s.printer_name }}</td>
-                <td class="text-right mono c-money c-price" data-label="Precio">{{ formatCurrency(s.price) }}</td>
+                <td class="text-right mono c-money c-price" data-label="Precio">
+                  {{ formatCurrency(s.piece_price ?? s.price) }}
+                  <div v-if="Number(s.shipping_cost) > 0 && Number(s.price) > 0" class="delivery-extra">+ {{ formatCurrency(s.shipping_cost) }} delivery</div>
+                </td>
                 <td class="text-right c-money c-cost" data-label="Costo">
                   <button
                     type="button"
@@ -1088,7 +1103,7 @@ onMounted(async () => {
                     @click="toggleCost(s.id)"
                   >
                     <span v-if="s.has_provisional_costs" class="provisional-mark" title="Costo provisional: faltan insumos por comprar">≈</span>
-                    {{ formatCurrency(s.total_cost) }}
+                    {{ formatCurrency(s.piece_cost ?? s.total_cost) }}
                     <Icon name="chevronDown" :size="16" :class="{ 'is-open': expandedCostId === s.id }" />
                   </button>
                 </td>
@@ -1105,7 +1120,7 @@ onMounted(async () => {
                 <td v-else class="text-right mono c-money c-profit" data-label="Ganancia" :style="{ color: Number(s.profit) < 0 ? 'var(--danger)' : 'var(--success)' }">
                   {{ formatCurrency(s.profit) }}
                 </td>
-                <td class="text-right c-money c-margin" data-label="Margen">{{ s.status === "cancelado" ? "—" : formatPercent(s.margin_percent) }}</td>
+                <td class="text-right c-money c-margin" data-label="Margen">{{ s.status === "cancelado" ? "—" : formatPercent(s.piece_margin_percent ?? s.margin_percent) }}</td>
                 <td class="c-pay" data-label="Pago">
                   <span class="badge badge-neutral">{{ paymentLabel(s.payment_method) }}</span>
                   <div v-if="dueInfo(s, today)" class="due-tag" :class="{ 'is-overdue': dueInfo(s, today).overdue }">
@@ -1188,8 +1203,11 @@ onMounted(async () => {
                       <div v-if="s.has_provisional_costs" class="provisional-note">
                         Se usaron insumos sin stock: el costo y la ganancia se ajustan al registrar la compra (Reponer).
                       </div>
-                      <div class="cost-line"><span>Precio cobrado</span><span class="mono">{{ formatCurrency(s.price) }}</span></div>
-                      <div class="cost-line"><span>Costo total</span><span class="mono">−{{ formatCurrency(s.total_cost) }}</span></div>
+                      <div v-if="Number(s.shipping_cost) > 0 && Number(s.price) > 0" class="cost-line text-sm text-muted">
+                        <span>Impresión {{ formatCurrency(s.piece_price ?? s.price) }} + delivery {{ formatCurrency(s.shipping_cost) }}</span><span></span>
+                      </div>
+                      <div class="cost-line"><span>Total cobrado</span><span class="mono">{{ formatCurrency(s.price) }}</span></div>
+                      <div class="cost-line"><span>Costo total<template v-if="Number(s.shipping_cost) > 0"> (con delivery)</template></span><span class="mono">−{{ formatCurrency(s.total_cost) }}</span></div>
                       <div v-if="Number(s.reprint_cost) > 0" class="cost-line text-sm reprint-note">
                         <span>incluye reimpresiones</span><span class="mono">{{ formatCurrency(s.reprint_cost) }}</span>
                       </div>
@@ -1303,7 +1321,7 @@ onMounted(async () => {
           <div class="field">
             <label>Delivery (CLP)</label>
             <input v-model.number="form.shipping_cost" type="number" min="0" step="1" :disabled="productionLocked" />
-            <span class="field-hint">Lo paga el cliente y se le devuelve a quien lo lleve.</span>
+            <span class="field-hint">Va aparte del precio de la impresión: lo paga el cliente y se le devuelve a quien lo lleve.</span>
           </div>
           <div class="field">
             <label>¿Quién lo lleva? (opcional)</label>
@@ -1418,7 +1436,8 @@ onMounted(async () => {
               >
                 <input v-model="selectedMargin" type="radio" :value="s.margin_percent" :disabled="useManualPrice" />
                 <span class="price-option-title">{{ s.label }} <span class="text-muted">+{{ s.margin_percent }}%</span></span>
-                <strong class="mono price-option-total">{{ formatCurrency(s.price) }}</strong>
+                <strong class="mono price-option-total">{{ formatCurrency(pieceOf(s.price)) }}</strong>
+                <span v-if="formDelivery > 0" class="price-option-meta">+ {{ formatCurrency(formDelivery) }} delivery = {{ formatCurrency(s.price) }}</span>
                 <span class="price-option-meta">Ganancia {{ formatCurrency(s.profit) }}</span>
               </label>
             </div>
@@ -1432,7 +1451,7 @@ onMounted(async () => {
 
           <label class="manual-price-toggle flex items-center gap-2 mt-2">
             <input v-model="useManualPrice" type="checkbox" style="width: auto" />
-            Definir yo el precio final
+            Definir yo el precio de la impresión
           </label>
           <template v-if="useManualPrice">
             <input
@@ -1441,11 +1460,15 @@ onMounted(async () => {
               min="0"
               step="1"
               placeholder="Ej: 15000"
-              aria-label="Precio final"
+              aria-label="Precio de la impresión, sin delivery"
               style="max-width: 200px"
             />
             <div v-if="manualPriceBreakdown" class="alert alert-info">
-              Precio: <strong>{{ formatCurrency(manualPriceBreakdown.price) }}</strong>
+              Impresión: <strong>{{ formatCurrency(manualPriceBreakdown.price) }}</strong>
+              <template v-if="manualPriceBreakdown.delivery > 0">
+                + delivery {{ formatCurrency(manualPriceBreakdown.delivery) }} =
+                <strong>{{ formatCurrency(manualPriceBreakdown.total) }}</strong> a cobrar
+              </template>
               <template v-if="manualPriceBreakdown.profit !== null">
                 · Ganancia:
                 <span :style="{ color: manualPriceBreakdown.profit < 0 ? 'var(--danger)' : undefined }">
@@ -1453,7 +1476,7 @@ onMounted(async () => {
                 </span>
               </template>
             </div>
-            <div v-else class="alert alert-danger">Ingresa un precio final válido, mayor a 0.</div>
+            <div v-else class="alert alert-danger">Ingresa el precio de la impresión (sin delivery), mayor a 0.</div>
           </template>
           </template>
         </div>
@@ -1749,6 +1772,13 @@ onMounted(async () => {
 
 /* Quién registró la venta. Resaltado cuando no fue el dueño del inventario (ej. un
    observador), para que el dueño lo note de inmediato. */
+.delivery-extra {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
 .seller-tag {
   display: inline-block;
   max-width: 100%;

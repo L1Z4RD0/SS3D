@@ -20,6 +20,9 @@ class DashboardSummary(BaseModel):
     total_losses: Decimal = Decimal(0)
     # Costo de las piezas En almacén y Reservadas, hoy.
     warehouse_value: Decimal = Decimal(0)
+    # Deliveries cobrados en el período. No están en los ingresos ni en los costos: se le
+    # devuelven a quien los llevó.
+    total_delivery: Decimal = Decimal(0)
 
 
 class PrinterBreakdownItem(BaseModel):

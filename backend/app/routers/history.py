@@ -11,6 +11,7 @@ from app.models.sale import Sale
 from app.models.user import User
 from app.schemas.history import MonthlySummary, SourceTotals
 from app.models.sale import STATUS_DELIVERED
+from app.services.pricing import COST_WITHOUT_DELIVERY, DELIVERY_CHARGED, PIECE_REVENUE
 from app.services.sale_builder import sales_counted_for
 
 router = APIRouter(prefix="/api/history", tags=["history"])
@@ -45,9 +46,9 @@ def get_monthly_history(db: Session = Depends(get_db), current_user: User = Depe
             year_expr.label("year"),
             month_expr.label("month"),
             func.count(Sale.id),
-            func.coalesce(func.sum(Sale.base_price), 0),
+            func.coalesce(func.sum(PIECE_REVENUE), 0),
             func.coalesce(func.sum(Sale.profit), 0),
-            func.coalesce(func.sum(Sale.total_cost), 0),
+            func.coalesce(func.sum(COST_WITHOUT_DELIVERY), 0),
             func.coalesce(func.sum(Sale.print_hours), 0),
             func.coalesce(func.sum(Sale.grams_used), 0),
             func.coalesce(func.sum(Sale.depreciation_cost), 0),
@@ -64,7 +65,7 @@ def get_monthly_history(db: Session = Depends(get_db), current_user: User = Depe
         db.query(Sale)
         .filter(sales_counted_for(current_user), Sale.status == STATUS_DELIVERED)
         .with_entities(
-            year_expr, month_expr, Sale.sale_source, func.count(Sale.id), func.coalesce(func.sum(Sale.base_price), 0)
+            year_expr, month_expr, Sale.sale_source, func.count(Sale.id), func.coalesce(func.sum(PIECE_REVENUE), 0)
         )
         .group_by(year_expr, month_expr, Sale.sale_source)
         .all()

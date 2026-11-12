@@ -6,7 +6,7 @@ from sqlalchemy import Date, cast, func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_current_user, is_watcher, readable_user_ids
+from app.dependencies import get_current_user, is_company, is_watcher, readable_user_ids
 from app.models.warehouse_item import ITEM_DISCARDED, ITEM_IN_STOCK, ITEM_RESERVED, WarehouseItem
 from app.services.order_status import OPEN_STATUSES
 from app.models.filament import Filament
@@ -22,6 +22,7 @@ from app.schemas.dashboard import (
 )
 from app.services.inventory import filament_stock_status
 from app.models.sale import STATUS_CANCELLED, STATUS_DELIVERED
+from app.services.pricing import COST_WITHOUT_DELIVERY, DELIVERY_CHARGED, PIECE_REVENUE
 from app.services.sale_builder import sales_counted_for
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -32,7 +33,8 @@ LOCAL_TZ = "America/Santiago"
 def _dated_sales_query(db: Session, user: User, date_from: date | None, date_to: date | None):
     # Solo cuentan los pedidos Entregados, por su fecha real de entrega: antes de eso el
     # dinero no entró. Dueño: los de su inventario (también los que registró un
-    # observador). Observador: los que registró él.
+    # observador). Observador: los que registró él. La Empresa es la central: todos los de
+    # sus socios y los propios. Ingresos y costos van SIN el delivery (ver services/pricing).
     query = db.query(Sale).filter(sales_counted_for(user), Sale.status == STATUS_DELIVERED)
     if date_from is not None:
         query = query.filter(Sale.delivered_date >= date_from)
@@ -62,7 +64,9 @@ def _orders_losses_and_warehouse(db: Session, user: User, date_from: date | None
         .join(Sale, Sale.id == WarehouseItem.origin_sale_id)
         .filter(WarehouseItem.status == ITEM_DISCARDED)
     )
-    if is_watcher(user):
+    if is_company(user):
+        discard_q = discard_q.filter(WarehouseItem.user_id.in_(readable_user_ids(db, user)))
+    elif is_watcher(user):
         discard_q = discard_q.filter(Sale.created_by_user_id == user.id)
     else:
         discard_q = discard_q.filter(WarehouseItem.user_id == user.id)
@@ -97,9 +101,9 @@ def get_summary(
     query = _dated_sales_query(db, current_user, date_from, date_to)
     row = query.with_entities(
         func.count(Sale.id),
-        func.coalesce(func.sum(Sale.base_price), 0),
+        func.coalesce(func.sum(PIECE_REVENUE), 0),
         func.coalesce(func.sum(Sale.profit), 0),
-        func.coalesce(func.sum(Sale.total_cost), 0),
+        func.coalesce(func.sum(COST_WITHOUT_DELIVERY), 0),
         func.coalesce(func.sum(Sale.print_hours), 0),
         func.coalesce(func.sum(Sale.grams_used), 0),
         func.coalesce(func.sum(Sale.depreciation_cost), 0),
@@ -115,6 +119,8 @@ def get_summary(
         )
 
     extra = _orders_losses_and_warehouse(db, current_user, date_from, date_to)
+    # Deliveries cobrados en el período: no son ingreso (se le devuelven a quien los llevó).
+    extra["total_delivery"] = query.with_entities(func.coalesce(func.sum(DELIVERY_CHARGED), 0)).scalar() or 0
 
     return DashboardSummary(
         **extra,
@@ -146,11 +152,11 @@ def get_by_printer(
             func.count(Sale.id),
             func.coalesce(func.sum(Sale.print_hours), 0),
             func.coalesce(func.sum(Sale.grams_used), 0),
-            func.coalesce(func.sum(Sale.base_price), 0),
+            func.coalesce(func.sum(PIECE_REVENUE), 0),
             func.coalesce(func.sum(Sale.profit), 0),
         )
         .group_by(Printer.id, Printer.name)
-        .order_by(func.coalesce(func.sum(Sale.base_price), 0).desc())
+        .order_by(func.coalesce(func.sum(PIECE_REVENUE), 0).desc())
         .all()
     )
 
@@ -188,11 +194,11 @@ def get_by_payment_method(
         query.with_entities(
             Sale.payment_method,
             func.count(Sale.id),
-            func.coalesce(func.sum(Sale.base_price), 0),
+            func.coalesce(func.sum(PIECE_REVENUE), 0),
             func.coalesce(func.sum(Sale.profit), 0),
         )
         .group_by(Sale.payment_method)
-        .order_by(func.coalesce(func.sum(Sale.base_price), 0).desc())
+        .order_by(func.coalesce(func.sum(PIECE_REVENUE), 0).desc())
         .all()
     )
     return [
@@ -210,7 +216,7 @@ def get_by_source(
 ):
     """De dónde salieron las ventas del período (Instagram, Facebook, Personal o sin
     registrar). Mismas reglas que el resto del Dashboard: pedidos Entregados."""
-    revenue = func.coalesce(func.sum(Sale.base_price), 0)
+    revenue = func.coalesce(func.sum(PIECE_REVENUE), 0)
     rows = (
         _dated_sales_query(db, current_user, date_from, date_to)
         .with_entities(Sale.sale_source, func.count(Sale.id), revenue, func.coalesce(func.sum(Sale.profit), 0))

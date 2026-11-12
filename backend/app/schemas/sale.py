@@ -34,8 +34,12 @@ class SaleCreateRequest(BaseModel):
     filaments: list[FilamentUsageInput] = Field(default_factory=list)
     print_hours: Decimal = Field(ge=0, default=0)
     postprocess_hours: Decimal = Field(ge=0, default=0)
-    # Precio que se le cobra al cliente: el de un escenario sugerido o uno puesto a mano.
-    price: Decimal = Field(ge=0)
+    # Total que paga el cliente (impresión + delivery): el de un escenario sugerido. Lo siguen
+    # mandando las versiones viejas de la app en caché cuando el precio se pone a mano.
+    price: Decimal | None = Field(default=None, ge=0)
+    # Precio de la impresión puesto a mano, SIN delivery: el total es este + shipping_cost.
+    # Si viene, manda sobre `price`.
+    piece_price: Decimal | None = Field(default=None, ge=0)
     # Delivery: lo que paga el cliente por el envío (se le devuelve a quien lo lleve).
     shipping_cost: Decimal = Field(ge=0, default=0)
     delivery_by: str | None = Field(default=None, max_length=60)
@@ -64,6 +68,8 @@ class SaleUpdateRequest(BaseModel):
     postprocess_hours: Decimal | None = Field(default=None, ge=0)
     # Si no viene, la venta conserva exactamente el precio con que se registró.
     price: Decimal | None = Field(default=None, ge=0)
+    # Precio de la impresión SIN delivery (el total es este + el delivery). Manda sobre `price`.
+    piece_price: Decimal | None = Field(default=None, ge=0)
     shipping_cost: Decimal | None = Field(default=None, ge=0)
     supplies: list[SupplyUsageInput] | None = None
     payment_method: str | None = Field(default=None, pattern="^(" + "|".join(PAYMENT_METHODS) + ")$")
@@ -256,6 +262,11 @@ class SaleResponse(BaseModel):
     postprocess_hours: Decimal
     # Lo que se le cobró al cliente.
     price: Decimal
+    # Precio de la impresión: lo cobrado (price) menos el delivery.
+    piece_price: Decimal = Decimal(0)
+    # Costo y margen de la impresión, sin el delivery (para mostrarlos junto a piece_price).
+    piece_cost: Decimal = Decimal(0)
+    piece_margin_percent: Decimal = Decimal(0)
     material_cost: Decimal
     depreciation_cost: Decimal
     energy_cost: Decimal

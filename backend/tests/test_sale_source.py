@@ -89,12 +89,13 @@ def test_dashboard_and_history_by_source(client, make):
     r = client.get("/api/dashboard/by-source", headers=h, params={"date_from": str(TODAY), "date_to": str(TODAY)})
     assert r.status_code == 200, r.text
     rows = {row["sale_source"]: (row["jobs"], float(row["revenue"])) for row in r.json()}
-    assert rows == {"instagram": (2, 15000.0), "facebook": (1, 7000.0), None: (1, 3000.0)}
+    # Ingresos sin el delivery ($3.000 por venta), que va aparte.
+    assert rows == {"instagram": (2, 9000.0), "facebook": (1, 4000.0), None: (1, 0.0)}
 
     month = next(m for m in client.get("/api/history/monthly", headers=h).json()
                  if (m["year"], m["month"]) == (TODAY.year, TODAY.month))
     by_source = {k: (v["jobs"], float(v["revenue"])) for k, v in month["by_source"].items()}
-    assert by_source == {"instagram": (2, 15000.0), "facebook": (1, 7000.0), "sin_registrar": (1, 3000.0)}
+    assert by_source == {"instagram": (2, 9000.0), "facebook": (1, 4000.0), "sin_registrar": (1, 0.0)}
 
 
 def test_sort_sales_sheet(client, make):

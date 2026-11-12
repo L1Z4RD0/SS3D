@@ -24,7 +24,7 @@ def test_undo_delivery_subtracts_and_redeliver_adds_back(client, make):
     s = client.post("/api/sales", headers=h, json=sale_payload(make.printer(u), price=10000)).json()
     base = Decimal(_summary(client, h)["total_revenue"])
     deliver(client, h, s["id"], TODAY)
-    assert Decimal(_summary(client, h)["total_revenue"]) == base + 10000
+    assert Decimal(_summary(client, h)["total_revenue"]) == base + 10000 - 3000  # sin el delivery ($3.000 de sale_payload), que va aparte
 
     r = _status(client, h, s["id"], "lista")
     assert r.status_code == 200, r.text
@@ -33,7 +33,7 @@ def test_undo_delivery_subtracts_and_redeliver_adds_back(client, make):
     assert Decimal(_summary(client, h)["total_revenue"]) == base
 
     assert _status(client, h, s["id"], "entregada").status_code == 200
-    assert Decimal(_summary(client, h)["total_revenue"]) == base + 10000
+    assert Decimal(_summary(client, h)["total_revenue"]) == base + 10000 - 3000  # sin el delivery ($3.000 de sale_payload), que va aparte
 
 
 def test_undo_delivery_of_warehouse_piece_reserves_it_again(client, make):

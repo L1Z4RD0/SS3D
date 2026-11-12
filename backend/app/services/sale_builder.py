@@ -3,7 +3,7 @@ from datetime import date
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import or_
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.dependencies import is_company, is_watcher, readable_user_ids
@@ -14,6 +14,7 @@ from app.models.warehouse_item import ITEM_DISCARDED
 from app.models.sale_filament import SaleFilament
 from app.models.supply import Supply
 from app.models.user import User
+from app.models.watcher_assignment import WatcherAssignment
 from app.schemas.calculator import FilamentUsageInput, SupplyUsageInput
 from app.schemas.sale import (
     ExhaustedFilamentInfo,
@@ -26,16 +27,23 @@ from app.schemas.sale import (
     SaleSupplyResponse,
     WarehousePieceInfo,
 )
-from app.services.calculator import CostBreakdown, FilamentUsage, SupplyUsage, calculate_costs, money
+from app.services.calculator import calculate_margin_percent, CostBreakdown, FilamentUsage, SupplyUsage, calculate_costs, money
 from app.services.cancellation import loss_is_editable
 from app.services.cost_allocation import planned_print_hours
 from app.services.inventory import consume_filament
+from app.services.pricing import cost_without_delivery, piece_price
 
 
 def sales_counted_for(user: User):
     """Ventas que suman en el Dashboard y el Historial de cada usuario (además, solo las
     Entregadas). Un usuario: las de su inventario, incluidas las que registró un observador
-    por él. Un observador: las que registró él, de cualquiera de sus asignados."""
+    por él. Un observador: las que registró él, de cualquiera de sus asignados. La Empresa:
+    todas las de sus socios asignados y las propias (es la central del negocio)."""
+    if is_company(user):
+        # La Empresa es la central: ve el total de sus socios (los que tiene asignados) y lo
+        # propio, cada venta una sola vez, la haya registrado quien la haya registrado.
+        assigned = select(WatcherAssignment.observed_user_id).where(WatcherAssignment.watcher_user_id == user.id)
+        return or_(Sale.user_id.in_(assigned), Sale.user_id == user.id, Sale.created_by_user_id == user.id)
     if is_watcher(user):
         return Sale.created_by_user_id == user.id
     return Sale.user_id == user.id
@@ -353,6 +361,10 @@ def to_sale_response(
         # total_price: lo que se cobró. En ventas antiguas registradas con IVA incluye
         # ese IVA; en las nuevas es igual a base_price (la app ya no calcula IVA).
         price=sale.total_price,
+        # Precio de la impresión: lo cobrado menos el delivery (que va aparte, en delivery_amount).
+        piece_price=piece_price(sale),
+        piece_cost=cost_without_delivery(sale),
+        piece_margin_percent=calculate_margin_percent(piece_price(sale), cost_without_delivery(sale)),
         material_cost=sale.material_cost,
         depreciation_cost=sale.depreciation_cost,
         energy_cost=sale.energy_cost,

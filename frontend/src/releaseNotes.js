@@ -8,6 +8,33 @@
    Textos cortos y en el idioma de los usuarios (qué pueden hacer ahora), no técnicos. */
 export const RELEASES = [
   {
+    id: "2026-11-12",
+    date: "12 de noviembre de 2026",
+    title: "El delivery va aparte y la Empresa es la central",
+    items: [
+      {
+        icon: "🛵",
+        title: "El delivery ya no va dentro del precio",
+        text: "El precio de una venta es solo la impresión; el delivery se anota aparte y se suma al total a cobrar. Si pones el precio a mano, escribe el de la figura: Zola le suma el delivery.",
+      },
+      {
+        icon: "📈",
+        title: "Ingresos sin delivery",
+        text: "En el Dashboard, el Historial y Rendimiento los ingresos ya no incluyen los deliveries, que se muestran aparte. La ganancia es la misma de siempre y el Reparto se los sigue devolviendo a quien los llevó.",
+      },
+      {
+        icon: "🏢",
+        title: "La cuenta Empresa es la central",
+        text: "Su Dashboard muestra el total vendido por todas las cuentas (cada venta una sola vez), cuánto vendió cada socio y los costos del filamento e insumos de la Empresa.",
+      },
+      {
+        icon: "✍️",
+        title: "\"Registradas\" en Rendimiento",
+        text: "La columna Gestionadas ahora se llama Registradas y cuenta las ventas que cada cuenta ingresó en la app, sean suyas o de otra cuenta.",
+      },
+    ],
+  },
+  {
     id: "2026-11-05-b",
     date: "5 de noviembre de 2026",
     title: "Rendimiento: cada venta es de su dueño",

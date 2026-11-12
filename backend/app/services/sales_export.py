@@ -48,6 +48,7 @@ SALE_COLS = [
     Col("Horas de postprocesado", 12, "hours"),
     Col("Filamentos usados", 32),
     Col("Insumos usados", 26),
+    Col("Precio de la impresión", 13, "money"),
     Col("Precio cobrado", 13, "money"),
     Col("Material", 12, "money"),
     Col("Depreciación", 12, "money"),
@@ -99,7 +100,7 @@ def _sale_row(n: int, s: SaleResponse) -> list:
         s.client_name, s.buyer_name or "", s.owner_username, s.created_by_username or "",
         SOURCE_LABELS.get(s.sale_source or NO_SALE_SOURCE), PAYMENT_LABELS.get(s.payment_method, s.payment_method),
         s.printer_name, s.print_hours, s.postprocess_hours, _materials(s), _supplies(s),
-        s.price, s.material_cost, s.depreciation_cost, s.energy_cost, s.supplies_cost, s.postprocess_cost,
+        s.piece_price, s.price, s.material_cost, s.depreciation_cost, s.energy_cost, s.supplies_cost, s.postprocess_cost,
         s.shipping_cost, s.total_cost,
         None if cancelled else s.profit,
         None if cancelled else Decimal(s.margin_percent) / 100,
@@ -115,7 +116,7 @@ def build_sales_workbook(sales: list[SaleResponse], filters_text: str) -> bytes:
     row = xlsx.title(ws, "Zola · Ventas", f"Descargado el {xlsx.today_label()} · {len(sales)} pedido(s) · {filters_text}")
     row = xlsx.note(ws, row, (
         "Costo total = Material + Depreciación + Luz + Insumos + Postprocesado + Delivery. "
-        "Ganancia = Precio cobrado − Costo total (la reserva por riesgo de fallo ya está dentro de la ganancia). "
+        "Precio cobrado = Precio de la impresión + Delivery. Ganancia = Precio cobrado − Costo total (la reserva por riesgo de fallo ya está dentro de la ganancia). "
         "Margen = Ganancia ÷ Precio cobrado. En los cancelados no hay ganancia: se muestra la pérdida."
     ), span=12)
     row = xlsx.table(ws, row + 1, SALE_COLS, [_sale_row(i, s) for i, s in enumerate(sales, start=1)],

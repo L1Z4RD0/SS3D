@@ -87,3 +87,6 @@ class SaveQuoteAsSaleRequest(QuoteRequest):
     # Precio fijado a mano por el usuario (ej. para redondear). Si viene, manda por
     # sobre chosen_margin_percent.
     manual_price: Decimal | None = Field(default=None, gt=0)
+    # Precio de la impresión puesto a mano, SIN delivery (el total es este + shipping_cost).
+    # Manda sobre manual_price, que siguen enviando las versiones viejas de la app en caché.
+    manual_piece_price: Decimal | None = Field(default=None, gt=0)

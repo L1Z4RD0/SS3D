@@ -5,8 +5,10 @@ Regla de atribución (acordada con los socios):
 - Ingresos, ganancia y pedidos: del DUEÑO de la venta (el dueño de la impresora), igual que
   en la cuenta de cada uno. Hasta el 2026-11-05 eran de la cuenta que la registró, y la
   Empresa aparecía con los ingresos de ventas que solo gestionó.
-- "Gestionadas": las ventas que una cuenta registró para otra (lo que hace la Empresa). Solo
-  informa cuánto gestionó; no son ingresos suyos.
+- "Registradas" (managed): las ventas que cada cuenta registró en la app, propias o de otra
+  cuenta (la Empresa registra las de los socios). Solo informa quién las ingresó; no son
+  ingresos suyos.
+- Ingresos y costos van sin el delivery, que se muestra aparte (ver services/pricing).
 - Costos: de quien puso cada recurso (ver cost_allocation): la máquina (depreciación + luz)
   al dueño de la impresora, el material al dueño de cada filamento, los insumos al dueño de
   cada insumo. La cuenta que registra no carga con costos que no son suyos.
@@ -31,6 +33,7 @@ from app.models.sale_plate import SalePlate, SalePlateFilament
 from app.models.user import User
 from app.services.calculator import money
 from app.services.cost_allocation import allocate_sale_costs
+from app.services.pricing import cost_without_delivery, piece_price
 
 
 @dataclass
@@ -42,8 +45,9 @@ class Totals:
 
     def add(self, sale: Sale) -> None:
         self.jobs += 1
-        self.revenue += sale.base_price
-        self.cost += sale.total_cost
+        # Sin el delivery: no es ingreso ni costo del negocio (ver services/pricing).
+        self.revenue += piece_price(sale)
+        self.cost += cost_without_delivery(sale)
         self.profit += sale.profit
 
     def as_dict(self) -> dict:
@@ -150,9 +154,9 @@ def account_performance(db: Session, company: User, date_from: date | None, date
         month = months[sale.delivered_date.strftime("%Y-%m")]
         month.owned[owner].add(sale)
         month.combined.add(sale)
-        # La registró otra cuenta para el dueño (la Empresa gestionando ventas de los socios).
+        # Quién la registró en la app (sea suya o de otra cuenta).
         registrant = sale.created_by_user_id
-        if registrant in users and registrant != owner:
+        if registrant in users:
             managed[registrant].add(sale)
             month.managed[registrant].add(sale)
 

@@ -10,8 +10,8 @@ import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import Icon from "../components/Icon.vue";
 
 /* Rendimiento por cuenta (solo la cuenta Empresa). Ingresos, ganancia y pedidos: del DUEÑO de
-   la venta (el de la impresora). "Gestionadas": las que una cuenta registró para otra (la
-   Empresa). Costos, horas y filamento: de quien puso cada recurso (impresora, filamento,
+   la venta (el de la impresora). "Registradas": las que cada cuenta ingresó en la app
+   (propias o de otra cuenta). Ingresos y costos van sin el delivery. Costos, horas y filamento: de quien puso cada recurso (impresora, filamento,
    insumos). "Todas juntas" cuenta cada venta una sola vez. */
 const ACCOUNT_COLORS = ["#5b4bf5", "#17b3a3", "#f0ad4e", "#d7473f", "#3567d6"];
 const MONTHS = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
@@ -130,7 +130,7 @@ const METRICS = [
   { key: "profit", label: "Ganancia", format: formatCurrency },
   { key: "own_cost", label: "Costos propios", format: formatCurrency },
   { key: "jobs", label: "Pedidos", format: (v) => `${Math.round(v)}` },
-  { key: "managed_jobs", label: "Gestionadas", format: (v) => `${Math.round(v)}` },
+  { key: "managed_jobs", label: "Registradas", format: (v) => `${Math.round(v)}` },
 ];
 const metric = ref("revenue");
 const metricInfo = computed(() => METRICS.find((m) => m.key === metric.value));
@@ -153,7 +153,8 @@ const rangeLabel = computed(() => {
     <div class="page-header">
       <p class="page-subtitle">
         Diego, Sntg y la Empresa por separado y todas juntas. <strong>Ingresos y ganancia</strong>: del dueño de cada
-        venta (el de la impresora). <strong>Costos</strong>: de quien puso cada recurso (impresora, filamento, insumos).
+        venta (el de la impresora), sin el delivery. <strong>Costos</strong>: de quien puso cada recurso (impresora,
+        filamento, insumos).
       </p>
     </div>
 
@@ -206,7 +207,7 @@ const rangeLabel = computed(() => {
           :label="current ? 'Sus pedidos' : 'Pedidos'"
           :value="formatNumber(view.jobs, 0)"
           :spark="seriesFor('jobs')"
-          :meta="view.managed?.jobs ? `Gestionó ${view.managed.jobs} de otras cuentas (${formatCurrency(view.managed.revenue)})` : ''"
+          :meta="current ? `Registró ${view.managed.jobs} pedido(s) en la app (${formatCurrency(view.managed.revenue)})` : ''"
         />
         <StatCard
           :label="current ? 'Ingresos de sus ventas' : 'Ingresos'"
@@ -263,11 +264,11 @@ const rangeLabel = computed(() => {
             <span class="text-muted text-sm">Cada venta se cuenta una sola vez</span>
           </div>
           <dl class="combined-list">
-            <div><dt>Costo total</dt><dd class="mono">{{ formatCurrency(data.combined.cost) }}</dd></div>
+            <div><dt>Costo total (sin delivery)</dt><dd class="mono">{{ formatCurrency(data.combined.cost) }}</dd></div>
             <div><dt>Horas de impresión</dt><dd class="mono">{{ formatNumber(data.combined.print_hours, 1) }} h</dd></div>
             <div><dt>Filamento usado</dt><dd class="mono">{{ formatNumber(data.combined.filament_g, 0) }} g</dd></div>
             <div>
-              <dt>Delivery</dt>
+              <dt>Delivery cobrado (aparte)</dt>
               <dd class="mono">{{ formatCurrency(data.combined.shared_cost) }}</dd>
             </div>
             <div>
@@ -322,7 +323,7 @@ const rangeLabel = computed(() => {
               <tr>
                 <th>Cuenta</th>
                 <th class="text-right">Pedidos</th>
-                <th class="text-right" title="Ventas que registró para otra cuenta">Gestionadas</th>
+                <th class="text-right" title="Ventas que esta cuenta ingresó en la app, propias o de otra cuenta">Registradas</th>
                 <th class="text-right">Ingresos</th>
                 <th class="text-right">Ganancia</th>
                 <th class="text-right">Margen</th>
@@ -359,8 +360,9 @@ const rangeLabel = computed(() => {
         </div>
         <p class="rule-note">
           Ingresos, ganancia y pedidos son del dueño de la venta (el dueño de la impresora); costos propios, horas y
-          filamento, de quien puso cada recurso. Una venta que la Empresa registró con la impresora de un socio es del
-          socio: a la Empresa solo le suma en "Gestionadas". Solo pedidos Entregados, por su fecha de entrega.
+          filamento, de quien puso cada recurso. "Registradas" cuenta quién ingresó cada venta en la app, sea suya o de
+          otra cuenta: una venta que la Empresa registró con la impresora de un socio es del socio. Los ingresos no
+          incluyen el delivery, que se muestra aparte. Solo pedidos Entregados, por su fecha de entrega.
         </p>
       </div>
     </template>

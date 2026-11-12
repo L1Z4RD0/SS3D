@@ -384,12 +384,18 @@ const useManualPrice = ref(false);
 const manualPrice = ref(null);
 
 const saveIsGift = computed(() => saveForm.payment_method === GIFT_PAYMENT_METHOD);
+// Delivery de la cotización: va aparte del precio de la impresión.
+const quoteDelivery = computed(() => Math.max(0, Number(quote.value?.breakdown.shipping_cost) || 0));
+const pieceOf = (total) => Math.max(0, Number(total) - quoteDelivery.value);
 
 const manualPriceBreakdown = computed(() => {
   if (!useManualPrice.value || !isValidNumber(manualPrice.value, { min: 0, allowZero: false })) return null;
+  // El precio a mano es el de la impresión: el delivery se suma aparte al total a cobrar.
   const price = Number(manualPrice.value);
+  const delivery = quoteDelivery.value;
+  const total = price + delivery;
   const cost = quote.value ? Number(quote.value.breakdown.total_cost) : 0;
-  return { price, profit: price - cost };
+  return { price, delivery, total, profit: total - cost };
 });
 
 /* Una venta usa solo el inventario de un dueño. El observador puede cotizar mezclando
@@ -427,9 +433,9 @@ function openSaveModal(scenario) {
   selectedScenario.value = scenario;
   useManualPrice.value = !!scenario?.manual;
   manualPrice.value = scenario?.manual
-    ? Number(scenario.price)
+    ? pieceOf(scenario.price)
     : scenario
-      ? Math.round(Number(scenario.price))
+      ? Math.round(pieceOf(scenario.price))
       : null;
   saveError.value = "";
   saveSuccess.value = "";
@@ -474,7 +480,8 @@ async function confirmSaveAsSale() {
       delivery_by: Number(form.shipping_cost) ? form.delivery_by?.trim() || null : null,
       chosen_margin_percent: selectedScenario.value.margin_percent,
       // Regalo: el servidor lo registra en $0 e ignora escenario y precio manual.
-      manual_price: !saveIsGift.value && useManualPrice.value ? Number(manualPrice.value) : null,
+      // Precio de la impresión, sin delivery: el servidor le suma el delivery al total.
+      manual_piece_price: !saveIsGift.value && useManualPrice.value ? Number(manualPrice.value) : null,
     });
     showSaveModal.value = false;
     saveSuccess.value =
@@ -1078,8 +1085,11 @@ onMounted(() => {
         <div v-else class="alert alert-info mt-2" style="margin-bottom: 14px">
           <template v-if="selectedScenario.manual">Precio manual</template>
           <template v-else>{{ selectedScenario.label }} (+{{ selectedScenario.margin_percent }}%)</template>
-          · Precio:
-          <strong>{{ formatCurrency(selectedScenario.price) }}</strong>
+          · Impresión:
+          <strong>{{ formatCurrency(pieceOf(selectedScenario.price)) }}</strong>
+          <template v-if="quoteDelivery > 0">
+            + delivery {{ formatCurrency(quoteDelivery) }} = <strong>{{ formatCurrency(selectedScenario.price) }}</strong> a cobrar
+          </template>
         </div>
         <template v-if="auth.isWatcher">
           <div v-if="saleOwnerMismatch" class="alert alert-danger" style="margin-bottom: 14px">
@@ -1136,9 +1146,9 @@ onMounted(() => {
         <div v-if="!saveIsGift" class="field mt-2">
           <label class="flex items-center gap-2" style="cursor: pointer; font-weight: 600">
             <input v-model="useManualPrice" type="checkbox" style="width: auto" />
-            Definir yo el precio final
+            Definir yo el precio de la impresión
           </label>
-          <span class="field-hint">Para cobrar un número redondo o a tu criterio.</span>
+          <span class="field-hint">Para cobrar un número redondo o a tu criterio. El delivery va aparte y se suma al total.</span>
           <input
             v-if="useManualPrice"
             v-model.number="manualPrice"
@@ -1150,14 +1160,18 @@ onMounted(() => {
             style="max-width: 200px"
           />
           <div v-if="manualPriceBreakdown" class="alert alert-info mt-2">
-            Precio: <strong>{{ formatCurrency(manualPriceBreakdown.price) }}</strong>
+            Impresión: <strong>{{ formatCurrency(manualPriceBreakdown.price) }}</strong>
+            <template v-if="manualPriceBreakdown.delivery > 0">
+              + delivery {{ formatCurrency(manualPriceBreakdown.delivery) }} =
+              <strong>{{ formatCurrency(manualPriceBreakdown.total) }}</strong> a cobrar
+            </template>
             · Ganancia:
             <span :style="{ color: manualPriceBreakdown.profit < 0 ? 'var(--danger)' : undefined }">
               {{ formatCurrency(manualPriceBreakdown.profit) }}
             </span>
           </div>
           <div v-else-if="useManualPrice" class="alert alert-danger mt-2">
-            Ingresa un precio válido, mayor a 0.
+            Ingresa el precio de la impresión (sin delivery), mayor a 0.
           </div>
         </div>
 

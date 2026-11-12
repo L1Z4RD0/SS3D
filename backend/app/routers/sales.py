@@ -71,6 +71,7 @@ from app.services.order_status import (
     record_status,
     start_as_pending,
 )
+from app.services.pricing import total_from_piece_price
 from app.services.sale_builder import (
     sale_owner_from_printer,
     apply_filaments_to_sale,
@@ -437,7 +438,15 @@ def _create_sale(
     )
     breakdown = with_risk(with_new_plates(breakdown, resolved_plates), payload.risk_level)
 
-    price = Decimal(0) if payload.payment_method == GIFT_PAYMENT_METHOD else money(payload.price)
+    if payload.payment_method == GIFT_PAYMENT_METHOD:
+        price = Decimal(0)
+    elif payload.piece_price is not None:
+        # Precio de la impresión puesto a mano: el delivery se suma aparte.
+        price = money(total_from_piece_price(payload.piece_price, payload.shipping_cost))
+    elif payload.price is not None:
+        price = money(payload.price)
+    else:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Falta el precio de la venta.")
     printer.hours_used += payload.print_hours
 
     sale = Sale(
@@ -535,6 +544,12 @@ def update_sale(
     ip = request.client.host if request.client else None
     if "delivery_by" in changes:
         changes["delivery_by"] = (changes["delivery_by"] or "").strip() or None
+    # Precio de la impresión (sin delivery): el total cobrado es ese precio + el delivery que
+    # quede en la venta.
+    piece = changes.pop("piece_price", None)
+    if piece is not None:
+        shipping = changes.get("shipping_cost")
+        changes["price"] = total_from_piece_price(piece, sale.shipping_cost if shipping is None else shipping)
     # Pasar a cortesía (o tocar el precio de una) la deja como regalo: precio $0. Editar
     # otros datos de una cortesía antigua con precio no le cambia el precio.
     if changes.get("payment_method", sale.payment_method) == GIFT_PAYMENT_METHOD and (

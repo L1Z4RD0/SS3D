@@ -145,4 +145,4 @@ def test_dashboard_unaffected_by_calendar_moves(client, make):
                  json={"promised_delivery_date": str(TODAY + timedelta(days=40))})
     assert client.get("/api/dashboard/summary", headers=h).json()["total_jobs"] == 0
     deliver(client, h, a["id"], TODAY)
-    assert Decimal(client.get("/api/dashboard/summary", headers=h).json()["total_revenue"]) == 5000
+    assert Decimal(client.get("/api/dashboard/summary", headers=h).json()["total_revenue"]) == 5000 - 3000  # sin el delivery ($3.000 de sale_payload), que va aparte

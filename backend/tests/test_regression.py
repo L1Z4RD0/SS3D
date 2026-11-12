@@ -83,7 +83,7 @@ def test_dashboard_and_history_count_sales(client, make):
     deliver(client, make.headers(u), b["id"], today)
     s = client.get("/api/dashboard/summary", headers=make.headers(u),
                    params={"date_from": str(today), "date_to": str(today)}).json()
-    assert s["total_jobs"] == 2 and Decimal(s["total_revenue"]) == Decimal(15000)
+    assert s["total_jobs"] == 2 and Decimal(s["total_revenue"]) == Decimal(15000 - 2 * 3000)  # sin el delivery ($3.000 de sale_payload), que va aparte
     pm = client.get("/api/dashboard/by-payment-method", headers=make.headers(u),
                     params={"date_from": str(today), "date_to": str(today)}).json()
     assert {x["payment_method"]: x["jobs"] for x in pm}["transferencia"] == 1

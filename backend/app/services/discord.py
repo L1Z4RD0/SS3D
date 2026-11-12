@@ -323,7 +323,10 @@ def _details(s: SaleResponse) -> str:
         method = _esc(s.payment_method.replace("_", " ").capitalize(), 40)
         if s.payment_method == "por_cobrar" and s.payment_due_date:
             method += f"  ·  cobrar el <t:{_ts(s.payment_due_date)}:D>"
-        lines.append(f"💰 **Precio:** {_money(s.price)}  ·  💳 {method}")
+        price = f"💰 **Precio:** {_money(s.piece_price)}"
+        if s.shipping_cost and s.piece_price != s.price:
+            price += f" + delivery {_money(s.shipping_cost)} = {_money(s.price)}"
+        lines.append(f"{price}  ·  💳 {method}")
     lines.append(f"🖨️ **Impresora:** {_esc(s.printer_name, 80)}")
     if s.warehouse_item_id is not None:
         lines.append("🏷️ **Pieza del Almacén** (ya fabricada)")

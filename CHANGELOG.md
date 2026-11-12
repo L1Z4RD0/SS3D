@@ -440,3 +440,27 @@
   Antes del cambio esas 2 ventas ($27.000) aparecían como ingresos de Simple_Solutions3D. En la pestaña de la Empresa se lee "Gestionó 2 de otras cuentas ($27.000)".
 - Capturas (computador 1440 px y celular 390 px, "Todas juntas" y "Simple_Solutions3D") revisadas y aprobadas antes del push; guardadas fuera del repo en `~/Escritorio/Zola_Rendimiento_Dueno/`.
 - El Reparto no se tocó: `compute_split` no usa quién registró ni el dueño de la venta.
+
+## [2026-11-12] - Delivery aparte del precio, la Empresa como central, "Registradas" y corrección de las ventas de noviembre
+
+**Qué se hizo:**
+1. **Delivery aparte del precio.** La base sigue guardando el total cobrado (`base_price` = impresión + delivery, que es lo que usa el Reparto), pero ahora todo muestra el **precio de la impresión** (total − delivery) y el delivery por separado (`services/pricing.py`). Al poner el precio a mano se escribe el de la impresión y el servidor suma el delivery (`piece_price` en Ventas, `manual_piece_price` en la Calculadora; `price`/`manual_price` se siguen aceptando para versiones viejas de la app en caché). Ventas muestra precio, costo y margen sin delivery y "+ $X delivery" bajo el precio; el Excel suma la columna "Precio de la impresión"; Discord muestra "Precio + delivery = total".
+2. **Ingresos sin delivery** en Dashboard, Historial y Rendimiento (ingresos y costo bajan en el mismo monto; la ganancia no cambia). Nueva tarjeta "Delivery cobrado" en el Dashboard. Un regalo con delivery no lo cobra: ahí sigue siendo costo.
+3. **La Empresa es la central.** Su Dashboard e Historial suman los pedidos entregados de todos sus socios asignados y los propios, cada venta una sola vez (antes: solo los que registró ella). Dos tarjetas nuevas solo para la Empresa: "Ventas por cuenta" y "Costos de la Empresa" (su filamento e insumos usados, lo mismo que el Reparto le devuelve a la Caja).
+4. **"Registradas" en Rendimiento** (antes "Gestionadas"): cuenta las ventas que cada cuenta ingresó, propias o de otra cuenta. Antes solo contaba las registradas para otra cuenta, así que un socio nunca aparecía.
+5. **Corrección de datos de noviembre (SQL en Supabase, no es migración):** las 10 ventas de noviembre que quedaron a nombre de la Empresa con la impresora de Sntg (registradas del 2 al 4 de noviembre, antes de la regla "la venta es del dueño de la impresora") pasan a Sntg; y dos ventas en que se escribió solo el precio de la figura quedan con su total real: Expositor de Uñas $6.000 + $2.000 de delivery = $8.000 (pago en efectivo) y 9 llaveros BTS $7.200 + $2.800 = $10.000. Las 26 ventas de octubre en la misma situación NO se tocan (el Reparto de octubre está cerrado).
+
+**Por qué:** Análisis del flujo de plata pedido por los socios: (a) ventas hechas en la impresora de Sntg figuraban como "Venta de Simple_Solutions3D" — eran pedidos anteriores al 5 de noviembre que solo se corrigen al editarlos; (b) el Dashboard de la Empresa mostraba como ingresos propios lo que solo había registrado; (c) el precio incluía el delivery, y al escribir a mano el precio de la figura el delivery se descontaba de la ganancia.
+
+**¿Generó migración de Alembic?:** No. No cambia ninguna tabla.
+
+**Cambios grandes o riesgosos:** Los ingresos y costos de Dashboard, Historial y Rendimiento bajan en el monto de los deliveries (también hacia atrás); la ganancia es la misma. El Dashboard de la Empresa cambia de "lo que registró" a "todo el negocio". Reparto: sus cálculos no se tocaron; el de noviembre sube $4.800 en cobrado y neto solo por la corrección de las dos ventas. Tras la corrección, el Dashboard e Historial de Sntg de noviembre suben (9 ventas entregadas más).
+
+**Evidencia (verificación local, 2026-11-12):**
+- Reproducción de los flujos en una base local con las mismas cuentas: toda venta nueva (Ventas, Calculadora, mixta, cambio de impresora, rehacer, app vieja en caché) queda del dueño de la impresora. Solo quedaban mal las anteriores al 5 de noviembre que se entregan sin editarse, y las piezas del Almacén que salieron de ellas.
+- Consulta en producción: 36 ventas a nombre de la Empresa con impresora de un socio, todas creadas antes del 5-nov 11:24 (la última, 4-nov 15:34); 10 de noviembre (9 entregadas + 1 cancelada), 26 de octubre.
+- Réplica local de las 36 ventas reales de noviembre. Antes: Empresa 24 pedidos / $201.650 (los que registró), Sntg 11 / $76.950, Diego 5 / $47.500; total real 25 / $214.650 (con $7.300 de delivery). Después del SQL y del código: Empresa (central) 25 pedidos / $212.150 / ganancia $127.714; Sntg 20 / $167.150; Diego 5 / $45.000; delivery aparte $7.300; Reparto cobrado $219.450 (= $212.150 + $7.300) y la suma de lo repartido calza exacta.
+- El SQL de corrección se probó en la réplica: actualiza 10 ventas + 2 precios, y al correrlo de nuevo no cambia nada.
+- Prueba en el navegador: venta nueva con precio a mano $6.000 y delivery $2.000 → se guarda total $8.000, impresión $6.000, delivery $2.000.
+- Tests del backend: 199 passed (2 nuevos: Dashboard central de la Empresa y precio de la impresión aparte; 9 ajustados a ingresos sin delivery). Build del frontend sin errores.
+- Capturas revisadas antes del push, fuera del repo en `~/Escritorio/Zola_Central_Delivery/`.

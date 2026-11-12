@@ -299,7 +299,12 @@ onMounted(load);
             <dd>{{ formatDate(sale.delivered_date) }}</dd>
           </template>
           <dt>Precio</dt>
-          <dd class="mono">{{ formatCurrency(sale.price) }}</dd>
+          <dd class="mono">
+            {{ formatCurrency(sale.piece_price ?? sale.price) }}
+            <span v-if="Number(sale.shipping_cost) > 0 && Number(sale.price) > 0" class="text-muted text-sm">
+              + {{ formatCurrency(sale.shipping_cost) }} delivery = {{ formatCurrency(sale.price) }}
+            </span>
+          </dd>
           <dt>Pago</dt>
           <dd>
             <template v-if="isUnpaid(sale)">

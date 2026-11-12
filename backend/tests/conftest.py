@@ -141,6 +141,11 @@ def deliver(client, headers, sale_id, today=None, **extra):
     return r.json()
 
 
+# Delivery que lleva por defecto sale_payload. El "price" de una venta es el total cobrado
+# (impresión + delivery); los ingresos del Dashboard, Historial y Rendimiento van sin él.
+DELIVERY = 3000
+
+
 def sale_payload(printer, filament=None, grams=100, supply=None, qty=2, price=9000, **extra):
     body = {
         "sale_date": str(date.today()),

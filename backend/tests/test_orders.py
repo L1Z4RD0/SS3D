@@ -140,9 +140,9 @@ def test_dashboard_counts_only_delivered_by_real_date(client, make):
     # Pedido de un mes, entregado este mes: cuenta en el mes de la entrega.
     deliver(client, h, a["id"], today)
     s = client.get("/api/dashboard/summary", headers=h, params=rng).json()
-    assert s["total_jobs"] == 1 and Decimal(s["total_revenue"]) == Decimal(10000)
+    assert s["total_jobs"] == 1 and Decimal(s["total_revenue"]) == Decimal(10000 - 3000)  # sin el delivery ($3.000 de sale_payload), que va aparte
     pm = client.get("/api/dashboard/by-payment-method", headers=h, params=rng).json()
-    assert pm == [{"payment_method": "transferencia", "jobs": 1, "revenue": "10000.00", "profit": pm[0]["profit"]}]
+    assert pm == [{"payment_method": "transferencia", "jobs": 1, "revenue": "7000.00", "profit": pm[0]["profit"]}]
     months = client.get("/api/history/monthly", headers=h).json()
     assert [(m["year"], m["month"], m["total_jobs"]) for m in months] == [(today.year, today.month, 1)]
 
@@ -269,8 +269,8 @@ def test_watcher_dashboard_counts_only_what_he_registered(client, make):
     mine = client.post("/api/sales", headers=make.headers(w), json=sale_payload(op, owner_id=owner.id, price=8000)).json()
     deliver(client, make.headers(owner), own["id"])
     deliver(client, make.headers(w), mine["id"])
-    assert Decimal(client.get("/api/dashboard/summary", headers=make.headers(w)).json()["total_revenue"]) == 8000
-    assert Decimal(client.get("/api/dashboard/summary", headers=make.headers(owner)).json()["total_revenue"]) == 13000
+    assert Decimal(client.get("/api/dashboard/summary", headers=make.headers(w)).json()["total_revenue"]) == 8000 - 3000  # sin el delivery ($3.000 de sale_payload), que va aparte
+    assert Decimal(client.get("/api/dashboard/summary", headers=make.headers(owner)).json()["total_revenue"]) == 13000 - 2 * 3000
 
 
 def test_audit_records_status_and_date_changes(client, order, db):

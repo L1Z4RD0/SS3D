@@ -104,6 +104,8 @@ def save_quote_as_sale(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Fecha inválida, use formato YYYY-MM-DD")
 
     manual_price = payload.manual_price
+    if payload.manual_piece_price is not None:
+        manual_price = payload.manual_piece_price + payload.shipping_cost
     if payload.payment_method == GIFT_PAYMENT_METHOD:
         manual_price = Decimal(0)  # regalo: sin cobro, los costos quedan igual
     if manual_price is None and payload.chosen_margin_percent not in MARGIN_SCENARIO_PERCENTS:
